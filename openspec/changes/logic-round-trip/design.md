@@ -86,6 +86,12 @@ Built from a small number of real modules copied out of `index.android.bundle` (
 
 N/A — purely additive new commands (`deobfuscate`, `check`, `diff`, `patch-back`) and one new library module (`canonicalize.js`); no changes to existing command behavior or output formats.
 
+## Post-Implementation Correction
+
+Verification (manually running the sanctioned rename-then-edit workflow, not just the committed test suite) found that `patch-back`'s original `realignFactoryParams` only re-threaded the 7 fixed Metro factory parameters back onto O's names. Any *other* local variable the human renamed during refactor (e.g. `var e` → `var bugReportingModule`) broke at runtime (`ReferenceError`) whenever a later edited statement referenced the renamed variable, because the kept-verbatim O statement still declared the old name while the spliced-in M statement referenced the new one. The committed tests didn't catch this because they only renamed factory params and edited a literal on the same statement already using that param — never a renamed *internal* variable referenced from a separately-edited statement.
+
+Fixed by generalizing realignment: `buildFactoryBindingRenameMap` now builds the R-name → O-name map from every top-level binding correspondence implied by the existing R↔O statement pairing (`oForR`), not just the 7 params, and `realignFactoryBindings` (replacing `realignFactoryParams`) applies that full map. A regression test (`test/unit/patchback.test.js`, "patch-back realigns a renamed top-level local variable referenced by a later edited statement") reproduces the original failure and actually executes the patched factory to confirm no `ReferenceError`, not just that the source text looks right.
+
 ## Open Questions
 
 - Should `check`/`diff` eventually track "last known-good baseline" state automatically (e.g. a `.baseline.json` updated whenever `check` passes), rather than requiring the baseline file path to be passed explicitly each time? Left open — explicit paths are simpler and sufficient to prove the pipeline works; a stateful workflow tracker can be added later if manually passing paths proves tedious in practice.

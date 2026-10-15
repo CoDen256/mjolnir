@@ -22,34 +22,82 @@ function insertionsAfter(insertions, oIdx) {
   return insertions.filter((ins) => ins.afterOIdx === oIdx).map((ins) => ins.node);
 }
 
-// M's statements are written in terms of M's own factory parameter names,
-// which may have been renamed away from O's during the human's refactor
-// pass (e.g. `m` -> `mod`). Splicing them into O verbatim would reference
-// identifiers O's factory never declares. This produces a clone of
-// `sourceFactory` with its own top-level parameters (by position — the
-// factory signature is always the same 7-parameter shape) renamed to
-// `targetParamNames`, every reference rewired via scope-aware rename.
-function realignFactoryParams(sourceFactory, targetParamNames) {
+// Names a statement directly declares at the factory's top level (a `var`
+// declarator's bound identifier(s), or a named function declaration) — the
+// level at which O's kept-verbatim statements and M's spliced-in statements
+// can reference each other's bindings.
+function topLevelDeclaredNames(stmt) {
+  if (!stmt) return [];
+  if (stmt.type === "VariableDeclaration") {
+    return stmt.declarations.flatMap((d) => Object.keys(t.getBindingIdentifiers(d.id)));
+  }
+  if (stmt.type === "FunctionDeclaration" && stmt.id) {
+    return [stmt.id.name];
+  }
+  return [];
+}
+
+// M's statements are written in terms of R's local names — factory
+// parameters and any other local variable the human renamed during their
+// refactor pass (e.g. `e` -> `bugReportingModule`). Splicing them into O
+// verbatim would reference identifiers O's factory never declares, or
+// shadow/miss O's own names, whenever a kept-verbatim O statement and a
+// spliced-in M statement both touch the same logical binding. `renameMap`
+// (built from the R<->O statement correspondence, see
+// `buildFactoryBindingRenameMap`) carries every such name back to O's
+// spelling. This produces a clone of `sourceFactory` with those names
+// rewired via scope-aware rename (two passes through unique placeholders,
+// so a map that swaps two names doesn't clobber itself).
+function realignFactoryBindings(sourceFactory, renameMap) {
   const clone = t.cloneNode(sourceFactory, true);
   const file = t.file(t.program([t.expressionStatement(clone)]));
+  const entries = Object.entries(renameMap).filter(([from, to]) => from !== to);
 
   traverse(file, {
     FunctionExpression(path) {
       if (path.node !== clone) return;
-      const params = path.node.params;
-      const placeholders = params.map((_, idx) => `__patchback_param_${idx}__`);
-      for (let idx = 0; idx < params.length; idx++) {
-        path.scope.rename(params[idx].name, placeholders[idx]);
-      }
-      for (let idx = 0; idx < params.length; idx++) {
-        const target = targetParamNames[idx];
-        if (target) path.scope.rename(placeholders[idx], target);
-      }
+      const placeholders = entries.map((_, idx) => `__patchback_bind_${idx}__`);
+      entries.forEach(([from], idx) => {
+        if (path.scope.getBinding(from)) path.scope.rename(from, placeholders[idx]);
+      });
+      entries.forEach(([, to], idx) => {
+        if (path.scope.getBinding(placeholders[idx])) path.scope.rename(placeholders[idx], to);
+      });
       path.stop();
     },
   });
 
   return file.program.body[0].expression;
+}
+
+// Builds the R-name -> O-name map `realignFactoryBindings` needs: the 7
+// factory parameters (always positionally aligned), plus every top-level
+// binding R declares in a statement that corresponds (via `oForR`, hash- or
+// position-matched) to an O statement declaring the same kind/count of
+// bindings. Statements introduced fresh by R (e.g. nothing to map) or whose
+// O counterpart declares a different shape are simply skipped — those names
+// are either genuinely new or don't need realignment.
+function buildFactoryBindingRenameMap({ oFactory, rFactory, oForR }) {
+  const map = {};
+  rFactory.params.forEach((rParam, idx) => {
+    const oParam = oFactory.params[idx];
+    if (rParam.type === "Identifier" && oParam && oParam.type === "Identifier") {
+      map[rParam.name] = oParam.name;
+    }
+  });
+
+  const rStatements = rFactory.body.body;
+  const oStatements = oFactory.body.body;
+  for (const [rIdx, oIdx] of oForR.entries()) {
+    const rNames = topLevelDeclaredNames(rStatements[rIdx]);
+    const oNames = topLevelDeclaredNames(oStatements[oIdx]);
+    if (rNames.length !== oNames.length) continue;
+    rNames.forEach((name, i) => {
+      map[name] = oNames[i];
+    });
+  }
+
+  return map;
 }
 
 // Rebuilds the original module's factory statement list with the human's
@@ -76,8 +124,8 @@ export function buildPatchedFactoryStatements({ oFactory, rFactory, mFactory }) 
 
   const entries = diffModuleFactories(rFactory, mFactory);
 
-  const oParamNames = oFactory.params.map((p) => p.name);
-  const mStatements = realignFactoryParams(mFactory, oParamNames).body.body;
+  const renameMap = buildFactoryBindingRenameMap({ oFactory, rFactory, oForR });
+  const mStatements = realignFactoryBindings(mFactory, renameMap).body.body;
 
   const removedOIdx = new Set();
   const replacements = new Map();

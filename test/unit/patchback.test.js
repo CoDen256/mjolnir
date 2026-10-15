@@ -80,3 +80,53 @@ test("patch-back applies a renamed-and-edited module while leaving others byte-i
     void manifest;
   });
 });
+
+test("patch-back realigns a renamed top-level local variable referenced by a later edited statement", async () => {
+  await withTempCopy(async (bundlePath) => {
+    runExplode(bundlePath);
+    runDeobfuscate(bundlePath);
+
+    const dir = explodedDirFor(bundlePath) + "/deobfuscated";
+    const baselineSrc = fs.readFileSync(path.join(dir, "300.js"), "utf8");
+    assert.match(baselineSrc, /var e = _interopRequireWildcard/);
+
+    // refactor: rename the module-level local `e` (not a factory param) to
+    // a readable name, then reference the new name from a later statement.
+    const renamedPath = path.join(dir, "300.renamed.js");
+    const renamedSrc = baselineSrc
+      .replace("var e = _interopRequireWildcard", "var bugReportingModule = _interopRequireWildcard")
+      .replace("e.get('BugReporting')", "bugReportingModule.get('BugReporting')");
+    fs.writeFileSync(renamedPath, renamedSrc);
+
+    // modify: a real semantic edit on the statement that uses the renamed local.
+    const editedPath = path.join(dir, "300.edited.js");
+    fs.writeFileSync(
+      editedPath,
+      renamedSrc.replace("bugReportingModule.get('BugReporting')", "bugReportingModule.get('BugReportingV2')")
+    );
+
+    const outputPath = path.join(path.dirname(bundlePath), "out-rename.bundle");
+    await runPatchback(bundlePath, [`300=${renamedPath}:${editedPath}`], outputPath);
+
+    const patchedParsed = parseBundle(outputPath);
+    const patchedContent = readModuleSource(outputPath, patchedParsed.modules.get(300));
+    assert.match(patchedContent, /BugReportingV2/);
+
+    // the patched module must actually run without a ReferenceError for the
+    // renamed-and-still-referenced local — require(d[0]) stubbed to return
+    // an object with a `.get` method, like the real BugReporting module.
+    const ast = parse(patchedContent, { sourceType: "script", allowReturnOutsideFunction: true });
+    const { factory } = extractFactoryBody(ast);
+    const fnSrc = generate(factory, { comments: false }).code;
+    const fn = eval(`(${fnSrc})`);
+    const mod = { exports: {} };
+    let thrown = null;
+    try {
+      fn({}, () => ({ __esModule: true, get: (key) => `fetched:${key}` }), (x) => x, (x) => x, mod, mod.exports, [54]);
+    } catch (err) {
+      thrown = err;
+    }
+    assert.equal(thrown, null, thrown?.message);
+    assert.equal(mod.exports.default, "fetched:BugReportingV2");
+  });
+});
