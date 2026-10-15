@@ -4,6 +4,7 @@ import { runIndex } from "../src/commands/index.js";
 import { runShow } from "../src/commands/show.js";
 import { runGrep } from "../src/commands/grep.js";
 import { runDeps } from "../src/commands/deps.js";
+import { runExplode } from "../src/commands/explode.js";
 
 const program = new Command();
 
@@ -45,5 +46,10 @@ program
   .action((bundle, id, opts) =>
     runDeps(bundle, id, "dependents", { depth: Number(opts.depth) })
   );
+
+program
+  .command("explode <bundle>")
+  .description("Write every module to its own file under <bundle>.exploded/, plus a manifest")
+  .action((bundle) => runExplode(bundle));
 
 program.parseAsync(process.argv);
