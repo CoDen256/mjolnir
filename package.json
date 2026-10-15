@@ -1,0 +1,19 @@
+{
+  "name": "bundle-tool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "bundle-tool": "./bin/bundle-tool.js"
+  },
+  "scripts": {
+    "analyze": "node ./bin/bundle-tool.js"
+  },
+  "dependencies": {
+    "@babel/generator": "^7.26.0",
+    "@babel/parser": "^7.26.0",
+    "@babel/traverse": "^7.26.0",
+    "@babel/types": "^7.26.0",
+    "commander": "^12.1.0"
+  }
+}
