@@ -5,6 +5,10 @@ import { runShow } from "../src/commands/show.js";
 import { runGrep } from "../src/commands/grep.js";
 import { runDeps } from "../src/commands/deps.js";
 import { runExplode } from "../src/commands/explode.js";
+import { runDeobfuscate } from "../src/commands/deobfuscate.js";
+import { runCheck } from "../src/commands/check.js";
+import { runDiff } from "../src/commands/diff.js";
+import { runPatchback } from "../src/commands/patchback.js";
 
 const program = new Command();
 
@@ -51,5 +55,29 @@ program
   .command("explode <bundle>")
   .description("Write every module to its own file under <bundle>.exploded/, plus a manifest")
   .action((bundle) => runExplode(bundle));
+
+program
+  .command("deobfuscate <bundle>")
+  .description("Rewrite recognized minified idioms in logic modules to readable named-helper form")
+  .action((bundle) => runDeobfuscate(bundle));
+
+program
+  .command("check <baseline-file> <current-file>")
+  .description("Verify a refactor-only edit preserved behavior by canonicalizing and comparing against a baseline")
+  .action((baselineFile, currentFile) => runCheck(baselineFile, currentFile));
+
+program
+  .command("diff <baseline-file> <current-file>")
+  .description("Report the semantic changes between a refactor-baseline module file and its current edited version")
+  .action((baselineFile, currentFile) => runDiff(baselineFile, currentFile));
+
+program
+  .command("patch-back <bundle> <output-bundle> <patches...>")
+  .description(
+    "Apply one or more module patches (<module-id>=<baseline-file>:<current-file>) and write a reassembled bundle"
+  )
+  .action(async (bundle, outputBundle, patches) => {
+    await runPatchback(bundle, patches, outputBundle);
+  });
 
 program.parseAsync(process.argv);
