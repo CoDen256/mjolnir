@@ -1,6 +1,6 @@
 import { parse } from "@babel/parser";
 import * as t from "@babel/types";
-import { canonicalize, hashNode } from "../canonicalize.js";
+import { canonicalize, hashNode, countNodes } from "../canonicalize.js";
 
 // Module 300's exact minified shape (the "__esModule"-interop wildcard
 // helper, observed ~1390 times bundle-wide via the "__esModule" string
@@ -32,7 +32,12 @@ function parseExpression(src) {
   return ast.program.body[0].expression;
 }
 
-const REFERENCE_HASH = hashNode(canonicalize(parseExpression(REFERENCE_SRC)));
+const REFERENCE_PATTERN = canonicalize(parseExpression(REFERENCE_SRC));
+const REFERENCE_HASH = hashNode(REFERENCE_PATTERN);
+// Canonicalization is a bijective rename, so a candidate's raw node count
+// equals its canonicalized node count; this is the exact node count a
+// candidate must have to possibly match this rule.
+const REFERENCE_NODE_COUNT = countNodes(REFERENCE_PATTERN);
 
 const HELPER_NAME = "_interopRequireWildcard";
 
@@ -63,6 +68,10 @@ const HELPER_DECLARATION = parse(HELPER_SRC, { sourceType: "script" }).program.b
 
 export const interopWildcardRule = {
   name: "interop-wildcard",
+  nodeCount: REFERENCE_NODE_COUNT,
+  matchesSize(nodeCount) {
+    return nodeCount === REFERENCE_NODE_COUNT;
+  },
   match(hash) {
     return hash === REFERENCE_HASH;
   },

@@ -78,3 +78,24 @@ export function hashNode(node) {
   const code = generate(node, { compact: true, comments: false }).code;
   return crypto.createHash("sha1").update(code).digest("hex");
 }
+
+// Cheap structural size of a subtree: total AST node count via a plain
+// recursive walk over @babel/types' visitor keys, with no cloning, scope
+// resolution, renaming, or code generation. Canonicalization is a bijective
+// rename that never adds or removes nodes, so this count is identical before
+// and after canonicalize() and can be compared directly against a
+// canonicalized reference pattern's node count.
+export function countNodes(node) {
+  if (!node || typeof node.type !== "string") return 0;
+  let count = 1;
+  const keys = t.VISITOR_KEYS[node.type] || [];
+  for (const key of keys) {
+    const value = node[key];
+    if (Array.isArray(value)) {
+      for (const child of value) count += countNodes(child);
+    } else if (value) {
+      count += countNodes(value);
+    }
+  }
+  return count;
+}
