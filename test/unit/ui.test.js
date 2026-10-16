@@ -63,6 +63,14 @@ test("GET /api/decks/:name returns deck detail with resolved cards", async () =>
       assert.doesNotMatch(card.preview, /<[^>]+>/);
     }
     assert.equal(data.cards.find((c) => c.ID === "A01001").preview, "Q1");
+    assert.deepEqual(data.cards.find((c) => c.ID === "A01001").directions, ["N"]);
+  });
+});
+
+test("GET /api/decks/:name reports every direction letter a card is referenced with in that deck", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { data } = await api(baseUrl, "GET", "/api/decks/B01");
+    assert.deepEqual(data.cards.find((c) => c.ID === "B01001").directions, ["N", "Y"]);
   });
 });
 

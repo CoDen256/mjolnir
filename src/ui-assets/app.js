@@ -102,6 +102,20 @@ function renderDeckMeta(deck, targetId) {
     p.textContent = counters.join(" · ");
     target.appendChild(p);
   }
+
+  const stats = [
+    ["ID", deck.ID],
+    ["PullCounter", deck.PullCounter],
+    ["MaxInterval", deck.MaxInterval],
+    ["AutoTickStreak", deck.AutoTickStreak],
+    ["AutoHammerCount", deck.AutoHammerCount],
+  ].filter(([, value]) => value !== undefined);
+  if (stats.length) {
+    const p = document.createElement("p");
+    p.className = "stats";
+    p.textContent = stats.map(([label, value]) => `${label}: ${value}`).join(" · ");
+    target.appendChild(p);
+  }
 }
 
 async function openDeck(name) {
@@ -121,10 +135,15 @@ async function openDeck(name) {
     const idSpan = document.createElement("span");
     idSpan.className = "card-id";
     idSpan.textContent = card.ID;
+    const directionsSpan = document.createElement("span");
+    directionsSpan.className = "card-directions";
+    directionsSpan.textContent = (card.directions || []).join("");
+    directionsSpan.title = `direction letters: ${(card.directions || []).join(", ")}`;
     const previewSpan = document.createElement("span");
     previewSpan.className = "card-preview";
     previewSpan.textContent = card.preview || "";
     li.appendChild(idSpan);
+    li.appendChild(directionsSpan);
     li.appendChild(previewSpan);
     li.addEventListener("click", () => openCard(card.ID));
     list.appendChild(li);

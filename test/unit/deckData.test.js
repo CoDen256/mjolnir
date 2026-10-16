@@ -10,6 +10,7 @@ import {
   validateReferences,
   nextCardId,
   stripHtml,
+  cardDirectionsInDeck,
 } from "../../src/deckData.js";
 import {
   buildFixtureBundleSource,
@@ -65,6 +66,21 @@ test("validation catches a card with an unresolved DECK_ID", () => {
   const { valid, errors } = validateReferences(fixtureDecks(), cards);
   assert.equal(valid, false);
   assert.match(errors.join("\n"), /Z99/);
+});
+
+test("cardDirectionsInDeck maps each card id to its set of direction letters", () => {
+  const [deckA, deckB] = fixtureDecks();
+  const a = cardDirectionsInDeck(deckA);
+  assert.deepEqual([...a.get("A01001")].sort(), ["N"]);
+  assert.deepEqual([...a.get("A01002")].sort(), ["N"]);
+
+  const b = cardDirectionsInDeck(deckB);
+  assert.deepEqual([...b.get("B01001")].sort(), ["N", "Y"]);
+});
+
+test("cardDirectionsInDeck handles a deck with no Cards", () => {
+  const directions = cardDirectionsInDeck({ Name: "X01", Cards: [] });
+  assert.equal(directions.size, 0);
 });
 
 test("stripHtml removes tags and collapses whitespace", () => {

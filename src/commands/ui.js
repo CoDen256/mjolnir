@@ -8,6 +8,7 @@ import {
   deckCategory,
   nextCardId,
   stripHtml,
+  cardDirectionsInDeck,
   NEW_CARD_SKELETON,
 } from "../deckData.js";
 
@@ -72,13 +73,13 @@ function findCard(cards, id) {
 
 const PREVIEW_MAX_LENGTH = 80;
 
-function cardSummary(card) {
+function cardSummary(card, directions = []) {
   const plainText = stripHtml(card.N);
   const preview =
     plainText.length > PREVIEW_MAX_LENGTH
       ? `${plainText.slice(0, PREVIEW_MAX_LENGTH - 1)}…`
       : plainText;
-  return { ID: card.ID, DECK_ID: card.DECK_ID, N: card.N, preview };
+  return { ID: card.ID, DECK_ID: card.DECK_ID, N: card.N, preview, directions };
 }
 
 function serveStatic(req, res, pathname) {
@@ -120,7 +121,10 @@ function createRoutes(bundlePath) {
         const { decks, cards } = loadDeckCardModel(bundlePath);
         const deck = findDeck(decks, name);
         if (!deck) return { status: 404, body: { error: `no deck named "${name}"` } };
-        const deckCards = cards.filter((c) => c.DECK_ID === name).map(cardSummary);
+        const directions = cardDirectionsInDeck(deck);
+        const deckCards = cards
+          .filter((c) => c.DECK_ID === name)
+          .map((c) => cardSummary(c, [...(directions.get(c.ID) || [])].sort()));
         return { status: 200, body: { ...deck, category: deckCategory(deck), cards: deckCards } };
       },
     },

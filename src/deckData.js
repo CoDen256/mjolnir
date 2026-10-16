@@ -110,6 +110,21 @@ export function deckCategory(deck) {
   return deck.Name[0];
 }
 
+// Maps each card id referenced by a deck to the set of direction letters
+// (the trailing character of each `Cards[].Card` entry, e.g. `N`/`E`/`A`)
+// that deck references it with — a card can appear more than once in the
+// same deck's `Cards[]`, once per direction it's quizzed in.
+export function cardDirectionsInDeck(deck) {
+  const directions = new Map();
+  for (const ref of deck.Cards || []) {
+    const baseId = ref.Card.slice(0, -1);
+    const letter = ref.Card.slice(-1);
+    if (!directions.has(baseId)) directions.set(baseId, new Set());
+    directions.get(baseId).add(letter);
+  }
+  return directions;
+}
+
 // Every deck's `Cards[].Card` reference (minus its trailing direction
 // letter) must resolve to a card's `ID`; every card's `DECK_ID` must
 // resolve to a deck's `Name`.
