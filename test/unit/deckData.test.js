@@ -91,7 +91,7 @@ test("cardDirectionsInDeck handles a deck with no Cards", () => {
 test("addOccurrence appends a new occurrence with the given letter", () => {
   const deck = fixtureDecks()[0];
   addOccurrence(deck, "A01001", "E");
-  assert.deepEqual(deck.Cards[deck.Cards.length - 1], { Card: "A01001E", P: "E" });
+  assert.deepEqual(deck.Cards[deck.Cards.length - 1], { Card: "A01001E", P: "N" });
   assert.equal(deck.Cards.length, 3);
 });
 
@@ -103,7 +103,7 @@ test("addOccurrence rejects an invalid letter", () => {
 test("updateOccurrenceLetter changes an occurrence's letter in place, preserving position", () => {
   const deck = fixtureDecks()[0];
   updateOccurrenceLetter(deck, 0, "A");
-  assert.deepEqual(deck.Cards[0], { Card: "A01001A", P: "A" });
+  assert.deepEqual(deck.Cards[0], { Card: "A01001A", P: "N" });
   assert.equal(deck.Cards.length, 2);
   assert.equal(deck.Cards[1].Card, "A01002N");
 });

@@ -91,7 +91,7 @@ test("POST /api/cards creates a card, appends an N-direction deck reference, and
   });
 });
 
-test("adding a card to a dual-direction deck only adds an N-direction reference", async () => {
+test("creating a card adds both an N and an E occurrence, each with P:N", async () => {
   await withServer(async ({ baseUrl, bundlePath }) => {
     const { status, data } = await api(baseUrl, "POST", "/api/cards", { DECK_ID: "B01" });
     assert.equal(status, 201);
@@ -99,8 +99,11 @@ test("adding a card to a dual-direction deck only adds an N-direction reference"
     const model = loadDeckCardModel(bundlePath);
     const deck = model.decks.find((d) => d.Name === "B01");
     const refsForNewCard = deck.Cards.filter((ref) => ref.Card.startsWith(data.ID));
-    assert.equal(refsForNewCard.length, 1);
-    assert.equal(refsForNewCard[0].P, "N");
+    assert.deepEqual(
+      refsForNewCard.map((r) => r.Card.slice(-1)).sort(),
+      ["E", "N"]
+    );
+    assert.ok(refsForNewCard.every((r) => r.P === "N"));
   });
 });
 
@@ -149,14 +152,76 @@ test("an edit that would orphan a reference is rejected and the bundle is left u
   });
 });
 
-test("POST /api/decks creates a new empty deck", async () => {
+test("POST /api/decks creates a new empty deck with sensible defaults and an auto-assigned ID", async () => {
   await withServer(async ({ baseUrl, bundlePath }) => {
     const { status, data } = await api(baseUrl, "POST", "/api/decks", { Name: "C01", Title: "Deck C1" });
     assert.equal(status, 201);
     assert.deepEqual(data.Cards, []);
+    assert.equal(data.ID, 2, "next id after the fixture's existing 0 and 1");
+    assert.equal(data.PullCounter, 0);
+    assert.equal(data.Enabled, true);
+    assert.equal(data.MaxInterval, 10);
+    assert.equal(data.AutoTickStreak, 1);
+    assert.equal(data.AutoHammerCount, 2);
 
     const model = loadDeckCardModel(bundlePath);
     assert.ok(model.decks.some((d) => d.Name === "C01"));
+  });
+});
+
+test("POST /api/decks lets the request override individual defaults", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { data } = await api(baseUrl, "POST", "/api/decks", {
+      Name: "C02",
+      Title: "Deck C2",
+      MaxInterval: 5,
+      Code: "02",
+    });
+    assert.equal(data.MaxInterval, 5);
+    assert.equal(data.Code, "02");
+    assert.equal(data.PullCounter, 0, "fields not overridden still get their default");
+  });
+});
+
+test("POST /api/decks ignores a client-supplied ID and assigns its own", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { data } = await api(baseUrl, "POST", "/api/decks", { Name: "C03", ID: 9999 });
+    assert.notEqual(data.ID, 9999);
+    assert.equal(data.ID, 2);
+  });
+});
+
+test("POST /api/decks/:name/shuffle reorders Cards[] but keeps the same occurrences", async () => {
+  await withServer(async ({ baseUrl, bundlePath }) => {
+    // Give A01 enough occurrences that "shuffled to the same order" is
+    // astronomically unlikely, without asserting it never happens.
+    for (let i = 0; i < 10; i++) {
+      await api(baseUrl, "POST", "/api/decks/A01/occurrences", { cardId: "A01001", letter: "N" });
+    }
+    const before = loadDeckCardModel(bundlePath).decks.find((d) => d.Name === "A01").Cards;
+
+    const { status, data } = await api(baseUrl, "POST", "/api/decks/A01/shuffle", {});
+    assert.equal(status, 200);
+
+    const after = loadDeckCardModel(bundlePath).decks.find((d) => d.Name === "A01").Cards;
+    assert.equal(after.length, before.length);
+    assert.deepEqual(
+      [...after].sort((a, b) => a.Card.localeCompare(b.Card)),
+      [...before].sort((a, b) => a.Card.localeCompare(b.Card)),
+      "same multiset of occurrences, just reordered"
+    );
+    assert.notDeepEqual(after.map((r) => r.Card), before.map((r) => r.Card));
+    assert.deepEqual(
+      data.occurrences.map((o) => o.cardId + o.letter),
+      after.map((r) => r.Card)
+    );
+  });
+});
+
+test("POST /api/decks/:name/shuffle on an unknown deck 404s", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { status } = await api(baseUrl, "POST", "/api/decks/NOPE/shuffle", {});
+    assert.equal(status, 404);
   });
 });
 
@@ -185,7 +250,7 @@ test("POST /api/decks/:name/occurrences appends a new occurrence and persists it
 
     const model = loadDeckCardModel(bundlePath);
     const deck = model.decks.find((d) => d.Name === "A01");
-    assert.deepEqual(deck.Cards[2], { Card: "A01001A", P: "A" });
+    assert.deepEqual(deck.Cards[2], { Card: "A01001A", P: "N" });
   });
 });
 
@@ -219,7 +284,7 @@ test("PUT /api/decks/:name/occurrences/:index changes that occurrence's letter",
 
     const model = loadDeckCardModel(bundlePath);
     const deck = model.decks.find((d) => d.Name === "B01");
-    assert.deepEqual(deck.Cards[1], { Card: "B01001A", P: "A" });
+    assert.deepEqual(deck.Cards[1], { Card: "B01001A", P: "N" });
     assert.equal(deck.Cards[0].Card, "B01001N", "the other occurrence is untouched");
   });
 });

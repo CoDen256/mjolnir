@@ -57,6 +57,30 @@ export const NEW_CARD_SKELETON = {
   X: '<div class="center">...</div>',
 };
 
+// Sensible defaults for a brand-new deck's non-identity fields, matching
+// typical values observed across existing decks.
+export const NEW_DECK_DEFAULTS = {
+  PullCounter: 0,
+  Code: "",
+  Enabled: true,
+  Description: "",
+  Counter1: "",
+  Counter2: "",
+  MaxInterval: 10,
+  AutoTickStreak: 1,
+  AutoHammerCount: 2,
+};
+
+// One past the highest existing numeric deck `ID` — the next unused id for
+// a newly created deck.
+export function nextDeckId(decks) {
+  let max = -1;
+  for (const deck of decks) {
+    if (typeof deck.ID === "number" && deck.ID > max) max = deck.ID;
+  }
+  return max + 1;
+}
+
 // Scans a bundle's `data`-classified modules (per its explode manifest) and
 // identifies the deck-catalog module (array elements have a `Cards`
 // property) and the card-content module (array elements have a `DECK_ID`
@@ -135,6 +159,15 @@ export function cardDirectionsInDeck(deck) {
   return directions;
 }
 
+// `Cards[].P` is an independent per-occurrence flag (observed values N/Y,
+// uncorrelated with the direction letter — e.g. the same deck has P:"Y"
+// entries with every one of N/E/A as their Card suffix) whose real meaning
+// isn't something this editor manages. The occurrence's direction is
+// encoded *only* in the trailing letter of its `Card` string. Every entry
+// this editor writes sets P to this fixed value rather than guessing at
+// P's semantics.
+const OCCURRENCE_P_VALUE = "N";
+
 // Appends a new occurrence of `cardId` to the end of `deck.Cards[]` with the
 // given direction letter. Mutates `deck.Cards` in place. Throws on an
 // invalid letter — callers validate the card id itself (e.g. that it
@@ -146,7 +179,7 @@ export function addOccurrence(deck, cardId, letter) {
       `invalid occurrence letter "${letter}" (must be one of ${DECK_OCCURRENCE_LETTERS.join(", ")})`
     );
   }
-  deck.Cards.push({ Card: `${cardId}${letter}`, P: letter });
+  deck.Cards.push({ Card: `${cardId}${letter}`, P: OCCURRENCE_P_VALUE });
 }
 
 // Changes the direction letter of the occurrence at `index` in
@@ -162,7 +195,7 @@ export function updateOccurrenceLetter(deck, index, letter) {
     );
   }
   const cardId = ref.Card.slice(0, -1);
-  deck.Cards[index] = { Card: `${cardId}${letter}`, P: letter };
+  deck.Cards[index] = { Card: `${cardId}${letter}`, P: OCCURRENCE_P_VALUE };
 }
 
 // Removes the occurrence at `index` from `deck.Cards[]`, shifting every
@@ -170,6 +203,14 @@ export function updateOccurrenceLetter(deck, index, letter) {
 export function removeOccurrence(deck, index) {
   if (!deck.Cards[index]) throw new Error(`no occurrence at index ${index} in deck "${deck.Name}"`);
   deck.Cards.splice(index, 1);
+}
+
+// Fisher-Yates shuffle of a deck's presentation order, in place.
+export function shuffleOccurrences(deck) {
+  for (let i = deck.Cards.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck.Cards[i], deck.Cards[j]] = [deck.Cards[j], deck.Cards[i]];
+  }
 }
 
 // Case-insensitive substring search over deck titles.

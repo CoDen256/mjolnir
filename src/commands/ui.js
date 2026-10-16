@@ -12,9 +12,12 @@ import {
   addOccurrence,
   updateOccurrenceLetter,
   removeOccurrence,
+  shuffleOccurrences,
   searchDecks,
   searchCards,
+  nextDeckId,
   NEW_CARD_SKELETON,
+  NEW_DECK_DEFAULTS,
 } from "../deckData.js";
 
 const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "../ui-assets");
@@ -168,7 +171,14 @@ function createRoutes(bundlePath) {
         if (findDeck(model.decks, body.Name)) {
           return { status: 400, body: { error: `deck "${body.Name}" already exists` } };
         }
-        const deck = { ...body, Cards: [] };
+        // ID is always server-assigned (never trusts a client-supplied
+        // value) to guarantee uniqueness; every other field falls back to
+        // NEW_DECK_DEFAULTS when the request omits or blanks it.
+        const deck = { ID: nextDeckId(model.decks), Name: body.Name, Title: body.Title || "" };
+        for (const [key, defaultValue] of Object.entries(NEW_DECK_DEFAULTS)) {
+          deck[key] = body[key] !== undefined && body[key] !== "" ? body[key] : defaultValue;
+        }
+        deck.Cards = [];
         model.decks.push(deck);
         saveDeckCardModel(bundlePath, model);
         return { status: 201, body: deck };
@@ -224,7 +234,10 @@ function createRoutes(bundlePath) {
           A: body.A ?? "X",
         };
         model.cards.push(card);
-        deck.Cards.push({ Card: `${id}N`, P: "N" });
+        // New cards get both a front (N) and a back (E) occurrence by
+        // default, not just front.
+        addOccurrence(deck, id, "N");
+        addOccurrence(deck, id, "E");
 
         saveDeckCardModel(bundlePath, model);
         return { status: 201, body: card };
@@ -306,7 +319,8 @@ function createRoutes(bundlePath) {
 
         updateOccurrenceLetter(deck, index, body && body.letter);
         saveDeckCardModel(bundlePath, model);
-        return { status: 200, body: { index, cardId: deck.Cards[index].Card.slice(0, -1), letter: deck.Cards[index].P } };
+        const ref = deck.Cards[index];
+        return { status: 200, body: { index, cardId: ref.Card.slice(0, -1), letter: ref.Card.slice(-1) } };
       },
     },
     {
@@ -322,6 +336,21 @@ function createRoutes(bundlePath) {
         removeOccurrence(deck, index);
         saveDeckCardModel(bundlePath, model);
         return { status: 200, body: { deleted: index } };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/decks\/([^/]+)\/shuffle$/,
+      handler: (match) => {
+        const name = decodeURIComponent(match[1]);
+        const model = loadDeckCardModel(bundlePath);
+        const deck = findDeck(model.decks, name);
+        if (!deck) return { status: 404, body: { error: `no deck named "${name}"` } };
+
+        shuffleOccurrences(deck);
+        saveDeckCardModel(bundlePath, model);
+        const cardsById = new Map(model.cards.map((c) => [c.ID, c]));
+        return { status: 200, body: { occurrences: occurrenceSummaries(deck, cardsById) } };
       },
     },
     {

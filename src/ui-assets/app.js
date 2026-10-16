@@ -2,6 +2,10 @@ const state = {
   currentDeckName: null,
   currentCardId: null,
   currentDeck: null,
+  deckViewMode: "card", // "card" | "order"
+  cardSortBy: "id",
+  occurrenceSortBy: "position",
+  deckFormMode: "create", // "create" | "edit"
 };
 
 const el = (id) => document.getElementById(id);
@@ -26,15 +30,17 @@ async function api(method, path, body) {
   return data;
 }
 
+const PANELS = ["deck-view", "card-editor", "deck-form"];
+
 function showPanel(id) {
-  for (const panelId of ["deck-view", "card-editor", "new-deck-form"]) {
+  for (const panelId of PANELS) {
     el(panelId).classList.toggle("hidden", panelId !== id);
   }
   el("empty-state").classList.add("hidden");
 }
 
 function showEmptyState() {
-  for (const panelId of ["deck-view", "card-editor", "new-deck-form"]) {
+  for (const panelId of PANELS) {
     el(panelId).classList.add("hidden");
   }
   el("empty-state").classList.remove("hidden");
@@ -118,19 +124,19 @@ function renderDeckMeta(deck, targetId) {
   }
 }
 
-async function openDeck(name) {
-  state.currentDeckName = name;
-  state.currentCardId = null;
-  markActiveDeck(name);
+// --- "By card" view: one row per unique card, deduplicated across any
+// multiple occurrences, with the set of direction letters it occurs with.
 
-  const deck = await api("GET", `/api/decks/${encodeURIComponent(name)}`);
-  state.currentDeck = deck;
-  el("deck-title").textContent = `${deck.Name} — ${deck.Title || ""}`;
-  renderDeckMeta(deck, "deck-meta");
+const CARD_SORTS = {
+  id: { label: "Sort: Card ID", cmp: (a, b) => a.ID.localeCompare(b.ID) },
+  preview: { label: "Sort: Preview (A–Z)", cmp: (a, b) => (a.preview || "").localeCompare(b.preview || "") },
+};
 
+function renderCardList(deck) {
   const list = el("card-list");
   list.innerHTML = "";
-  for (const card of deck.cards) {
+  const cards = [...deck.cards].sort(CARD_SORTS[state.cardSortBy].cmp);
+  for (const card of cards) {
     const li = document.createElement("li");
     const idSpan = document.createElement("span");
     idSpan.className = "card-id";
@@ -148,22 +154,26 @@ async function openDeck(name) {
     li.addEventListener("click", () => openCard(card.ID));
     list.appendChild(li);
   }
-
-  renderOccurrences(deck);
-  populateAddOccurrenceCardOptions(deck);
-  showCardListView();
-
-  showPanel("deck-view");
 }
 
-// "By order" view: deck.Cards[] in its own array order — one row per
-// occurrence (a card can appear more than once, once per side it's
-// presented on), each showing its position, card id, editable direction
-// letter, and content preview.
+// --- "By order" view: deck.Cards[]'s own array order *is* the real
+// presentation sequence, which the grouped "by card" view above collapses
+// away — one row per occurrence (a card can occur more than once, once per
+// side it's presented on). Sorting here is purely a display reorder — each
+// occurrence still carries its true `index` for the edit/delete API calls,
+// independent of how it's currently sorted on screen.
+
+const ORDER_SORTS = {
+  position: { label: "Sort: Position (presentation order)", cmp: (a, b) => a.index - b.index },
+  id: { label: "Sort: Card ID", cmp: (a, b) => a.cardId.localeCompare(b.cardId) || a.index - b.index },
+  letter: { label: "Sort: Letter", cmp: (a, b) => a.letter.localeCompare(b.letter) || a.index - b.index },
+};
+
 function renderOccurrences(deck) {
   const list = el("occurrence-list");
   list.innerHTML = "";
-  for (const occ of deck.occurrences || []) {
+  const occurrences = [...(deck.occurrences || [])].sort(ORDER_SORTS[state.occurrenceSortBy].cmp);
+  for (const occ of occurrences) {
     const li = document.createElement("li");
 
     const posSpan = document.createElement("span");
@@ -216,16 +226,39 @@ function populateAddOccurrenceCardOptions(deck) {
   }
 }
 
+function populateSortSelect() {
+  const sorts = state.deckViewMode === "order" ? ORDER_SORTS : CARD_SORTS;
+  const currentKey = state.deckViewMode === "order" ? state.occurrenceSortBy : state.cardSortBy;
+  const select = el("sort-select");
+  select.innerHTML = "";
+  for (const [key, { label }] of Object.entries(sorts)) {
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = label;
+    select.appendChild(option);
+  }
+  select.value = currentKey;
+}
+
+function handleSortChange() {
+  const value = el("sort-select").value;
+  if (state.deckViewMode === "order") {
+    state.occurrenceSortBy = value;
+    renderOccurrences(state.currentDeck);
+  } else {
+    state.cardSortBy = value;
+    renderCardList(state.currentDeck);
+  }
+}
+
 async function updateOccurrenceLetter(deckName, index, letter) {
   try {
     await api("PUT", `/api/decks/${encodeURIComponent(deckName)}/occurrences/${index}`, { letter });
-    await openDeck(deckName);
-    showOrderView();
   } catch (err) {
     alert(err.message);
-    await openDeck(deckName);
-    showOrderView();
   }
+  await openDeck(deckName);
+  showOrderView();
 }
 
 async function deleteOccurrence(deckName, index) {
@@ -246,18 +279,59 @@ async function addOccurrence() {
   showOrderView();
 }
 
+function toggleAddOccurrenceBar() {
+  el("add-occurrence").classList.toggle("hidden");
+}
+
+async function shuffleDeck() {
+  if (!state.currentDeckName) return;
+  await api("POST", `/api/decks/${encodeURIComponent(state.currentDeckName)}/shuffle`, {});
+  await openDeck(state.currentDeckName);
+  showOrderView();
+}
+
 function showCardListView() {
+  state.deckViewMode = "card";
   el("view-by-card-btn").classList.add("active");
   el("view-by-order-btn").classList.remove("active");
+  el("shuffle-btn").classList.add("hidden");
   el("card-list").classList.remove("hidden");
   el("order-view").classList.add("hidden");
+  populateSortSelect();
+  if (state.currentDeck) renderCardList(state.currentDeck);
 }
 
 function showOrderView() {
+  state.deckViewMode = "order";
   el("view-by-order-btn").classList.add("active");
   el("view-by-card-btn").classList.remove("active");
+  el("shuffle-btn").classList.remove("hidden");
   el("card-list").classList.add("hidden");
   el("order-view").classList.remove("hidden");
+  populateSortSelect();
+  if (state.currentDeck) renderOccurrences(state.currentDeck);
+}
+
+async function openDeck(name) {
+  state.currentDeckName = name;
+  state.currentCardId = null;
+  markActiveDeck(name);
+
+  const deck = await api("GET", `/api/decks/${encodeURIComponent(name)}`);
+  state.currentDeck = deck;
+  el("deck-title").textContent = `${deck.Name} — ${deck.Title || ""}`;
+  renderDeckMeta(deck, "deck-meta");
+
+  populateAddOccurrenceCardOptions(deck);
+  el("add-occurrence").classList.add("hidden");
+
+  if (state.deckViewMode === "order") {
+    showOrderView();
+  } else {
+    showCardListView();
+  }
+
+  showPanel("deck-view");
 }
 
 function setPreview(fieldId, previewId) {
@@ -322,20 +396,94 @@ async function createCard() {
   await openCard(card.ID);
 }
 
-async function createDeck() {
-  const name = el("new-deck-name").value.trim();
-  const title = el("new-deck-title").value.trim();
-  if (!name) return;
+// --- Deck create/edit form. Both share the same field set and markup;
+// create prefills NEW_DECK_DEFAULTS-matching values client-side (the
+// server fills the same defaults for anything omitted/blank anyway) and
+// leaves `ID` for the server to assign, edit prefills the deck's current
+// values and leaves every field (including `ID`) editable.
+
+const NEW_DECK_FORM_DEFAULTS = {
+  Enabled: true,
+  PullCounter: 0,
+  MaxInterval: 10,
+  AutoTickStreak: 1,
+  AutoHammerCount: 2,
+};
+
+function setDeckFormValues(deck) {
+  el("df-Name").value = deck.Name || "";
+  el("df-Title").value = deck.Title || "";
+  el("df-ID").value = deck.ID ?? "";
+  el("df-Code").value = deck.Code || "";
+  el("df-Enabled").checked = deck.Enabled !== false;
+  el("df-PullCounter").value = deck.PullCounter ?? "";
+  el("df-MaxInterval").value = deck.MaxInterval ?? "";
+  el("df-AutoTickStreak").value = deck.AutoTickStreak ?? "";
+  el("df-AutoHammerCount").value = deck.AutoHammerCount ?? "";
+  el("df-Counter1").value = deck.Counter1 || "";
+  el("df-Counter2").value = deck.Counter2 || "";
+  el("df-Description").value = deck.Description || "";
+}
+
+function readDeckFormValues() {
+  const numberOrUndefined = (value) => (value === "" ? undefined : Number(value));
+  return {
+    Name: el("df-Name").value.trim(),
+    Title: el("df-Title").value.trim(),
+    ID: numberOrUndefined(el("df-ID").value),
+    Code: el("df-Code").value.trim(),
+    Enabled: el("df-Enabled").checked,
+    PullCounter: numberOrUndefined(el("df-PullCounter").value),
+    MaxInterval: numberOrUndefined(el("df-MaxInterval").value),
+    AutoTickStreak: numberOrUndefined(el("df-AutoTickStreak").value),
+    AutoHammerCount: numberOrUndefined(el("df-AutoHammerCount").value),
+    Counter1: el("df-Counter1").value.trim(),
+    Counter2: el("df-Counter2").value.trim(),
+    Description: el("df-Description").value.trim(),
+  };
+}
+
+function openNewDeckForm() {
+  state.deckFormMode = "create";
+  el("deck-form-title").textContent = "New deck";
+  el("deck-form-submit-btn").textContent = "Create";
+  el("df-Name").disabled = false;
+  setDeckFormValues(NEW_DECK_FORM_DEFAULTS);
+  el("df-ID").placeholder = "(auto-assigned)";
+  el("deck-form-error").classList.add("hidden");
+  showPanel("deck-form");
+}
+
+function openEditDeckForm() {
+  if (!state.currentDeck) return;
+  state.deckFormMode = "edit";
+  el("deck-form-title").textContent = `Edit ${state.currentDeck.Name}`;
+  el("deck-form-submit-btn").textContent = "Save";
+  el("df-Name").disabled = true;
+  el("df-ID").placeholder = "";
+  setDeckFormValues(state.currentDeck);
+  el("deck-form-error").classList.add("hidden");
+  showPanel("deck-form");
+}
+
+async function submitDeckForm() {
+  const values = readDeckFormValues();
+  if (state.deckFormMode === "create" && !values.Name) return;
+
   try {
-    await api("POST", "/api/decks", { Name: name, Title: title });
-    el("deck-error").classList.add("hidden");
-    el("new-deck-name").value = "";
-    el("new-deck-title").value = "";
-    await loadSidebar();
-    await openDeck(name);
+    if (state.deckFormMode === "create") {
+      const deck = await api("POST", "/api/decks", values);
+      await loadSidebar();
+      await openDeck(deck.Name);
+    } else {
+      await api("PUT", `/api/decks/${encodeURIComponent(state.currentDeck.Name)}`, values);
+      await loadSidebar();
+      await openDeck(state.currentDeck.Name);
+    }
+    el("deck-form-error").classList.add("hidden");
   } catch (err) {
-    el("deck-error").textContent = err.message;
-    el("deck-error").classList.remove("hidden");
+    el("deck-form-error").textContent = err.message;
+    el("deck-form-error").classList.remove("hidden");
   }
 }
 
@@ -404,10 +552,14 @@ function init() {
   el("new-card-btn").addEventListener("click", createCard);
   el("save-card-btn").addEventListener("click", saveCard);
   el("delete-card-btn").addEventListener("click", deleteCard);
-  el("new-deck-btn").addEventListener("click", () => showPanel("new-deck-form"));
-  el("create-deck-btn").addEventListener("click", createDeck);
+  el("new-deck-btn").addEventListener("click", openNewDeckForm);
+  el("edit-deck-btn").addEventListener("click", openEditDeckForm);
+  el("deck-form-submit-btn").addEventListener("click", submitDeckForm);
   el("view-by-card-btn").addEventListener("click", showCardListView);
   el("view-by-order-btn").addEventListener("click", showOrderView);
+  el("shuffle-btn").addEventListener("click", shuffleDeck);
+  el("sort-select").addEventListener("change", handleSortChange);
+  el("add-occurrence-toggle-btn").addEventListener("click", toggleAddOccurrenceBar);
   el("add-occurrence-btn").addEventListener("click", addOccurrence);
 
   showEmptyState();

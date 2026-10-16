@@ -23,28 +23,35 @@
       <section id="deck-view" class="panel hidden">
         <div class="panel-header">
           <h2 id="deck-title"></h2>
-          <button id="new-card-btn" type="button">+ New card</button>
+          <div>
+            <button id="edit-deck-btn" type="button">Edit deck</button>
+            <button id="add-occurrence-toggle-btn" type="button">+ Add occurrence</button>
+            <button id="new-card-btn" type="button">+ New card</button>
+          </div>
         </div>
         <div id="deck-meta" class="deck-meta"></div>
 
         <div class="view-toggle">
           <button id="view-by-card-btn" type="button" class="active">By card</button>
           <button id="view-by-order-btn" type="button">By order</button>
+          <button id="shuffle-btn" type="button" class="hidden">Shuffle</button>
+          <select id="sort-select"></select>
+        </div>
+
+        <div id="add-occurrence" class="add-occurrence hidden">
+          <select id="add-occurrence-card"></select>
+          <select id="add-occurrence-letter">
+            <option value="N">N (front)</option>
+            <option value="E">E (back)</option>
+            <option value="A">A (audio)</option>
+          </select>
+          <button id="add-occurrence-btn" type="button">Add</button>
         </div>
 
         <ul id="card-list"></ul>
 
         <div id="order-view" class="hidden">
           <ol id="occurrence-list"></ol>
-          <div class="add-occurrence">
-            <select id="add-occurrence-card"></select>
-            <select id="add-occurrence-letter">
-              <option value="N">N (front)</option>
-              <option value="E">E (back)</option>
-              <option value="A">A (audio)</option>
-            </select>
-            <button id="add-occurrence-btn" type="button">+ Add occurrence</button>
-          </div>
         </div>
       </section>
 
@@ -89,15 +96,28 @@
         </div>
       </section>
 
-      <section id="new-deck-form" class="panel hidden">
+      <section id="deck-form" class="panel hidden">
         <div class="panel-header">
-          <h2>New deck</h2>
-          <button id="create-deck-btn" type="button">Create</button>
+          <h2 id="deck-form-title">New deck</h2>
+          <button id="deck-form-submit-btn" type="button">Create</button>
         </div>
-        <div id="deck-error" class="error hidden"></div>
+        <div id="deck-form-error" class="error hidden"></div>
         <div class="field-grid">
-          <label>Name <input id="new-deck-name" /></label>
-          <label>Title <input id="new-deck-title" /></label>
+          <label>Name <input id="df-Name" /></label>
+          <label>Title <input id="df-Title" /></label>
+          <label>ID <input id="df-ID" type="number" /></label>
+          <label>Code <input id="df-Code" /></label>
+          <label class="checkbox-label"><input id="df-Enabled" type="checkbox" /> Enabled</label>
+          <label>PullCounter <input id="df-PullCounter" type="number" /></label>
+          <label>MaxInterval <input id="df-MaxInterval" type="number" /></label>
+          <label>AutoTickStreak <input id="df-AutoTickStreak" type="number" /></label>
+          <label>AutoHammerCount <input id="df-AutoHammerCount" type="number" /></label>
+          <label>Counter1 <input id="df-Counter1" /></label>
+          <label>Counter2 <input id="df-Counter2" /></label>
+          <label class="full-width">
+            Description
+            <textarea id="df-Description"></textarea>
+          </label>
         </div>
       </section>
 

@@ -1,4 +1,5 @@
 * { box-sizing: border-box; }
+.hidden { display: none !important; }
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
@@ -44,9 +45,6 @@ body {
   overflow-y: auto;
   z-index: 10;
 }
-.search-results.hidden {
-  display: none;
-}
 .search-result {
   padding: 6px 8px;
   font-size: 13px;
@@ -90,14 +88,15 @@ body {
   overflow-y: auto;
   padding: 20px;
 }
-.panel.hidden, .empty-state.hidden {
-  display: none;
-}
 .panel-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+.panel-header > div {
+  display: flex;
+  gap: 6px;
 }
 .deck-meta {
   color: #555;
@@ -126,9 +125,6 @@ body {
   background: #eef2ff;
   border-color: #99a;
   font-weight: 600;
-}
-#order-view.hidden {
-  display: none;
 }
 #occurrence-list {
   list-style: none;
@@ -218,9 +214,23 @@ textarea {
   font-size: 13px;
   padding: 6px;
 }
-input {
+input, select {
   padding: 6px;
   font-size: 14px;
+}
+.field-grid .full-width {
+  grid-column: 1 / -1;
+}
+.field-grid .checkbox-label {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+}
+.field-grid .checkbox-label input {
+  width: auto;
+}
+#sort-select {
+  margin-left: auto;
 }
 .preview {
   border: 1px dashed #ccc;
@@ -236,9 +246,6 @@ input {
   padding: 8px;
   border-radius: 4px;
   margin-bottom: 12px;
-}
-.error.hidden {
-  display: none;
 }
 button {
   cursor: pointer;
