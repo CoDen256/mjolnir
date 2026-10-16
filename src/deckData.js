@@ -38,6 +38,16 @@ export function stripHtml(html) {
     .trim();
 }
 
+// A deck's `Cards[]` entry records one *occurrence* of a card in that
+// deck's presentation sequence — which side is shown (front/back/audio)
+// and, via the array's own order, when. A card can occur more than once
+// (e.g. once front, once back).
+export const DECK_OCCURRENCE_LETTERS = ["N", "E", "A"];
+
+// A card's `A` field doesn't hold audio content itself — it names which of
+// the card's own fields (front/back/extra) the audio asset is attached to.
+export const CARD_AUDIO_TARGETS = ["N", "E", "X"];
+
 // Prefilled structural HTML skeleton for a new card's N/E/X fields (a
 // question/answer wrapper matching the shape observed across existing
 // cards), rather than leaving them empty.
@@ -123,6 +133,62 @@ export function cardDirectionsInDeck(deck) {
     directions.get(baseId).add(letter);
   }
   return directions;
+}
+
+// Appends a new occurrence of `cardId` to the end of `deck.Cards[]` with the
+// given direction letter. Mutates `deck.Cards` in place. Throws on an
+// invalid letter — callers validate the card id itself (e.g. that it
+// belongs to this deck) before calling, since that check needs the card
+// list this function doesn't take.
+export function addOccurrence(deck, cardId, letter) {
+  if (!DECK_OCCURRENCE_LETTERS.includes(letter)) {
+    throw new Error(
+      `invalid occurrence letter "${letter}" (must be one of ${DECK_OCCURRENCE_LETTERS.join(", ")})`
+    );
+  }
+  deck.Cards.push({ Card: `${cardId}${letter}`, P: letter });
+}
+
+// Changes the direction letter of the occurrence at `index` in
+// `deck.Cards[]`, keeping it pointed at the same card id. Mutates in place,
+// preserving every other occurrence's position (order is the presentation
+// sequence). Throws on an out-of-range index or invalid letter.
+export function updateOccurrenceLetter(deck, index, letter) {
+  const ref = deck.Cards[index];
+  if (!ref) throw new Error(`no occurrence at index ${index} in deck "${deck.Name}"`);
+  if (!DECK_OCCURRENCE_LETTERS.includes(letter)) {
+    throw new Error(
+      `invalid occurrence letter "${letter}" (must be one of ${DECK_OCCURRENCE_LETTERS.join(", ")})`
+    );
+  }
+  const cardId = ref.Card.slice(0, -1);
+  deck.Cards[index] = { Card: `${cardId}${letter}`, P: letter };
+}
+
+// Removes the occurrence at `index` from `deck.Cards[]`, shifting every
+// later occurrence's position down by one. Throws on an out-of-range index.
+export function removeOccurrence(deck, index) {
+  if (!deck.Cards[index]) throw new Error(`no occurrence at index ${index} in deck "${deck.Name}"`);
+  deck.Cards.splice(index, 1);
+}
+
+// Case-insensitive substring search over deck titles.
+export function searchDecks(decks, query) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  return decks.filter((d) => (d.Title || "").toLowerCase().includes(needle));
+}
+
+// Case-insensitive substring search over a card's plain-text content
+// (N/E/X/D fields, HTML stripped) — matches content a user would actually
+// read, not raw markup.
+export function searchCards(cards, query) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  return cards.filter((c) => {
+    const text = [c.N, c.E, c.X, c.D].map(stripHtml).join(" ").toLowerCase();
+    return text.includes(needle);
+  });
 }
 
 // Every deck's `Cards[].Card` reference (minus its trailing direction

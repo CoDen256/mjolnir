@@ -149,7 +149,115 @@ async function openDeck(name) {
     list.appendChild(li);
   }
 
+  renderOccurrences(deck);
+  populateAddOccurrenceCardOptions(deck);
+  showCardListView();
+
   showPanel("deck-view");
+}
+
+// "By order" view: deck.Cards[] in its own array order — one row per
+// occurrence (a card can appear more than once, once per side it's
+// presented on), each showing its position, card id, editable direction
+// letter, and content preview.
+function renderOccurrences(deck) {
+  const list = el("occurrence-list");
+  list.innerHTML = "";
+  for (const occ of deck.occurrences || []) {
+    const li = document.createElement("li");
+
+    const posSpan = document.createElement("span");
+    posSpan.className = "occurrence-pos";
+    posSpan.textContent = `#${occ.index + 1}`;
+
+    const idSpan = document.createElement("span");
+    idSpan.className = "card-id";
+    idSpan.textContent = occ.cardId;
+
+    const letterSelect = document.createElement("select");
+    for (const letter of ["N", "E", "A"]) {
+      const option = document.createElement("option");
+      option.value = letter;
+      option.textContent = letter;
+      letterSelect.appendChild(option);
+    }
+    letterSelect.value = occ.letter;
+    letterSelect.addEventListener("change", () =>
+      updateOccurrenceLetter(deck.Name, occ.index, letterSelect.value)
+    );
+
+    const previewSpan = document.createElement("span");
+    previewSpan.className = "card-preview";
+    previewSpan.textContent = occ.preview || "";
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "danger small";
+    deleteBtn.textContent = "×";
+    deleteBtn.addEventListener("click", () => deleteOccurrence(deck.Name, occ.index));
+
+    li.appendChild(posSpan);
+    li.appendChild(idSpan);
+    li.appendChild(letterSelect);
+    li.appendChild(previewSpan);
+    li.appendChild(deleteBtn);
+    list.appendChild(li);
+  }
+}
+
+function populateAddOccurrenceCardOptions(deck) {
+  const select = el("add-occurrence-card");
+  select.innerHTML = "";
+  for (const card of deck.cards || []) {
+    const option = document.createElement("option");
+    option.value = card.ID;
+    option.textContent = `${card.ID} — ${card.preview || ""}`;
+    select.appendChild(option);
+  }
+}
+
+async function updateOccurrenceLetter(deckName, index, letter) {
+  try {
+    await api("PUT", `/api/decks/${encodeURIComponent(deckName)}/occurrences/${index}`, { letter });
+    await openDeck(deckName);
+    showOrderView();
+  } catch (err) {
+    alert(err.message);
+    await openDeck(deckName);
+    showOrderView();
+  }
+}
+
+async function deleteOccurrence(deckName, index) {
+  await api("DELETE", `/api/decks/${encodeURIComponent(deckName)}/occurrences/${index}`);
+  await openDeck(deckName);
+  showOrderView();
+}
+
+async function addOccurrence() {
+  const cardId = el("add-occurrence-card").value;
+  const letter = el("add-occurrence-letter").value;
+  if (!cardId) return;
+  await api("POST", `/api/decks/${encodeURIComponent(state.currentDeckName)}/occurrences`, {
+    cardId,
+    letter,
+  });
+  await openDeck(state.currentDeckName);
+  showOrderView();
+}
+
+function showCardListView() {
+  el("view-by-card-btn").classList.add("active");
+  el("view-by-order-btn").classList.remove("active");
+  el("card-list").classList.remove("hidden");
+  el("order-view").classList.add("hidden");
+}
+
+function showOrderView() {
+  el("view-by-order-btn").classList.add("active");
+  el("view-by-card-btn").classList.remove("active");
+  el("card-list").classList.add("hidden");
+  el("order-view").classList.remove("hidden");
 }
 
 function setPreview(fieldId, previewId) {
@@ -231,13 +339,76 @@ async function createDeck() {
   }
 }
 
+let searchDebounceTimer = null;
+
+function renderSearchResults(results) {
+  const container = el("search-results");
+  container.innerHTML = "";
+  const hasResults = results.decks.length > 0 || results.cards.length > 0;
+  container.classList.toggle("hidden", !hasResults);
+  if (!hasResults) return;
+
+  for (const deck of results.decks) {
+    const item = document.createElement("div");
+    item.className = "search-result";
+    item.textContent = `Deck: ${deck.Name} — ${deck.Title || ""}`;
+    item.addEventListener("click", () => {
+      el("search-input").value = "";
+      container.classList.add("hidden");
+      openDeck(deck.Name);
+    });
+    container.appendChild(item);
+  }
+
+  for (const card of results.cards) {
+    const item = document.createElement("div");
+    item.className = "search-result";
+    item.textContent = `Card ${card.ID} (${card.DECK_ID}): ${card.preview}`;
+    item.addEventListener("click", async () => {
+      el("search-input").value = "";
+      container.classList.add("hidden");
+      await openDeck(card.DECK_ID);
+      await openCard(card.ID);
+    });
+    container.appendChild(item);
+  }
+
+  if (results.cardsTotal > results.cards.length) {
+    const more = document.createElement("div");
+    more.className = "search-result-more";
+    more.textContent = `+ ${results.cardsTotal - results.cards.length} more cards — refine your search`;
+    container.appendChild(more);
+  }
+}
+
+async function runSearch(query) {
+  if (!query.trim()) {
+    el("search-results").classList.add("hidden");
+    return;
+  }
+  const results = await api("GET", `/api/search?q=${encodeURIComponent(query)}`);
+  renderSearchResults(results);
+}
+
+function wireSearch() {
+  el("search-input").addEventListener("input", (e) => {
+    clearTimeout(searchDebounceTimer);
+    const query = e.target.value;
+    searchDebounceTimer = setTimeout(() => runSearch(query), 200);
+  });
+}
+
 function init() {
   wireLivePreview();
+  wireSearch();
   el("new-card-btn").addEventListener("click", createCard);
   el("save-card-btn").addEventListener("click", saveCard);
   el("delete-card-btn").addEventListener("click", deleteCard);
   el("new-deck-btn").addEventListener("click", () => showPanel("new-deck-form"));
   el("create-deck-btn").addEventListener("click", createDeck);
+  el("view-by-card-btn").addEventListener("click", showCardListView);
+  el("view-by-order-btn").addEventListener("click", showOrderView);
+  el("add-occurrence-btn").addEventListener("click", addOccurrence);
 
   showEmptyState();
   loadSidebar();

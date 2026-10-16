@@ -24,6 +24,43 @@ body {
   font-size: 16px;
   margin: 0;
 }
+.search-box {
+  position: relative;
+  margin-bottom: 12px;
+}
+.search-box input {
+  width: 100%;
+}
+.search-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 10;
+}
+.search-results.hidden {
+  display: none;
+}
+.search-result {
+  padding: 6px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f0f0;
+}
+.search-result:hover {
+  background: #eef2ff;
+}
+.search-result-more {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #888;
+}
 .category {
   margin-bottom: 12px;
 }
@@ -79,6 +116,49 @@ body {
   margin: 0;
   color: #999;
   font-size: 12px;
+}
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.view-toggle button.active {
+  background: #eef2ff;
+  border-color: #99a;
+  font-weight: 600;
+}
+#order-view.hidden {
+  display: none;
+}
+#occurrence-list {
+  list-style: none;
+  padding: 0;
+}
+#occurrence-list li {
+  padding: 6px 8px;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.occurrence-pos {
+  font-family: monospace;
+  color: #999;
+  font-size: 12px;
+  flex-shrink: 0;
+  width: 2.5em;
+}
+.add-occurrence {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+button.small {
+  padding: 2px 8px;
+  margin-left: auto;
 }
 #card-list {
   list-style: none;

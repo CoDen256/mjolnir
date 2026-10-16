@@ -9,6 +9,11 @@ import {
   nextCardId,
   stripHtml,
   cardDirectionsInDeck,
+  addOccurrence,
+  updateOccurrenceLetter,
+  removeOccurrence,
+  searchDecks,
+  searchCards,
   NEW_CARD_SKELETON,
 } from "../deckData.js";
 
@@ -72,14 +77,29 @@ function findCard(cards, id) {
 }
 
 const PREVIEW_MAX_LENGTH = 80;
+const SEARCH_RESULT_LIMIT = 50;
+
+function previewText(card) {
+  const plainText = stripHtml(card.N);
+  return plainText.length > PREVIEW_MAX_LENGTH
+    ? `${plainText.slice(0, PREVIEW_MAX_LENGTH - 1)}…`
+    : plainText;
+}
 
 function cardSummary(card, directions = []) {
-  const plainText = stripHtml(card.N);
-  const preview =
-    plainText.length > PREVIEW_MAX_LENGTH
-      ? `${plainText.slice(0, PREVIEW_MAX_LENGTH - 1)}…`
-      : plainText;
-  return { ID: card.ID, DECK_ID: card.DECK_ID, N: card.N, preview, directions };
+  return { ID: card.ID, DECK_ID: card.DECK_ID, N: card.N, preview: previewText(card), directions };
+}
+
+// A deck's `Cards[]` *array order* is the actual presentation sequence —
+// this mirrors it 1:1 (one entry per occurrence, in order) rather than
+// deduplicating by card id the way cardSummary's per-deck list does.
+function occurrenceSummaries(deck, cardsById) {
+  return deck.Cards.map((ref, index) => {
+    const cardId = ref.Card.slice(0, -1);
+    const letter = ref.Card.slice(-1);
+    const card = cardsById.get(cardId);
+    return { index, cardId, letter, preview: card ? previewText(card) : null };
+  });
 }
 
 function serveStatic(req, res, pathname) {
@@ -125,7 +145,16 @@ function createRoutes(bundlePath) {
         const deckCards = cards
           .filter((c) => c.DECK_ID === name)
           .map((c) => cardSummary(c, [...(directions.get(c.ID) || [])].sort()));
-        return { status: 200, body: { ...deck, category: deckCategory(deck), cards: deckCards } };
+        const cardsById = new Map(cards.map((c) => [c.ID, c]));
+        return {
+          status: 200,
+          body: {
+            ...deck,
+            category: deckCategory(deck),
+            cards: deckCards,
+            occurrences: occurrenceSummaries(deck, cardsById),
+          },
+        };
       },
     },
     {
@@ -236,6 +265,89 @@ function createRoutes(bundlePath) {
         return { status: 200, body: { deleted: id } };
       },
     },
+    {
+      // Adds a new presentation occurrence of an existing card to a deck's
+      // Cards[] sequence (e.g. "also quiz this card's back"), always
+      // appended at the end — the UI never offers to pick a position.
+      method: "POST",
+      pattern: /^\/api\/decks\/([^/]+)\/occurrences$/,
+      handler: (match, body) => {
+        const name = decodeURIComponent(match[1]);
+        const model = loadDeckCardModel(bundlePath);
+        const deck = findDeck(model.decks, name);
+        if (!deck) return { status: 404, body: { error: `no deck named "${name}"` } };
+
+        const cardId = body && body.cardId;
+        const letter = body && body.letter;
+        if (!cardId) return { status: 400, body: { error: "cardId is required" } };
+        const card = findCard(model.cards, cardId);
+        if (!card) return { status: 400, body: { error: `no card with id "${cardId}"` } };
+        if (card.DECK_ID !== deck.Name) {
+          return {
+            status: 400,
+            body: { error: `card "${cardId}" belongs to deck "${card.DECK_ID}", not "${deck.Name}"` },
+          };
+        }
+
+        addOccurrence(deck, cardId, letter);
+        saveDeckCardModel(bundlePath, model);
+        return { status: 201, body: { index: deck.Cards.length - 1, cardId, letter } };
+      },
+    },
+    {
+      method: "PUT",
+      pattern: /^\/api\/decks\/([^/]+)\/occurrences\/(\d+)$/,
+      handler: (match, body) => {
+        const name = decodeURIComponent(match[1]);
+        const index = Number(match[2]);
+        const model = loadDeckCardModel(bundlePath);
+        const deck = findDeck(model.decks, name);
+        if (!deck) return { status: 404, body: { error: `no deck named "${name}"` } };
+
+        updateOccurrenceLetter(deck, index, body && body.letter);
+        saveDeckCardModel(bundlePath, model);
+        return { status: 200, body: { index, cardId: deck.Cards[index].Card.slice(0, -1), letter: deck.Cards[index].P } };
+      },
+    },
+    {
+      method: "DELETE",
+      pattern: /^\/api\/decks\/([^/]+)\/occurrences\/(\d+)$/,
+      handler: (match) => {
+        const name = decodeURIComponent(match[1]);
+        const index = Number(match[2]);
+        const model = loadDeckCardModel(bundlePath);
+        const deck = findDeck(model.decks, name);
+        if (!deck) return { status: 404, body: { error: `no deck named "${name}"` } };
+
+        removeOccurrence(deck, index);
+        saveDeckCardModel(bundlePath, model);
+        return { status: 200, body: { deleted: index } };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/search$/,
+      handler: (match, body, url) => {
+        const q = url.searchParams.get("q") || "";
+        if (!q.trim()) return { status: 200, body: { decks: [], cards: [], cardsTotal: 0 } };
+
+        const { decks, cards } = loadDeckCardModel(bundlePath);
+        const deckMatches = searchDecks(decks, q).map((d) => ({
+          Name: d.Name,
+          Title: d.Title,
+          category: deckCategory(d),
+        }));
+        const cardMatches = searchCards(cards, q);
+        return {
+          status: 200,
+          body: {
+            decks: deckMatches,
+            cards: cardMatches.slice(0, SEARCH_RESULT_LIMIT).map((c) => cardSummary(c)),
+            cardsTotal: cardMatches.length,
+          },
+        };
+      },
+    },
   ];
 }
 
@@ -259,7 +371,7 @@ export function createServer(bundlePath) {
     try {
       const body = ["POST", "PUT"].includes(req.method) ? await readJsonBody(req) : undefined;
       const match = url.pathname.match(route.pattern);
-      const { status, body: resBody } = route.handler(match, body);
+      const { status, body: resBody } = route.handler(match, body, url);
       sendJson(res, status, resBody);
     } catch (err) {
       sendError(res, 400, err.message);

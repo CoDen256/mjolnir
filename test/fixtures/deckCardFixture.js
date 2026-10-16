@@ -20,10 +20,11 @@ export function fixtureDecks() {
       ID: 1,
       Name: "B01",
       Title: "Deck B1",
-      // Dual-direction deck: the same card referenced both ways.
+      // Dual-occurrence deck: the same card presented both front (N) and
+      // back (E) — real direction letters are N/E/A, not N/Y.
       Cards: [
         { Card: "B01001N", P: "N" },
-        { Card: "B01001Y", P: "Y" },
+        { Card: "B01001E", P: "E" },
       ],
     },
   ];

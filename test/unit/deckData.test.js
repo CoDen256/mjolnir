@@ -11,6 +11,11 @@ import {
   nextCardId,
   stripHtml,
   cardDirectionsInDeck,
+  addOccurrence,
+  updateOccurrenceLetter,
+  removeOccurrence,
+  searchDecks,
+  searchCards,
 } from "../../src/deckData.js";
 import {
   buildFixtureBundleSource,
@@ -75,12 +80,70 @@ test("cardDirectionsInDeck maps each card id to its set of direction letters", (
   assert.deepEqual([...a.get("A01002")].sort(), ["N"]);
 
   const b = cardDirectionsInDeck(deckB);
-  assert.deepEqual([...b.get("B01001")].sort(), ["N", "Y"]);
+  assert.deepEqual([...b.get("B01001")].sort(), ["E", "N"]);
 });
 
 test("cardDirectionsInDeck handles a deck with no Cards", () => {
   const directions = cardDirectionsInDeck({ Name: "X01", Cards: [] });
   assert.equal(directions.size, 0);
+});
+
+test("addOccurrence appends a new occurrence with the given letter", () => {
+  const deck = fixtureDecks()[0];
+  addOccurrence(deck, "A01001", "E");
+  assert.deepEqual(deck.Cards[deck.Cards.length - 1], { Card: "A01001E", P: "E" });
+  assert.equal(deck.Cards.length, 3);
+});
+
+test("addOccurrence rejects an invalid letter", () => {
+  const deck = fixtureDecks()[0];
+  assert.throws(() => addOccurrence(deck, "A01001", "Z"), /invalid occurrence letter/);
+});
+
+test("updateOccurrenceLetter changes an occurrence's letter in place, preserving position", () => {
+  const deck = fixtureDecks()[0];
+  updateOccurrenceLetter(deck, 0, "A");
+  assert.deepEqual(deck.Cards[0], { Card: "A01001A", P: "A" });
+  assert.equal(deck.Cards.length, 2);
+  assert.equal(deck.Cards[1].Card, "A01002N");
+});
+
+test("updateOccurrenceLetter rejects an out-of-range index", () => {
+  const deck = fixtureDecks()[0];
+  assert.throws(() => updateOccurrenceLetter(deck, 99, "N"), /no occurrence at index 99/);
+});
+
+test("updateOccurrenceLetter rejects an invalid letter", () => {
+  const deck = fixtureDecks()[0];
+  assert.throws(() => updateOccurrenceLetter(deck, 0, "Q"), /invalid occurrence letter/);
+});
+
+test("removeOccurrence removes only the targeted occurrence", () => {
+  const deck = fixtureDecks()[1];
+  removeOccurrence(deck, 0);
+  assert.equal(deck.Cards.length, 1);
+  assert.equal(deck.Cards[0].Card, "B01001E");
+});
+
+test("removeOccurrence rejects an out-of-range index", () => {
+  const deck = fixtureDecks()[0];
+  assert.throws(() => removeOccurrence(deck, 99), /no occurrence at index 99/);
+});
+
+test("searchDecks matches deck titles case-insensitively", () => {
+  const matches = searchDecks(fixtureDecks(), "deck a");
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].Name, "A01");
+});
+
+test("searchDecks returns nothing for an empty query", () => {
+  assert.deepEqual(searchDecks(fixtureDecks(), "   "), []);
+});
+
+test("searchCards matches plain-text content, ignoring HTML markup", () => {
+  const matches = searchCards(fixtureCards(), "q2");
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].ID, "A01002");
 });
 
 test("stripHtml removes tags and collapses whitespace", () => {

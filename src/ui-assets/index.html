@@ -12,6 +12,10 @@
         <h1>Decks</h1>
         <button id="new-deck-btn" type="button">+ New deck</button>
       </div>
+      <div class="search-box">
+        <input id="search-input" type="search" placeholder="Search decks &amp; cards..." />
+        <div id="search-results" class="search-results hidden"></div>
+      </div>
       <div id="categories"></div>
     </aside>
 
@@ -22,7 +26,26 @@
           <button id="new-card-btn" type="button">+ New card</button>
         </div>
         <div id="deck-meta" class="deck-meta"></div>
+
+        <div class="view-toggle">
+          <button id="view-by-card-btn" type="button" class="active">By card</button>
+          <button id="view-by-order-btn" type="button">By order</button>
+        </div>
+
         <ul id="card-list"></ul>
+
+        <div id="order-view" class="hidden">
+          <ol id="occurrence-list"></ol>
+          <div class="add-occurrence">
+            <select id="add-occurrence-card"></select>
+            <select id="add-occurrence-letter">
+              <option value="N">N (front)</option>
+              <option value="E">E (back)</option>
+              <option value="A">A (audio)</option>
+            </select>
+            <button id="add-occurrence-btn" type="button">+ Add occurrence</button>
+          </div>
+        </div>
       </section>
 
       <section id="card-editor" class="panel hidden">
@@ -37,12 +60,12 @@
         <div id="card-error" class="error hidden"></div>
         <div class="field-grid">
           <label>
-            N (question)
+            N (front)
             <textarea id="field-N"></textarea>
             <div class="preview" id="preview-N"></div>
           </label>
           <label>
-            E (answer)
+            E (back)
             <textarea id="field-E"></textarea>
             <div class="preview" id="preview-E"></div>
           </label>
@@ -56,8 +79,12 @@
             <div class="preview" id="preview-X"></div>
           </label>
           <label>
-            A
-            <textarea id="field-A"></textarea>
+            A (which side the audio is attached to)
+            <select id="field-A">
+              <option value="N">N (front)</option>
+              <option value="E">E (back)</option>
+              <option value="X">X (extra)</option>
+            </select>
           </label>
         </div>
       </section>

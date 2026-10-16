@@ -70,7 +70,7 @@ test("GET /api/decks/:name returns deck detail with resolved cards", async () =>
 test("GET /api/decks/:name reports every direction letter a card is referenced with in that deck", async () => {
   await withServer(async ({ baseUrl }) => {
     const { data } = await api(baseUrl, "GET", "/api/decks/B01");
-    assert.deepEqual(data.cards.find((c) => c.ID === "B01001").directions, ["N", "Y"]);
+    assert.deepEqual(data.cards.find((c) => c.ID === "B01001").directions, ["E", "N"]);
   });
 });
 
@@ -157,5 +157,100 @@ test("POST /api/decks creates a new empty deck", async () => {
 
     const model = loadDeckCardModel(bundlePath);
     assert.ok(model.decks.some((d) => d.Name === "C01"));
+  });
+});
+
+test("GET /api/decks/:name includes occurrences in Cards[] array order", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { data } = await api(baseUrl, "GET", "/api/decks/B01");
+    assert.deepEqual(
+      data.occurrences.map((o) => ({ cardId: o.cardId, letter: o.letter })),
+      [
+        { cardId: "B01001", letter: "N" },
+        { cardId: "B01001", letter: "E" },
+      ]
+    );
+    assert.equal(data.occurrences[0].preview, "Q3");
+  });
+});
+
+test("POST /api/decks/:name/occurrences appends a new occurrence and persists it", async () => {
+  await withServer(async ({ baseUrl, bundlePath }) => {
+    const { status, data } = await api(baseUrl, "POST", "/api/decks/A01/occurrences", {
+      cardId: "A01001",
+      letter: "A",
+    });
+    assert.equal(status, 201);
+    assert.deepEqual(data, { index: 2, cardId: "A01001", letter: "A" });
+
+    const model = loadDeckCardModel(bundlePath);
+    const deck = model.decks.find((d) => d.Name === "A01");
+    assert.deepEqual(deck.Cards[2], { Card: "A01001A", P: "A" });
+  });
+});
+
+test("POST /api/decks/:name/occurrences rejects a card that belongs to a different deck", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { status, data } = await api(baseUrl, "POST", "/api/decks/A01/occurrences", {
+      cardId: "B01001",
+      letter: "N",
+    });
+    assert.equal(status, 400);
+    assert.match(data.error, /belongs to deck "B01"/);
+  });
+});
+
+test("POST /api/decks/:name/occurrences rejects an invalid letter", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { status, data } = await api(baseUrl, "POST", "/api/decks/A01/occurrences", {
+      cardId: "A01001",
+      letter: "Z",
+    });
+    assert.equal(status, 400);
+    assert.match(data.error, /invalid occurrence letter/);
+  });
+});
+
+test("PUT /api/decks/:name/occurrences/:index changes that occurrence's letter", async () => {
+  await withServer(async ({ baseUrl, bundlePath }) => {
+    const { status, data } = await api(baseUrl, "PUT", "/api/decks/B01/occurrences/1", { letter: "A" });
+    assert.equal(status, 200);
+    assert.deepEqual(data, { index: 1, cardId: "B01001", letter: "A" });
+
+    const model = loadDeckCardModel(bundlePath);
+    const deck = model.decks.find((d) => d.Name === "B01");
+    assert.deepEqual(deck.Cards[1], { Card: "B01001A", P: "A" });
+    assert.equal(deck.Cards[0].Card, "B01001N", "the other occurrence is untouched");
+  });
+});
+
+test("DELETE /api/decks/:name/occurrences/:index removes only that occurrence", async () => {
+  await withServer(async ({ baseUrl, bundlePath }) => {
+    const { status } = await api(baseUrl, "DELETE", "/api/decks/B01/occurrences/0");
+    assert.equal(status, 200);
+
+    const model = loadDeckCardModel(bundlePath);
+    const deck = model.decks.find((d) => d.Name === "B01");
+    assert.equal(deck.Cards.length, 1);
+    assert.equal(deck.Cards[0].Card, "B01001E");
+  });
+});
+
+test("GET /api/search finds decks by title and cards by content, case-insensitively", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const byDeckTitle = await api(baseUrl, "GET", "/api/search?q=deck+b1");
+    assert.equal(byDeckTitle.data.decks.length, 1);
+    assert.equal(byDeckTitle.data.decks[0].Name, "B01");
+
+    const byCardContent = await api(baseUrl, "GET", "/api/search?q=Q2");
+    assert.equal(byCardContent.data.cards.length, 1);
+    assert.equal(byCardContent.data.cards[0].ID, "A01002");
+  });
+});
+
+test("GET /api/search with an empty query returns no results", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { data } = await api(baseUrl, "GET", "/api/search?q=");
+    assert.deepEqual(data, { decks: [], cards: [], cardsTotal: 0 });
   });
 });
