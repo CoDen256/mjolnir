@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Deck/Card editor</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>Decks</h1>
+        <button id="new-deck-btn" type="button">+ New deck</button>
+      </div>
+      <div id="categories"></div>
+    </aside>
+
+    <main class="main">
+      <section id="deck-view" class="panel hidden">
+        <div class="panel-header">
+          <h2 id="deck-title"></h2>
+          <button id="new-card-btn" type="button">+ New card</button>
+        </div>
+        <div id="deck-meta" class="deck-meta"></div>
+        <ul id="card-list"></ul>
+      </section>
+
+      <section id="card-editor" class="panel hidden">
+        <div class="panel-header">
+          <h2 id="card-editor-title"></h2>
+          <div>
+            <button id="save-card-btn" type="button">Save</button>
+            <button id="delete-card-btn" type="button" class="danger">Delete</button>
+          </div>
+        </div>
+        <div id="card-deck-meta" class="deck-meta"></div>
+        <div id="card-error" class="error hidden"></div>
+        <div class="field-grid">
+          <label>
+            N (question)
+            <textarea id="field-N"></textarea>
+            <div class="preview" id="preview-N"></div>
+          </label>
+          <label>
+            E (answer)
+            <textarea id="field-E"></textarea>
+            <div class="preview" id="preview-E"></div>
+          </label>
+          <label>
+            D (deck title, redundant)
+            <textarea id="field-D"></textarea>
+          </label>
+          <label>
+            X (extra/example)
+            <textarea id="field-X"></textarea>
+            <div class="preview" id="preview-X"></div>
+          </label>
+          <label>
+            A
+            <textarea id="field-A"></textarea>
+          </label>
+        </div>
+      </section>
+
+      <section id="new-deck-form" class="panel hidden">
+        <div class="panel-header">
+          <h2>New deck</h2>
+          <button id="create-deck-btn" type="button">Create</button>
+        </div>
+        <div id="deck-error" class="error hidden"></div>
+        <div class="field-grid">
+          <label>Name <input id="new-deck-name" /></label>
+          <label>Title <input id="new-deck-title" /></label>
+        </div>
+      </section>
+
+      <p id="empty-state" class="empty-state">Select a deck from the left.</p>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

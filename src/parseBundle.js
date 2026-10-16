@@ -47,6 +47,33 @@ function minifiedSignal(source, factoryNode) {
   };
 }
 
+// Babel's node.start/end are JS-string (UTF-16 code unit) offsets into the
+// source decoded via fs.readFileSync(path, "utf8") — not raw file byte
+// offsets. Every consumer of this module's start/end (readModuleSource,
+// reassembleBundle) slices the *raw file bytes* with these numbers, so for
+// any bundle containing so much as a single non-ASCII character (observed:
+// one accented name in a vendor license comment), using the char offset
+// as-is silently shifts every subsequent module boundary by however many
+// extra bytes those characters needed in UTF-8. This is harmless for
+// operations that always reparse (a stray leading/trailing byte of noise
+// doesn't break parsing) but corrupts a boundary that's directly spliced
+// into regenerated content (see deck-card save path). Converts a set of
+// char offsets to true byte offsets in one pass (total work is O(source
+// length), not O(positions x length), since offsets are visited in sorted
+// order and only the delta since the previous one is re-encoded).
+function charToByteOffsets(source, charPositions) {
+  const sorted = [...new Set(charPositions)].sort((a, b) => a - b);
+  const byteOffsetFor = new Map();
+  let prevChar = 0;
+  let byteCursor = 0;
+  for (const charPos of sorted) {
+    byteCursor += Buffer.byteLength(source.slice(prevChar, charPos), "utf8");
+    byteOffsetFor.set(charPos, byteCursor);
+    prevChar = charPos;
+  }
+  return byteOffsetFor;
+}
+
 export function parseBundle(bundlePath) {
   const source = fs.readFileSync(bundlePath, "utf8");
   const ast = parse(source, {
@@ -57,6 +84,7 @@ export function parseBundle(bundlePath) {
   const modules = new Map();
   let entryId = null;
   const preludeStatements = [];
+  const charPositions = [];
 
   for (const stmt of ast.program.body) {
     const expr = stmt.type === "ExpressionStatement" ? stmt.expression : null;
@@ -71,6 +99,7 @@ export function parseBundle(bundlePath) {
       const id = numericLiteral(idNode);
       if (id === null || factoryNode == null) {
         preludeStatements.push({ start: stmt.start, end: stmt.end });
+        charPositions.push(stmt.start, stmt.end);
         continue;
       }
       const deps = depsArray(depsNode);
@@ -83,6 +112,7 @@ export function parseBundle(bundlePath) {
         factoryNode
       );
 
+      charPositions.push(stmt.start, stmt.end, factoryNode.start, factoryNode.end);
       modules.set(id, {
         id,
         start: stmt.start,
@@ -111,6 +141,20 @@ export function parseBundle(bundlePath) {
     }
 
     preludeStatements.push({ start: stmt.start, end: stmt.end });
+    charPositions.push(stmt.start, stmt.end);
+  }
+
+  const byteOffsetFor = charToByteOffsets(source, charPositions);
+  for (const stmt of preludeStatements) {
+    stmt.start = byteOffsetFor.get(stmt.start);
+    stmt.end = byteOffsetFor.get(stmt.end);
+  }
+  for (const mod of modules.values()) {
+    mod.start = byteOffsetFor.get(mod.start);
+    mod.end = byteOffsetFor.get(mod.end);
+    mod.factoryStart = byteOffsetFor.get(mod.factoryStart);
+    mod.factoryEnd = byteOffsetFor.get(mod.factoryEnd);
+    mod.size = mod.end - mod.start;
   }
 
   for (const mod of modules.values()) {

@@ -9,6 +9,7 @@ import { runDeobfuscate } from "../src/commands/deobfuscate.js";
 import { runCheck } from "../src/commands/check.js";
 import { runDiff } from "../src/commands/diff.js";
 import { runPatchback } from "../src/commands/patchback.js";
+import { runUi } from "../src/commands/ui.js";
 
 const program = new Command();
 
@@ -79,5 +80,11 @@ program
   .action(async (bundle, outputBundle, patches) => {
     await runPatchback(bundle, patches, outputBundle);
   });
+
+program
+  .command("ui <bundle>")
+  .description("Start a local browser-based editor for a bundle's decks and cards")
+  .option("--port <n>", "port to listen on (0 = pick any free port)", "0")
+  .action((bundle, opts) => runUi(bundle, { port: Number(opts.port) }));
 
 program.parseAsync(process.argv);

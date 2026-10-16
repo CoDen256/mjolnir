@@ -1,0 +1,160 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  color: #1a1a1a;
+}
+.layout {
+  display: flex;
+  height: 100vh;
+}
+.sidebar {
+  width: 280px;
+  border-right: 1px solid #ddd;
+  overflow-y: auto;
+  padding: 12px;
+}
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.sidebar-header h1 {
+  font-size: 16px;
+  margin: 0;
+}
+.category {
+  margin-bottom: 12px;
+}
+.category-name {
+  font-weight: 700;
+  font-size: 13px;
+  text-transform: uppercase;
+  color: #666;
+  margin: 8px 0 4px;
+}
+.deck-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 14px;
+}
+.deck-item:hover, .deck-item.active {
+  background: #eef2ff;
+}
+.main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+.panel.hidden, .empty-state.hidden {
+  display: none;
+}
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.deck-meta {
+  color: #555;
+  font-size: 13px;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+.deck-meta .description {
+  margin: 0 0 4px;
+}
+.deck-meta .counters {
+  margin: 0;
+  color: #888;
+}
+#card-list {
+  list-style: none;
+  padding: 0;
+}
+#card-list li {
+  padding: 8px;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.card-id {
+  font-family: monospace;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.card-preview {
+  color: #666;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#card-list li:hover {
+  background: #f7f7ff;
+}
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.field-grid label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 4px;
+}
+textarea {
+  min-height: 90px;
+  font-family: monospace;
+  font-size: 13px;
+  padding: 6px;
+}
+input {
+  padding: 6px;
+  font-size: 14px;
+}
+.preview {
+  border: 1px dashed #ccc;
+  padding: 8px;
+  min-height: 40px;
+  font-weight: normal;
+  font-size: 14px;
+}
+.error {
+  background: #fee;
+  border: 1px solid #f99;
+  color: #900;
+  padding: 8px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+.error.hidden {
+  display: none;
+}
+button {
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  background: #fff;
+}
+button.danger {
+  border-color: #c33;
+  color: #c33;
+}
+.empty-state {
+  color: #888;
+}

@@ -1,0 +1,214 @@
+import fs from "node:fs";
+import { parse } from "@babel/parser";
+import generatorPkg from "@babel/generator";
+import * as t from "@babel/types";
+import { extractFactoryBody } from "./factory.js";
+import { readModuleSource } from "./parseBundle.js";
+import { reassembleBundle } from "./reassemble.js";
+import { loadManifest } from "./commands/deobfuscate.js";
+import { runExplode } from "./commands/explode.js";
+
+const generate = generatorPkg.default ?? generatorPkg;
+
+// A data module's factory is `__d(function (C, a, r, N, d, P, B) { d.exports
+// = [...] }, id, deps)` (or a `return [...]` shape, per classify.js). Rather
+// than hand-walking the AST's literal shape, generate the factory's own
+// source and call it like Metro would — the same technique the e2e test
+// uses — so every value (numbers, strings, the `!0`/`!1` booleans) comes
+// back as a real JS value, not an AST node.
+function evalFactoryExports(source) {
+  const ast = parse(source, { sourceType: "script", allowReturnOutsideFunction: true });
+  const { factory } = extractFactoryBody(ast);
+  const fnSrc = generate(factory, { comments: false }).code;
+  // eslint-disable-next-line no-eval
+  const fn = eval(`(${fnSrc})`);
+  const mod = { exports: {} };
+  fn({}, () => {}, () => {}, () => {}, mod, mod.exports, []);
+  return mod.exports;
+}
+
+// Plain-text rendering of an HTML-bearing card field (strip tags, collapse
+// whitespace) — used for compact, scannable list views where showing the
+// raw markup would be noise.
+export function stripHtml(html) {
+  if (!html) return "";
+  return html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Prefilled structural HTML skeleton for a new card's N/E/X fields (a
+// question/answer wrapper matching the shape observed across existing
+// cards), rather than leaving them empty.
+export const NEW_CARD_SKELETON = {
+  N: '<div class="center">...</div>',
+  E: '<div class="center">...</div>',
+  X: '<div class="center">...</div>',
+};
+
+// Scans a bundle's `data`-classified modules (per its explode manifest) and
+// identifies the deck-catalog module (array elements have a `Cards`
+// property) and the card-content module (array elements have a `DECK_ID`
+// property) by structural shape, not a hardcoded module id.
+export function locateDeckCardModules(bundlePath, manifest) {
+  const dataEntries = Object.entries(manifest).filter(
+    ([, mod]) => mod.classification === "data"
+  );
+
+  let deckModuleId = null;
+  let cardModuleId = null;
+  let decks = null;
+  let cards = null;
+
+  for (const [idStr, mod] of dataEntries) {
+    const source = readModuleSource(bundlePath, mod);
+    let exported;
+    try {
+      exported = evalFactoryExports(source);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(exported) || exported.length === 0) continue;
+    const sample = exported[0];
+    if (!sample || typeof sample !== "object") continue;
+
+    if (deckModuleId === null && Object.prototype.hasOwnProperty.call(sample, "Cards")) {
+      deckModuleId = idStr;
+      decks = exported;
+    } else if (
+      cardModuleId === null &&
+      Object.prototype.hasOwnProperty.call(sample, "DECK_ID")
+    ) {
+      cardModuleId = idStr;
+      cards = exported;
+    }
+  }
+
+  if (deckModuleId === null || cardModuleId === null) {
+    throw new Error(
+      "Could not locate the deck-catalog/card-content module pair in this bundle"
+    );
+  }
+
+  return { deckModuleId, cardModuleId, decks, cards };
+}
+
+// Loads the manifest, locates the pair, and parses both into plain JS
+// arrays, ready to browse/edit/save.
+export function loadDeckCardModel(bundlePath) {
+  const manifest = loadManifest(bundlePath);
+  const { deckModuleId, cardModuleId, decks, cards } = locateDeckCardModules(
+    bundlePath,
+    manifest
+  );
+  return { manifest, deckModuleId, cardModuleId, decks, cards };
+}
+
+// A deck's category is the first character of its `Name` field.
+export function deckCategory(deck) {
+  return deck.Name[0];
+}
+
+// Every deck's `Cards[].Card` reference (minus its trailing direction
+// letter) must resolve to a card's `ID`; every card's `DECK_ID` must
+// resolve to a deck's `Name`.
+export function validateReferences(decks, cards) {
+  const cardIds = new Set(cards.map((c) => c.ID));
+  const deckNames = new Set(decks.map((d) => d.Name));
+  const errors = [];
+
+  for (const deck of decks) {
+    for (const ref of deck.Cards || []) {
+      const baseId = ref.Card.slice(0, -1);
+      if (!cardIds.has(baseId)) {
+        errors.push(
+          `deck "${deck.Name}" references unknown card "${baseId}" (from Cards[] entry "${ref.Card}")`
+        );
+      }
+    }
+  }
+
+  for (const card of cards) {
+    if (!deckNames.has(card.DECK_ID)) {
+      errors.push(`card "${card.ID}" has unresolved DECK_ID "${card.DECK_ID}"`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+// Next unused zero-padded 3-digit sequence among a deck's existing card
+// ids: `<deckName>` + max existing numeric suffix + 1, zero-padded to 3
+// digits. Works correctly even when existing sequence numbers have gaps,
+// since it scans for the max rather than counting entries.
+export function nextCardId(deckName, cards) {
+  let maxSeq = 0;
+  for (const card of cards) {
+    if (!card.ID.startsWith(deckName)) continue;
+    const suffix = card.ID.slice(deckName.length);
+    if (/^\d{3}$/.test(suffix)) {
+      maxSeq = Math.max(maxSeq, Number.parseInt(suffix, 10));
+    }
+  }
+  return `${deckName}${String(maxSeq + 1).padStart(3, "0")}`;
+}
+
+// Replaces a data module's `module.exports = [...]` (or `return [...]`)
+// array literal with a freshly generated one built from `newArray`, leaving
+// the `__d(...)` wrapper (id, deps, verbose name) untouched.
+export function regenerateModuleSource(originalSource, newArray) {
+  const ast = parse(originalSource, { sourceType: "script", allowReturnOutsideFunction: true });
+  const { factory } = extractFactoryBody(ast);
+  const stmt = factory.body.body[0];
+  const newArrayNode = t.valueToNode(newArray);
+
+  if (stmt.type === "ReturnStatement") {
+    stmt.argument = newArrayNode;
+  } else if (
+    stmt.type === "ExpressionStatement" &&
+    stmt.expression.type === "AssignmentExpression"
+  ) {
+    stmt.expression.right = newArrayNode;
+  } else {
+    throw new Error("Unexpected data module shape: cannot locate the exports literal to replace");
+  }
+
+  return generate(ast, { comments: false, retainLines: false }).code;
+}
+
+// Copies the bundle's current on-disk contents to `<bundle>.bak`, overwriting
+// any prior backup. Called immediately before every save, since `ui` is the
+// first command that can destructively overwrite a bundle file.
+export function backupBundle(bundlePath) {
+  fs.copyFileSync(bundlePath, `${bundlePath}.bak`);
+}
+
+// Validates referential integrity, backs up the current bundle, regenerates
+// both data modules, and reassembles+writes the bundle in place. Both
+// modules are always rewritten together, even if only one was logically
+// edited. Throws (writing nothing) if validation fails.
+export function saveDeckCardModel(bundlePath, { manifest, deckModuleId, cardModuleId, decks, cards }) {
+  const { valid, errors } = validateReferences(decks, cards);
+  if (!valid) {
+    throw new Error(`Referential integrity check failed:\n${errors.join("\n")}`);
+  }
+
+  const deckSource = readModuleSource(bundlePath, manifest[deckModuleId]);
+  const cardSource = readModuleSource(bundlePath, manifest[cardModuleId]);
+  const newDeckSource = regenerateModuleSource(deckSource, decks);
+  const newCardSource = regenerateModuleSource(cardSource, cards);
+
+  backupBundle(bundlePath);
+
+  const outBuffer = reassembleBundle(bundlePath, manifest, [
+    { moduleId: deckModuleId, newSource: newDeckSource },
+    { moduleId: cardModuleId, newSource: newCardSource },
+  ]);
+  fs.writeFileSync(bundlePath, outBuffer);
+
+  // The manifest's byte offsets are now stale (both modules' lengths
+  // changed); regenerate it so a subsequent loadDeckCardModel() in this
+  // session reads the right ranges.
+  runExplode(bundlePath);
+}
