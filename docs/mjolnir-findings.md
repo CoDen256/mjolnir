@@ -63,13 +63,15 @@ quizzed on. Each entry:
   which side gets shown when that occurrence comes up: `N` = front presented,
   `E` = back presented, `A` = audio-only presented (full info "covered" by the
   clip, nothing shown visually).
-- **`P` is a red herring** — it's an independent per-occurrence flag (observed
-  values `N`/`Y`) that does *not* correlate with the direction letter. We
-  confirmed this directly: deck `A03` has `P:"Y"` entries whose `Card` suffix is
-  `N`, `E`, *and* `A` — all three. Whatever `P` tracks (looks like some kind of
-  per-occurrence review/scheduling flag, unconfirmed), it's orthogonal to
-  direction. **Any tooling that edits `Cards[]` should always write `P:"N"`**
-  and derive direction purely from the `Card` string's last character.
+- **`P` does *not* correlate with the direction letter** — it's an independent
+  per-occurrence flag (observed values `N`/`Y`). We confirmed this directly:
+  deck `A03` has `P:"Y"` entries whose `Card` suffix is `N`, `E`, *and* `A` —
+  all three. **`P` is the free/premium gate**: `P:"N"` = included in the free
+  tier, `P:"Y"` = premium-only (gated behind the paywall/subscription). This
+  is orthogonal to the direction letter, which lives purely in `Card`'s last
+  character. **Any tooling that edits `Cards[]` should set `P` deliberately
+  for that reason** — it controls monetization, not presentation — and derive
+  direction purely from the `Card` string's last character, independent of it.
 - Most cards have a single occurrence (`N` only). Some decks are genuinely
   multi-occurrence — e.g. deck `A03` has cards with `N`+`E`, or all of `N`+`E`+`A`.
 - Order inside `Cards[]` *is* the presentation order for that deck.
@@ -210,3 +212,38 @@ coarser pacing knobs (new cards/day, how forgiving a miss is), separate from
 per-card `Stage`. Exactly how `Stage` maps to day-gaps wasn't fully traced —
 would need a deeper read of `drawNewCards`/session-building logic in module
 `2119` to pin down.
+
+## 7. Applied patches: paywall / subscription bypass
+
+This is a record of what was actually done, not a design — three commits in
+`smali.merged.mjolnir/assets` (`0f6f580` → `b962691` → `a1f8f1f`), each
+patching `index.android.bundle` directly, iterating toward intercepting the
+paywall at an earlier point:
+
+**1. `0f6f580` "set subscription hook at counter increment"**
+Module `968` (the Redux reducer from §6) — the `SET_APP_OPENED_COUNTER` case
+(fires on every app open) was extended to also force:
+```js
+cards_purchased: true, subscription_purchased: "Yearly, renews on 27/07/2040"
+```
+Rides a frequently-dispatched action rather than the real IAP/purchase flow.
+
+**2. `b962691` "disable pyawall"**
+Same `SET_APP_OPENED_COUNTER` case, same module `968` — added `paywall_visible:
+false` alongside the fields from patch 1. Also a stray `console.log` left in
+module `2119` (debug output, not functional).
+
+**3. `a1f8f1f` "fix paywall earlier"**
+Moved the override from `SET_APP_OPENED_COUNTER` to `SET_PAYWALL_VISIBLE`
+itself — now *any* dispatch of that action (ignoring its real payload) forces
+`paywall_visible: false, cards_purchased: true, subscription_purchased: "..."`.
+This fires right when the app decides to show the paywall, rather than
+waiting for the next app-open counter tick — hence "earlier." Also added
+`ae(!1)` (a React state setter, same one toggled for the end-of-trial flag
+earlier) into an effect/cleanup in module `2119`, suppressing the
+end-of-trial UI at the component level too — belt-and-suspenders alongside
+the Redux-level fix.
+
+**Net effect of all three, as currently applied:** both `SET_APP_OPENED_COUNTER`
+and `SET_PAYWALL_VISIBLE` unconditionally force the app into "subscribed"
+state on their very next dispatch, regardless of actual purchase status.
