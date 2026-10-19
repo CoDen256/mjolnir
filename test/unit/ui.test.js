@@ -3,24 +3,22 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { runExplode } from "../../src/commands/explode.js";
 import { loadDeckCardModel } from "../../src/deckData.js";
 import { createServer } from "../../src/commands/ui.js";
 import { buildFixtureBundleSource } from "../fixtures/deckCardFixture.js";
 
-function withServer(fn) {
+function withServer(fn, opts) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-tool-ui-"));
   const bundlePath = path.join(dir, "fixture.bundle");
   fs.writeFileSync(bundlePath, buildFixtureBundleSource());
-  runExplode(bundlePath);
 
-  const server = createServer(bundlePath);
+  const server = createServer(opts);
   return new Promise((resolve, reject) => {
     server.listen(0, "127.0.0.1", async () => {
       const { port } = server.address();
       const baseUrl = `http://127.0.0.1:${port}`;
       try {
-        await fn({ baseUrl, bundlePath });
+        await fn({ baseUrl, bundlePath, dir });
         resolve();
       } catch (err) {
         reject(err);
@@ -42,9 +40,458 @@ async function api(baseUrl, method, p, body) {
   return { status: res.status, data };
 }
 
-test("GET /api/decks lists decks grouped by category (via category field)", async () => {
+async function openSession(baseUrl, bundlePath) {
+  const { data } = await api(baseUrl, "POST", "/api/sessions", { path: bundlePath });
+  return data;
+}
+
+function flattenDiffEntries(entries) {
+  const out = [];
+  for (const e of entries || []) {
+    out.push(e);
+    if (e.children) out.push(...flattenDiffEntries(e.children));
+  }
+  return out;
+}
+
+function deckcard(sessionId, subPath) {
+  return `/api/sessions/${sessionId}/deckcard${subPath}`;
+}
+
+async function withDeckCardSession(fn) {
+  await withServer(async ({ baseUrl, bundlePath }) => {
+    const session = await openSession(baseUrl, bundlePath);
+    await fn({ baseUrl, bundlePath, sessionId: session.id });
+  });
+}
+
+// --- Session management ----------------------------------------------
+
+test("opening a valid bundle path creates a session and reports deck/card availability", async () => {
+  await withServer(async ({ baseUrl, bundlePath }) => {
+    const { status, data } = await api(baseUrl, "POST", "/api/sessions", { path: bundlePath });
+    assert.equal(status, 201);
+    assert.equal(data.moduleCount, 2);
+    assert.equal(data.deckCardAvailable, true);
+  });
+});
+
+test("opening an invalid path errors without creating a session", async () => {
   await withServer(async ({ baseUrl }) => {
-    const { status, data } = await api(baseUrl, "GET", "/api/decks");
+    const { status } = await api(baseUrl, "POST", "/api/sessions", { path: "/no/such/bundle/file" });
+    assert.equal(status, 400);
+    const { data } = await api(baseUrl, "GET", "/api/sessions");
+    assert.deepEqual(data, []);
+  });
+});
+
+test("a fresh server has no sessions open", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { data } = await api(baseUrl, "GET", "/api/sessions");
+    assert.deepEqual(data, []);
+  });
+});
+
+test("two sessions can be open concurrently and are independently addressable", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-tool-ui-"));
+  const bundleA = path.join(dir, "a.bundle");
+  const bundleB = path.join(dir, "b.bundle");
+  fs.writeFileSync(bundleA, buildFixtureBundleSource());
+  fs.writeFileSync(bundleB, buildFixtureBundleSource());
+
+  const server = createServer({});
+  await new Promise((resolve, reject) => {
+    server.listen(0, "127.0.0.1", async () => {
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      try {
+        const sessionA = await openSession(baseUrl, bundleA);
+        const sessionB = await openSession(baseUrl, bundleB);
+        assert.notEqual(sessionA.id, sessionB.id);
+        const { data: list } = await api(baseUrl, "GET", "/api/sessions");
+        assert.equal(list.length, 2);
+        const { status: statusA } = await api(baseUrl, "GET", `/api/sessions/${sessionA.id}`);
+        const { status: statusB } = await api(baseUrl, "GET", `/api/sessions/${sessionB.id}`);
+        assert.equal(statusA, 200);
+        assert.equal(statusB, 200);
+        resolve();
+      } catch (err) {
+        reject(err);
+      } finally {
+        server.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+// --- Explorer -----------------------------------------------------------
+
+test("GET /api/sessions/:id/modules lists modules with classification", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { status, data } = await api(baseUrl, "GET", `/api/sessions/${sessionId}/modules`);
+    assert.equal(status, 200);
+    assert.equal(data.length, 2);
+    assert.ok(data.every((m) => m.classification === "data"));
+  });
+});
+
+test("GET /api/sessions/:id/modules/:id returns module source", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { status, data } = await api(baseUrl, "GET", `/api/sessions/${sessionId}/modules/100`);
+    assert.equal(status, 200);
+    assert.match(data.source, /A01/);
+  });
+});
+
+test("GET /api/sessions/:id/search finds a matching module, equivalent to grep", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { status, data } = await api(baseUrl, "GET", `/api/sessions/${sessionId}/search?q=Q2`);
+    assert.equal(status, 200);
+    assert.equal(data.length, 1);
+    assert.equal(data[0].moduleId, 101);
+  });
+});
+
+test("GET /api/sessions/:id/modules/:id/deps reports dependencies", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { status, data } = await api(
+      baseUrl,
+      "GET",
+      `/api/sessions/${sessionId}/modules/100/deps?direction=deps`
+    );
+    assert.equal(status, 200);
+    assert.deepEqual(data.modules, []);
+  });
+});
+
+// --- Compare --------------------------------------------------------------
+
+function compareModuleSource(id, bodySrc, deps = [], verboseName) {
+  const vn = verboseName ? `, ${JSON.stringify(verboseName)}` : "";
+  return `__d(function (g, r, i, a, m, e, d) { ${bodySrc} }, ${id}, ${JSON.stringify(deps)}${vn});\n`;
+}
+
+function buildCompareBundleA() {
+  return (
+    compareModuleSource(1, "return 1;") + // unchanged (matched by hash, different id on B side)
+    compareModuleSource(2, "return 1;", [], "Y.js") + // changed (matched by verboseName)
+    compareModuleSource(3, "return 3;", [], "removed.js") + // removed
+    compareModuleSource(5, "return 5;", [], "dup.js") + // ambiguous verboseName (A side has 2)
+    compareModuleSource(6, "return 6;", [], "dup.js") +
+    `__r(1);\n`
+  );
+}
+
+function buildCompareBundleB() {
+  return (
+    compareModuleSource(99, "return 1;") + // same content as A's id 1, different id
+    compareModuleSource(2, "return 2;", [], "Y.js") + // changed content, same verboseName
+    compareModuleSource(4, "return 4;", [], "added.js") + // added
+    compareModuleSource(5, "return 99;", [], "dup.js") + // ambiguous on A side -> added, not matched
+    `__r(99);\n`
+  );
+}
+
+async function withCompareSessions(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-tool-compare-"));
+  const bundleA = path.join(dir, "a.bundle");
+  const bundleB = path.join(dir, "b.bundle");
+  fs.writeFileSync(bundleA, buildCompareBundleA());
+  fs.writeFileSync(bundleB, buildCompareBundleB());
+
+  const server = createServer({});
+  await new Promise((resolve, reject) => {
+    server.listen(0, "127.0.0.1", async () => {
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      try {
+        const sessionA = await openSession(baseUrl, bundleA);
+        const sessionB = await openSession(baseUrl, bundleB);
+        await fn({ baseUrl, sessionA, sessionB });
+        resolve();
+      } catch (err) {
+        reject(err);
+      } finally {
+        server.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+}
+
+test("compare matches unchanged content across differing ids, detects changed/added/removed, and falls back on ambiguous verboseName", async () => {
+  await withCompareSessions(async ({ baseUrl, sessionA, sessionB }) => {
+    const { status, data } = await api(
+      baseUrl,
+      "GET",
+      `/api/compare?a=${sessionA.id}&b=${sessionB.id}`
+    );
+    assert.equal(status, 200);
+
+    assert.ok(data.unchanged.some((p) => p.aId === 1 && p.bId === 99));
+
+    const changed = data.changed.find((p) => p.verboseName === "Y.js");
+    assert.ok(changed);
+    assert.equal(changed.aId, 2);
+    assert.equal(changed.bId, 2);
+
+    assert.ok(data.removed.includes(3), "removed.js only in A");
+    assert.ok(data.added.includes(4), "added.js only in B");
+
+    // Ambiguous verboseName ("dup.js" appears twice in A) falls back to
+    // added+removed rather than a guessed pairing.
+    assert.ok(data.removed.includes(5) || data.removed.includes(6));
+    assert.ok(data.added.includes(5));
+  });
+});
+
+test("compare diff endpoint renders a changed module's structural diff", async () => {
+  await withCompareSessions(async ({ baseUrl, sessionA, sessionB }) => {
+    const { status, data } = await api(
+      baseUrl,
+      "GET",
+      `/api/compare/diff?a=${sessionA.id}&b=${sessionB.id}&aModuleId=2&bModuleId=2`
+    );
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(data.diff));
+    assert.ok(data.diff.some((e) => e.kind === "modified"));
+  });
+});
+
+// --- Patches --------------------------------------------------------------
+
+const PATCH_MARKER = "UNIQUE_UI_PATCH_MARKER";
+
+function patchModuleSource(extraProps) {
+  return `__d(function (g, r, i, a, m, e, d) {\n  return Object.assign({}, g, { ${PATCH_MARKER}: 1${extraProps} });\n}, 42, []);\n`;
+}
+
+async function withPatchSession(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-tool-patch-"));
+  const patchesDir = path.join(dir, "patches");
+  const bundlePath = path.join(dir, "fixture.bundle");
+  fs.writeFileSync(bundlePath, patchModuleSource("") + "__r(42);\n");
+
+  const server = createServer({ patchesDir });
+  await new Promise((resolve, reject) => {
+    server.listen(0, "127.0.0.1", async () => {
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      try {
+        const session = await openSession(baseUrl, bundlePath);
+        await fn({ baseUrl, bundlePath, patchesDir, sessionId: session.id });
+        resolve();
+      } catch (err) {
+        reject(err);
+      } finally {
+        server.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+}
+
+test("saving a patch writes the expected JSON shape", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir }) => {
+    const { status, data } = await api(baseUrl, "POST", "/api/patches", {
+      name: "add-prop",
+      description: "adds a property",
+      locator: { contains: PATCH_MARKER },
+      baseline: patchModuleSource(""),
+      modified: patchModuleSource(", added: 3"),
+    });
+    assert.equal(status, 201);
+    const onDisk = JSON.parse(fs.readFileSync(path.join(patchesDir, "add-prop.json"), "utf8"));
+    assert.equal(onDisk.name, "add-prop");
+    assert.equal(onDisk.description, "adds a property");
+    assert.deepEqual(onDisk.locator, { contains: PATCH_MARKER });
+    assert.equal(typeof onDisk.baseline, "string");
+    assert.equal(typeof onDisk.modified, "string");
+    assert.equal(typeof onDisk.createdAt, "string");
+    assert.deepEqual(onDisk.verifiedAgainstVersions, []);
+  });
+});
+
+test("GET /api/patches lists stored patches with name/description/locator", async () => {
+  await withPatchSession(async ({ baseUrl }) => {
+    await api(baseUrl, "POST", "/api/patches", {
+      name: "p1",
+      description: "d1",
+      locator: { contains: PATCH_MARKER },
+      baseline: patchModuleSource(""),
+      modified: patchModuleSource(", added: 3"),
+    });
+    const { status, data } = await api(baseUrl, "GET", "/api/patches");
+    assert.equal(status, 200);
+    assert.equal(data.length, 1);
+    assert.equal(data[0].name, "p1");
+  });
+});
+
+test("previewing a patch shows a diff and never writes to the bundle", async () => {
+  await withPatchSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    await api(baseUrl, "POST", "/api/patches", {
+      name: "p1",
+      locator: { contains: PATCH_MARKER },
+      baseline: patchModuleSource(""),
+      modified: patchModuleSource(", added: 3"),
+    });
+    const before = fs.readFileSync(bundlePath);
+    const { status, data } = await api(baseUrl, "POST", "/api/patches/p1/preview", { sessionId });
+    assert.equal(status, 200);
+    assert.equal(data.targetModuleId, 42);
+    assert.ok(flattenDiffEntries(data.diff).some((e) => e.kind === "added"));
+    const after = fs.readFileSync(bundlePath);
+    assert.ok(before.equals(after));
+  });
+});
+
+test("applying a patch locates the target by content and writes the change", async () => {
+  await withPatchSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    await api(baseUrl, "POST", "/api/patches", {
+      name: "p1",
+      locator: { contains: PATCH_MARKER },
+      baseline: patchModuleSource(""),
+      modified: patchModuleSource(", added: 3"),
+    });
+    const { status, data } = await api(baseUrl, "POST", "/api/patches/p1/apply", { sessionId });
+    assert.equal(status, 200);
+    assert.equal(data.targetModuleId, 42);
+
+    const after = fs.readFileSync(bundlePath, "utf8");
+    assert.match(after, /added:3/);
+  });
+});
+
+test("a locator matching zero modules reports a clear error and applies nothing", async () => {
+  await withPatchSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    await api(baseUrl, "POST", "/api/patches", {
+      name: "p1",
+      locator: { contains: "NO_SUCH_MARKER_ANYWHERE" },
+      baseline: patchModuleSource(""),
+      modified: patchModuleSource(", added: 3"),
+    });
+    const before = fs.readFileSync(bundlePath);
+    const { status, data } = await api(baseUrl, "POST", "/api/patches/p1/apply", { sessionId });
+    assert.equal(status, 400);
+    assert.match(data.error, /matched no modules/);
+    const after = fs.readFileSync(bundlePath);
+    assert.ok(before.equals(after));
+  });
+});
+
+// --- Editor -----------------------------------------------------------
+
+async function withEditorSession(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-tool-editor-"));
+  const bundlePath = path.join(dir, "fixture.bundle");
+  fs.writeFileSync(bundlePath, patchModuleSource("") + "__r(42);\n");
+
+  const server = createServer({ editorCmd: `${JSON.stringify(process.execPath)} -e "" {path}` });
+  await new Promise((resolve, reject) => {
+    server.listen(0, "127.0.0.1", async () => {
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      try {
+        const session = await openSession(baseUrl, bundlePath);
+        await fn({ baseUrl, bundlePath, sessionId: session.id });
+        resolve();
+      } catch (err) {
+        reject(err);
+      } finally {
+        server.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+}
+
+test("opening a module without a deobfuscated file creates one; reopening does not regenerate it", async () => {
+  await withEditorSession(async ({ baseUrl, sessionId }) => {
+    const first = await api(baseUrl, "POST", `/api/sessions/${sessionId}/modules/42/deobfuscate`);
+    assert.equal(first.status, 200);
+    assert.equal(first.data.created, true);
+
+    fs.writeFileSync(first.data.path, "/* hand edit preserved */\n" + fs.readFileSync(first.data.path, "utf8"));
+
+    const second = await api(baseUrl, "POST", `/api/sessions/${sessionId}/modules/42/deobfuscate`);
+    assert.equal(second.data.created, false);
+    assert.match(fs.readFileSync(second.data.path, "utf8"), /hand edit preserved/);
+  });
+});
+
+test("the live-diff endpoint 404s before a module has been opened for editing", async () => {
+  await withEditorSession(async ({ baseUrl, sessionId }) => {
+    const { status } = await api(baseUrl, "GET", `/api/sessions/${sessionId}/modules/42/live-diff`);
+    assert.equal(status, 404);
+  });
+});
+
+test("the live-diff endpoint reflects an on-disk edit made between two polls", async () => {
+  await withEditorSession(async ({ baseUrl, sessionId }) => {
+    const { data: opened } = await api(baseUrl, "POST", `/api/sessions/${sessionId}/modules/42/deobfuscate`);
+
+    const first = await api(baseUrl, "GET", `/api/sessions/${sessionId}/modules/42/live-diff`);
+    assert.equal(first.status, 200);
+    assert.ok(flattenDiffEntries(first.data.diff).every((e) => e.kind === "unchanged"));
+
+    const edited = fs.readFileSync(opened.path, "utf8").replace(
+      `${PATCH_MARKER}: 1`,
+      `${PATCH_MARKER}: 1, added: 3`
+    );
+    fs.writeFileSync(opened.path, edited);
+
+    const second = await api(baseUrl, "GET", `/api/sessions/${sessionId}/modules/42/live-diff`);
+    assert.equal(second.status, 200);
+    assert.ok(flattenDiffEntries(second.data.diff).some((e) => e.kind === "added"));
+  });
+});
+
+test("open-in-editor runs the configured command and reports success", async () => {
+  await withEditorSession(async ({ baseUrl, sessionId }) => {
+    const { status, data } = await api(baseUrl, "POST", `/api/sessions/${sessionId}/modules/42/open-in-editor`);
+    assert.equal(status, 200);
+    assert.equal(data.success, true);
+    assert.ok(fs.existsSync(data.path));
+  });
+});
+
+test("an editor-command failure is reported with the file's path still available", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-tool-editor-fail-"));
+  const bundlePath = path.join(dir, "fixture.bundle");
+  fs.writeFileSync(bundlePath, patchModuleSource("") + "__r(42);\n");
+  const server = createServer({ editorCmd: "no_such_editor_command_xyz {path}" });
+  await new Promise((resolve, reject) => {
+    server.listen(0, "127.0.0.1", async () => {
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      try {
+        const session = await openSession(baseUrl, bundlePath);
+        const { status, data } = await api(
+          baseUrl,
+          "POST",
+          `/api/sessions/${session.id}/modules/42/open-in-editor`
+        );
+        assert.equal(status, 200);
+        assert.equal(data.success, false);
+        assert.ok(data.path);
+        resolve();
+      } catch (err) {
+        reject(err);
+      } finally {
+        server.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+// --- Deck/card editor, mounted under a session ----------------------------
+
+test("GET /deckcard/decks lists decks grouped by category (via category field)", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { status, data } = await api(baseUrl, "GET", deckcard(sessionId, "/decks"));
     assert.equal(status, 200);
     assert.equal(data.length, 2);
     const a01 = data.find((d) => d.Name === "A01");
@@ -53,9 +500,9 @@ test("GET /api/decks lists decks grouped by category (via category field)", asyn
   });
 });
 
-test("GET /api/decks/:name returns deck detail with resolved cards", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const { status, data } = await api(baseUrl, "GET", "/api/decks/A01");
+test("GET /deckcard/decks/:name returns deck detail with resolved cards", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { status, data } = await api(baseUrl, "GET", deckcard(sessionId, "/decks/A01"));
     assert.equal(status, 200);
     assert.equal(data.cards.length, 2);
     for (const card of data.cards) {
@@ -67,16 +514,16 @@ test("GET /api/decks/:name returns deck detail with resolved cards", async () =>
   });
 });
 
-test("GET /api/decks/:name reports every direction letter a card is referenced with in that deck", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const { data } = await api(baseUrl, "GET", "/api/decks/B01");
+test("GET /deckcard/decks/:name reports every direction letter a card is referenced with in that deck", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { data } = await api(baseUrl, "GET", deckcard(sessionId, "/decks/B01"));
     assert.deepEqual(data.cards.find((c) => c.ID === "B01001").directions, ["E", "N"]);
   });
 });
 
-test("POST /api/cards creates a card, appends an N-direction deck reference, and persists it", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
-    const { status, data } = await api(baseUrl, "POST", "/api/cards", { DECK_ID: "A01" });
+test("POST /deckcard/cards creates a card, appends an N-direction deck reference, and persists it", async () => {
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    const { status, data } = await api(baseUrl, "POST", deckcard(sessionId, "/cards"), { DECK_ID: "A01" });
     assert.equal(status, 201);
     assert.equal(data.ID, "A01003");
     assert.equal(data.N, '<div class="center">...</div>');
@@ -92,8 +539,8 @@ test("POST /api/cards creates a card, appends an N-direction deck reference, and
 });
 
 test("creating a card adds both an N and an E occurrence, each with P:N", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
-    const { status, data } = await api(baseUrl, "POST", "/api/cards", { DECK_ID: "B01" });
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    const { status, data } = await api(baseUrl, "POST", deckcard(sessionId, "/cards"), { DECK_ID: "B01" });
     assert.equal(status, 201);
 
     const model = loadDeckCardModel(bundlePath);
@@ -107,9 +554,11 @@ test("creating a card adds both an N and an E occurrence, each with P:N", async 
   });
 });
 
-test("PUT /api/cards/:id edits a card and the edit is reflected on reload", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
-    const { status, data } = await api(baseUrl, "PUT", "/api/cards/A01001", { N: "<div>updated</div>" });
+test("PUT /deckcard/cards/:id edits a card and the edit is reflected on reload", async () => {
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    const { status, data } = await api(baseUrl, "PUT", deckcard(sessionId, "/cards/A01001"), {
+      N: "<div>updated</div>",
+    });
     assert.equal(status, 200);
     assert.equal(data.N, "<div>updated</div>");
 
@@ -118,9 +567,9 @@ test("PUT /api/cards/:id edits a card and the edit is reflected on reload", asyn
   });
 });
 
-test("DELETE /api/cards/:id removes the card and its deck references", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
-    const { status } = await api(baseUrl, "DELETE", "/api/cards/A01001");
+test("DELETE /deckcard/cards/:id removes the card and its deck references", async () => {
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    const { status } = await api(baseUrl, "DELETE", deckcard(sessionId, "/cards/A01001"));
     assert.equal(status, 200);
 
     const model = loadDeckCardModel(bundlePath);
@@ -131,14 +580,10 @@ test("DELETE /api/cards/:id removes the card and its deck references", async () 
 });
 
 test("an edit that would orphan a reference is rejected and the bundle is left unchanged", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
     const before = fs.readFileSync(bundlePath);
 
-    // The UI never offers to change a card's DECK_ID, but the PUT route
-    // accepts it (only `ID` is protected) — pointing it at a nonexistent
-    // deck is exactly the kind of direct-API-bypass edit that should be
-    // caught by saveDeckCardModel's referential-integrity check.
-    const { status, data } = await api(baseUrl, "PUT", "/api/cards/A01001", {
+    const { status, data } = await api(baseUrl, "PUT", deckcard(sessionId, "/cards/A01001"), {
       DECK_ID: "NO_SUCH_DECK",
     });
     assert.equal(status, 400);
@@ -152,9 +597,12 @@ test("an edit that would orphan a reference is rejected and the bundle is left u
   });
 });
 
-test("POST /api/decks creates a new empty deck with sensible defaults and an auto-assigned ID", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
-    const { status, data } = await api(baseUrl, "POST", "/api/decks", { Name: "C01", Title: "Deck C1" });
+test("POST /deckcard/decks creates a new empty deck with sensible defaults and an auto-assigned ID", async () => {
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    const { status, data } = await api(baseUrl, "POST", deckcard(sessionId, "/decks"), {
+      Name: "C01",
+      Title: "Deck C1",
+    });
     assert.equal(status, 201);
     assert.deepEqual(data.Cards, []);
     assert.equal(data.ID, 2, "next id after the fixture's existing 0 and 1");
@@ -169,9 +617,9 @@ test("POST /api/decks creates a new empty deck with sensible defaults and an aut
   });
 });
 
-test("POST /api/decks lets the request override individual defaults", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const { data } = await api(baseUrl, "POST", "/api/decks", {
+test("POST /deckcard/decks lets the request override individual defaults", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { data } = await api(baseUrl, "POST", deckcard(sessionId, "/decks"), {
       Name: "C02",
       Title: "Deck C2",
       MaxInterval: 5,
@@ -183,24 +631,25 @@ test("POST /api/decks lets the request override individual defaults", async () =
   });
 });
 
-test("POST /api/decks ignores a client-supplied ID and assigns its own", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const { data } = await api(baseUrl, "POST", "/api/decks", { Name: "C03", ID: 9999 });
+test("POST /deckcard/decks ignores a client-supplied ID and assigns its own", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { data } = await api(baseUrl, "POST", deckcard(sessionId, "/decks"), { Name: "C03", ID: 9999 });
     assert.notEqual(data.ID, 9999);
     assert.equal(data.ID, 2);
   });
 });
 
-test("POST /api/decks/:name/shuffle reorders Cards[] but keeps the same occurrences", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
-    // Give A01 enough occurrences that "shuffled to the same order" is
-    // astronomically unlikely, without asserting it never happens.
+test("POST /deckcard/decks/:name/shuffle reorders Cards[] but keeps the same occurrences", async () => {
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
     for (let i = 0; i < 10; i++) {
-      await api(baseUrl, "POST", "/api/decks/A01/occurrences", { cardId: "A01001", letter: "N" });
+      await api(baseUrl, "POST", deckcard(sessionId, "/decks/A01/occurrences"), {
+        cardId: "A01001",
+        letter: "N",
+      });
     }
     const before = loadDeckCardModel(bundlePath).decks.find((d) => d.Name === "A01").Cards;
 
-    const { status, data } = await api(baseUrl, "POST", "/api/decks/A01/shuffle", {});
+    const { status, data } = await api(baseUrl, "POST", deckcard(sessionId, "/decks/A01/shuffle"), {});
     assert.equal(status, 200);
 
     const after = loadDeckCardModel(bundlePath).decks.find((d) => d.Name === "A01").Cards;
@@ -218,16 +667,16 @@ test("POST /api/decks/:name/shuffle reorders Cards[] but keeps the same occurren
   });
 });
 
-test("POST /api/decks/:name/shuffle on an unknown deck 404s", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const { status } = await api(baseUrl, "POST", "/api/decks/NOPE/shuffle", {});
+test("POST /deckcard/decks/:name/shuffle on an unknown deck 404s", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { status } = await api(baseUrl, "POST", deckcard(sessionId, "/decks/NOPE/shuffle"), {});
     assert.equal(status, 404);
   });
 });
 
-test("GET /api/decks/:name includes occurrences in Cards[] array order", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const { data } = await api(baseUrl, "GET", "/api/decks/B01");
+test("GET /deckcard/decks/:name includes occurrences in Cards[] array order", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { data } = await api(baseUrl, "GET", deckcard(sessionId, "/decks/B01"));
     assert.deepEqual(
       data.occurrences.map((o) => ({ cardId: o.cardId, letter: o.letter })),
       [
@@ -239,9 +688,9 @@ test("GET /api/decks/:name includes occurrences in Cards[] array order", async (
   });
 });
 
-test("POST /api/decks/:name/occurrences appends a new occurrence and persists it", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
-    const { status, data } = await api(baseUrl, "POST", "/api/decks/A01/occurrences", {
+test("POST /deckcard/decks/:name/occurrences appends a new occurrence and persists it", async () => {
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    const { status, data } = await api(baseUrl, "POST", deckcard(sessionId, "/decks/A01/occurrences"), {
       cardId: "A01001",
       letter: "A",
     });
@@ -254,9 +703,9 @@ test("POST /api/decks/:name/occurrences appends a new occurrence and persists it
   });
 });
 
-test("POST /api/decks/:name/occurrences rejects a card that belongs to a different deck", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const { status, data } = await api(baseUrl, "POST", "/api/decks/A01/occurrences", {
+test("POST /deckcard/decks/:name/occurrences rejects a card that belongs to a different deck", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { status, data } = await api(baseUrl, "POST", deckcard(sessionId, "/decks/A01/occurrences"), {
       cardId: "B01001",
       letter: "N",
     });
@@ -265,9 +714,9 @@ test("POST /api/decks/:name/occurrences rejects a card that belongs to a differe
   });
 });
 
-test("POST /api/decks/:name/occurrences rejects an invalid letter", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const { status, data } = await api(baseUrl, "POST", "/api/decks/A01/occurrences", {
+test("POST /deckcard/decks/:name/occurrences rejects an invalid letter", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { status, data } = await api(baseUrl, "POST", deckcard(sessionId, "/decks/A01/occurrences"), {
       cardId: "A01001",
       letter: "Z",
     });
@@ -276,9 +725,11 @@ test("POST /api/decks/:name/occurrences rejects an invalid letter", async () => 
   });
 });
 
-test("PUT /api/decks/:name/occurrences/:index changes that occurrence's letter", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
-    const { status, data } = await api(baseUrl, "PUT", "/api/decks/B01/occurrences/1", { letter: "A" });
+test("PUT /deckcard/decks/:name/occurrences/:index changes that occurrence's letter", async () => {
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    const { status, data } = await api(baseUrl, "PUT", deckcard(sessionId, "/decks/B01/occurrences/1"), {
+      letter: "A",
+    });
     assert.equal(status, 200);
     assert.deepEqual(data, { index: 1, cardId: "B01001", letter: "A" });
 
@@ -289,9 +740,9 @@ test("PUT /api/decks/:name/occurrences/:index changes that occurrence's letter",
   });
 });
 
-test("DELETE /api/decks/:name/occurrences/:index removes only that occurrence", async () => {
-  await withServer(async ({ baseUrl, bundlePath }) => {
-    const { status } = await api(baseUrl, "DELETE", "/api/decks/B01/occurrences/0");
+test("DELETE /deckcard/decks/:name/occurrences/:index removes only that occurrence", async () => {
+  await withDeckCardSession(async ({ baseUrl, bundlePath, sessionId }) => {
+    const { status } = await api(baseUrl, "DELETE", deckcard(sessionId, "/decks/B01/occurrences/0"));
     assert.equal(status, 200);
 
     const model = loadDeckCardModel(bundlePath);
@@ -301,21 +752,46 @@ test("DELETE /api/decks/:name/occurrences/:index removes only that occurrence", 
   });
 });
 
-test("GET /api/search finds decks by title and cards by content, case-insensitively", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const byDeckTitle = await api(baseUrl, "GET", "/api/search?q=deck+b1");
+test("GET /deckcard/search finds decks by title and cards by content, case-insensitively", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const byDeckTitle = await api(baseUrl, "GET", deckcard(sessionId, "/search?q=deck+b1"));
     assert.equal(byDeckTitle.data.decks.length, 1);
     assert.equal(byDeckTitle.data.decks[0].Name, "B01");
 
-    const byCardContent = await api(baseUrl, "GET", "/api/search?q=Q2");
+    const byCardContent = await api(baseUrl, "GET", deckcard(sessionId, "/search?q=Q2"));
     assert.equal(byCardContent.data.cards.length, 1);
     assert.equal(byCardContent.data.cards[0].ID, "A01002");
   });
 });
 
-test("GET /api/search with an empty query returns no results", async () => {
-  await withServer(async ({ baseUrl }) => {
-    const { data } = await api(baseUrl, "GET", "/api/search?q=");
+test("GET /deckcard/search with an empty query returns no results", async () => {
+  await withDeckCardSession(async ({ baseUrl, sessionId }) => {
+    const { data } = await api(baseUrl, "GET", deckcard(sessionId, "/search?q="));
     assert.deepEqual(data, { decks: [], cards: [], cardsTotal: 0 });
+  });
+});
+
+test("the deck/card routes 404 for a bundle session without a deck/card module pair", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-tool-nodeckcard-"));
+  const bundlePath = path.join(dir, "fixture.bundle");
+  fs.writeFileSync(bundlePath, patchModuleSource("") + "__r(42);\n");
+  const server = createServer({});
+  await new Promise((resolve, reject) => {
+    server.listen(0, "127.0.0.1", async () => {
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      try {
+        const session = await openSession(baseUrl, bundlePath);
+        assert.equal(session.deckCardAvailable, false);
+        const { status } = await api(baseUrl, "GET", deckcard(session.id, "/decks"));
+        assert.equal(status, 404);
+        resolve();
+      } catch (err) {
+        reject(err);
+      } finally {
+        server.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 });

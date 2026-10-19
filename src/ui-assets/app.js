@@ -1,13 +1,3 @@
-const state = {
-  currentDeckName: null,
-  currentCardId: null,
-  currentDeck: null,
-  deckViewMode: "card", // "card" | "order"
-  cardSortBy: "id",
-  occurrenceSortBy: "position",
-  deckFormMode: "create", // "create" | "edit"
-};
-
 const el = (id) => document.getElementById(id);
 
 function stripHtml(html) {
@@ -30,24 +20,507 @@ async function api(method, path, body) {
   return data;
 }
 
-const PANELS = ["deck-view", "card-editor", "deck-form"];
+function deckcardPath(sub) {
+  return `/api/sessions/${app.activeSessionId}/deckcard${sub}`;
+}
+function deckcardApi(method, sub, body) {
+  return api(method, deckcardPath(sub), body);
+}
 
-function showPanel(id) {
-  for (const panelId of PANELS) {
+// --- App shell: sessions + tabs --------------------------------------
+
+const VIEWS = ["explorer", "compare", "editor", "patches", "deckcard"];
+
+const app = {
+  sessions: [],
+  activeSessionId: null,
+  currentView: "explorer",
+};
+
+function showView(view) {
+  app.currentView = view;
+  for (const v of VIEWS) {
+    el(`view-${v}`).classList.toggle("hidden", v !== view);
+  }
+  for (const btn of document.querySelectorAll(".tab")) {
+    btn.classList.toggle("active", btn.dataset.view === view);
+  }
+  refreshCurrentView();
+}
+
+function activeSession() {
+  return app.sessions.find((s) => s.id === app.activeSessionId) || null;
+}
+
+function renderSessionBar() {
+  const list = el("session-list");
+  list.innerHTML = "";
+  for (const s of app.sessions) {
+    const span = document.createElement("span");
+    span.className = "session-chip" + (s.id === app.activeSessionId ? " active" : "");
+    span.textContent = s.bundlePath.split("/").pop();
+    span.title = s.bundlePath;
+    span.addEventListener("click", () => setActiveSession(s.id));
+    list.appendChild(span);
+  }
+
+  const select = el("active-session-select");
+  select.innerHTML = "";
+  for (const s of app.sessions) {
+    const option = document.createElement("option");
+    option.value = s.id;
+    option.textContent = s.bundlePath;
+    select.appendChild(option);
+  }
+  if (app.activeSessionId) select.value = app.activeSessionId;
+
+  const deckcardTab = document.querySelector('.tab[data-view="deckcard"]');
+  const session = activeSession();
+  deckcardTab.classList.toggle("hidden", !session || !session.deckCardAvailable);
+}
+
+function setActiveSession(id) {
+  app.activeSessionId = id;
+  renderSessionBar();
+  populateComparePickers();
+  refreshCurrentView();
+}
+
+async function openBundlePath() {
+  const input = el("open-path-input");
+  const errorEl = el("open-path-error");
+  errorEl.classList.add("hidden");
+  const p = input.value.trim();
+  if (!p) return;
+  try {
+    const session = await api("POST", "/api/sessions", { path: p });
+    if (!app.sessions.some((s) => s.id === session.id)) app.sessions.push(session);
+    input.value = "";
+    setActiveSession(session.id);
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+  }
+}
+
+function refreshCurrentView() {
+  if (app.currentView === "explorer") loadExplorerModules();
+  else if (app.currentView === "editor") loadEditorModules();
+  else if (app.currentView === "patches") loadPatchesList();
+  else if (app.currentView === "deckcard") loadDeckCardSidebar();
+}
+
+// --- Explorer ------------------------------------------------------------
+
+let explorerModules = [];
+let explorerSearchResults = null;
+
+const EXPLORER_SORTS = {
+  id: (a, b) => a.id - b.id,
+  "size-desc": (a, b) => b.size - a.size,
+  classification: (a, b) => (a.classification || "").localeCompare(b.classification || "") || a.id - b.id,
+  verboseName: (a, b) => (a.verboseName || "").localeCompare(b.verboseName || "") || a.id - b.id,
+};
+
+async function loadExplorerModules() {
+  if (!app.activeSessionId) {
+    el("explorer-module-list").innerHTML = "";
+    return;
+  }
+  explorerModules = await api("GET", `/api/sessions/${app.activeSessionId}/modules`);
+  renderExplorerList();
+}
+
+function renderExplorerList() {
+  const list = el("explorer-module-list");
+  list.innerHTML = "";
+
+  if (explorerSearchResults) {
+    for (const hit of explorerSearchResults) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="mod-id">${hit.moduleId}</span><span class="mod-snippet">...${hit.snippet}...</span>`;
+      li.addEventListener("click", () => openExplorerModule(hit.moduleId));
+      list.appendChild(li);
+    }
+    return;
+  }
+
+  const sortKey = el("explorer-sort").value;
+  const sorted = [...explorerModules].sort(EXPLORER_SORTS[sortKey]);
+  for (const m of sorted) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="mod-id">${m.id}</span><span class="mod-class">${m.classification || ""}</span><span class="mod-size">${m.size}b</span><span class="mod-verbose">${m.verboseName || ""}</span>`;
+    li.addEventListener("click", () => openExplorerModule(m.id));
+    list.appendChild(li);
+  }
+}
+
+async function runExplorerSearch(query) {
+  if (!query.trim()) {
+    explorerSearchResults = null;
+    renderExplorerList();
+    return;
+  }
+  explorerSearchResults = await api(
+    "GET",
+    `/api/sessions/${app.activeSessionId}/search?q=${encodeURIComponent(query)}`
+  );
+  renderExplorerList();
+}
+
+let explorerShowingDeobfuscated = false;
+let explorerCurrentModuleId = null;
+
+async function openExplorerModule(id) {
+  explorerCurrentModuleId = id;
+  explorerShowingDeobfuscated = false;
+  el("explorer-toggle-deobfuscated").textContent = "Show deobfuscated";
+  const detail = await api("GET", `/api/sessions/${app.activeSessionId}/modules/${id}`);
+  el("explorer-empty").classList.add("hidden");
+  el("explorer-detail").classList.remove("hidden");
+  el("explorer-module-title").textContent = `Module ${id}${detail.verboseName ? ` (${detail.verboseName})` : ""}`;
+  el("explorer-module-meta").textContent = `size: ${detail.size}b · looksMinified: ${detail.looksMinified}`;
+  el("explorer-source").textContent = detail.source;
+
+  const depsList = el("explorer-deps");
+  depsList.innerHTML = "";
+  for (const depId of detail.deps) {
+    const li = document.createElement("li");
+    li.textContent = depId;
+    li.addEventListener("click", () => openExplorerModule(depId));
+    depsList.appendChild(li);
+  }
+  const dependentsList = el("explorer-dependents");
+  dependentsList.innerHTML = "";
+  for (const depId of detail.dependents) {
+    const li = document.createElement("li");
+    li.textContent = depId;
+    li.addEventListener("click", () => openExplorerModule(depId));
+    dependentsList.appendChild(li);
+  }
+}
+
+async function toggleExplorerDeobfuscated() {
+  if (explorerCurrentModuleId === null) return;
+  explorerShowingDeobfuscated = !explorerShowingDeobfuscated;
+  el("explorer-toggle-deobfuscated").textContent = explorerShowingDeobfuscated
+    ? "Show raw"
+    : "Show deobfuscated";
+  if (explorerShowingDeobfuscated) {
+    const { code } = await api(
+      "GET",
+      `/api/sessions/${app.activeSessionId}/modules/${explorerCurrentModuleId}/deobfuscated`
+    );
+    el("explorer-source").textContent = code;
+  } else {
+    const detail = await api(
+      "GET",
+      `/api/sessions/${app.activeSessionId}/modules/${explorerCurrentModuleId}`
+    );
+    el("explorer-source").textContent = detail.source;
+  }
+}
+
+// --- Diff rendering (shared by Compare/Editor/Patches) --------------------
+
+function renderDiffEntries(entries) {
+  const container = document.createElement("div");
+  container.className = "diff-entries";
+  for (const e of entries || []) {
+    const row = document.createElement("div");
+    row.className = `diff-row diff-${e.kind}`;
+    const label = document.createElement("div");
+    label.className = "diff-label";
+    label.textContent = e.kind;
+    row.appendChild(label);
+
+    if (e.kind === "modified") {
+      const r = document.createElement("pre");
+      r.className = "diff-code diff-removed-code";
+      r.textContent = e.rCode || "";
+      const m = document.createElement("pre");
+      m.className = "diff-code diff-added-code";
+      m.textContent = e.mCode || "";
+      row.appendChild(r);
+      row.appendChild(m);
+    } else if (e.kind === "added") {
+      const m = document.createElement("pre");
+      m.className = "diff-code diff-added-code";
+      m.textContent = e.mCode || "";
+      row.appendChild(m);
+    } else if (e.kind === "removed") {
+      const r = document.createElement("pre");
+      r.className = "diff-code diff-removed-code";
+      r.textContent = e.rCode || "";
+      row.appendChild(r);
+    } else {
+      const u = document.createElement("pre");
+      u.className = "diff-code diff-unchanged-code";
+      u.textContent = e.rCode || e.mCode || "";
+      row.appendChild(u);
+    }
+    container.appendChild(row);
+
+    if (e.children) {
+      const childWrap = renderDiffEntries(e.children);
+      childWrap.classList.add("diff-children");
+      container.appendChild(childWrap);
+    }
+  }
+  return container;
+}
+
+function renderDiffInto(containerEl, entries) {
+  containerEl.innerHTML = "";
+  containerEl.appendChild(renderDiffEntries(entries));
+}
+
+// --- Compare --------------------------------------------------------------
+
+function populateComparePickers() {
+  for (const id of ["compare-a", "compare-b"]) {
+    const select = el(id);
+    const prev = select.value;
+    select.innerHTML = "";
+    for (const s of app.sessions) {
+      const option = document.createElement("option");
+      option.value = s.id;
+      option.textContent = s.bundlePath;
+      select.appendChild(option);
+    }
+    if (prev) select.value = prev;
+  }
+}
+
+async function runCompare() {
+  const aId = el("compare-a").value;
+  const bId = el("compare-b").value;
+  if (!aId || !bId) return;
+  const result = await api("GET", `/api/compare?a=${aId}&b=${bId}`);
+
+  const container = el("compare-results");
+  container.innerHTML = "";
+  el("compare-diff").classList.add("hidden");
+
+  const section = (title, items, render) => {
+    const h = document.createElement("h3");
+    h.textContent = `${title} (${items.length})`;
+    container.appendChild(h);
+    const ul = document.createElement("ul");
+    ul.className = "id-list";
+    for (const item of items) {
+      const li = document.createElement("li");
+      render(li, item);
+      ul.appendChild(li);
+    }
+    container.appendChild(ul);
+  };
+
+  section("Changed", result.changed, (li, item) => {
+    li.textContent = `${item.aId} -> ${item.bId}${item.verboseName ? ` (${item.verboseName})` : ""}`;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => showCompareDiff(aId, bId, item.aId, item.bId));
+  });
+  section("Added", result.added, (li, id) => (li.textContent = id));
+  section("Removed", result.removed, (li, id) => (li.textContent = id));
+  section("Unchanged", result.unchanged, (li, item) => (li.textContent = `${item.aId} -> ${item.bId}`));
+}
+
+async function showCompareDiff(aSessionId, bSessionId, aModuleId, bModuleId) {
+  const { diff } = await api(
+    "GET",
+    `/api/compare/diff?a=${aSessionId}&b=${bSessionId}&aModuleId=${aModuleId}&bModuleId=${bModuleId}`
+  );
+  const diffEl = el("compare-diff");
+  diffEl.classList.remove("hidden");
+  renderDiffInto(diffEl, diff);
+}
+
+// --- Editor ---------------------------------------------------------------
+
+let editorCurrentModuleId = null;
+let editorPollTimer = null;
+let editorLatestBaseline = null;
+let editorLatestCurrent = null;
+
+async function loadEditorModules() {
+  const list = el("editor-module-list");
+  list.innerHTML = "";
+  if (!app.activeSessionId) return;
+  const modules = await api("GET", `/api/sessions/${app.activeSessionId}/modules`);
+  for (const m of modules.sort((a, b) => a.id - b.id)) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="mod-id">${m.id}</span><span class="mod-verbose">${m.verboseName || ""}</span>`;
+    li.addEventListener("click", () => openEditorModule(m.id));
+    list.appendChild(li);
+  }
+}
+
+function stopEditorPolling() {
+  if (editorPollTimer) {
+    clearInterval(editorPollTimer);
+    editorPollTimer = null;
+  }
+}
+
+async function openEditorModule(id) {
+  stopEditorPolling();
+  editorCurrentModuleId = id;
+  el("editor-empty").classList.add("hidden");
+  el("editor-detail").classList.remove("hidden");
+  el("editor-module-title").textContent = `Module ${id}`;
+  el("editor-open-error").classList.add("hidden");
+  el("editor-save-patch-success").classList.add("hidden");
+
+  const { path } = await api("POST", `/api/sessions/${app.activeSessionId}/modules/${id}/deobfuscate`);
+  el("editor-file-path").textContent = path;
+
+  await pollEditorLiveDiff();
+  editorPollTimer = setInterval(pollEditorLiveDiff, 1500);
+}
+
+async function pollEditorLiveDiff() {
+  if (editorCurrentModuleId === null) return;
+  try {
+    const result = await api(
+      "GET",
+      `/api/sessions/${app.activeSessionId}/modules/${editorCurrentModuleId}/live-diff`
+    );
+    editorLatestBaseline = result.baseline;
+    editorLatestCurrent = result.current;
+    renderDiffInto(el("editor-diff"), result.diff);
+  } catch (err) {
+    // A transient parse error while mid-edit is expected; just show it inline
+    // rather than stopping the poll.
+    el("editor-diff").textContent = `(waiting for a parseable edit: ${err.message})`;
+  }
+}
+
+async function openInEditor() {
+  if (editorCurrentModuleId === null) return;
+  el("editor-open-error").classList.add("hidden");
+  const result = await api(
+    "POST",
+    `/api/sessions/${app.activeSessionId}/modules/${editorCurrentModuleId}/open-in-editor`
+  );
+  if (!result.success) {
+    el("editor-open-error").textContent = `editor command failed (code ${result.code}): ${result.stderr || "(no output)"}. File path: ${result.path}`;
+    el("editor-open-error").classList.remove("hidden");
+  }
+}
+
+async function saveEditorPatch() {
+  const name = el("editor-patch-name").value.trim();
+  const description = el("editor-patch-description").value.trim();
+  const locator = el("editor-patch-locator").value.trim();
+  const errorEl = el("editor-save-patch-error");
+  const successEl = el("editor-save-patch-success");
+  errorEl.classList.add("hidden");
+  successEl.classList.add("hidden");
+
+  if (!name || !locator) {
+    errorEl.textContent = "name and locator are required";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  try {
+    await api("POST", "/api/patches", {
+      name,
+      description,
+      locator: { contains: locator },
+      baseline: editorLatestBaseline,
+      modified: editorLatestCurrent,
+    });
+    successEl.textContent = `Saved patch "${name}"`;
+    successEl.classList.remove("hidden");
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+  }
+}
+
+// --- Patches ----------------------------------------------------------
+
+let patchesCache = [];
+
+async function loadPatchesList() {
+  patchesCache = await api("GET", "/api/patches");
+  const list = el("patches-list");
+  list.innerHTML = "";
+  for (const p of patchesCache) {
+    const li = document.createElement("li");
+    li.innerHTML = `<strong>${p.name}</strong> — ${p.description || ""} <code>${p.locator.contains}</code>`;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => previewPatchByName(p.name));
+    list.appendChild(li);
+  }
+}
+
+let patchesPreviewName = null;
+
+async function previewPatchByName(name) {
+  if (!app.activeSessionId) {
+    alert("Open and select an active session first.");
+    return;
+  }
+  patchesPreviewName = name;
+  const result = await api("POST", `/api/patches/${encodeURIComponent(name)}/preview`, {
+    sessionId: app.activeSessionId,
+  });
+  el("patches-preview").classList.remove("hidden");
+  el("patches-apply-result").classList.add("hidden");
+  renderDiffInto(el("patches-preview-diff"), result.diff);
+}
+
+async function applyPreviewedPatch() {
+  if (!patchesPreviewName || !app.activeSessionId) return;
+  const result = await api("POST", `/api/patches/${encodeURIComponent(patchesPreviewName)}/apply`, {
+    sessionId: app.activeSessionId,
+  });
+  const resultEl = el("patches-apply-result");
+  resultEl.textContent = `Applied to module ${result.targetModuleId}`;
+  resultEl.classList.remove("hidden");
+
+  const updated = await api("GET", `/api/sessions/${app.activeSessionId}`);
+  const idx = app.sessions.findIndex((s) => s.id === updated.id);
+  if (idx !== -1) app.sessions[idx] = updated;
+  renderSessionBar();
+}
+
+// --- Deck/Card editor (relocated, logic unchanged) ------------------------
+
+const deckcardState = {
+  currentDeckName: null,
+  currentCardId: null,
+  currentDeck: null,
+  deckViewMode: "card",
+  cardSortBy: "id",
+  occurrenceSortBy: "position",
+  deckFormMode: "create",
+};
+
+const DECKCARD_PANELS = ["deck-view", "card-editor", "deck-form"];
+
+function showDeckCardPanel(id) {
+  for (const panelId of DECKCARD_PANELS) {
     el(panelId).classList.toggle("hidden", panelId !== id);
   }
   el("empty-state").classList.add("hidden");
 }
 
-function showEmptyState() {
-  for (const panelId of PANELS) {
+function showDeckCardEmptyState() {
+  for (const panelId of DECKCARD_PANELS) {
     el(panelId).classList.add("hidden");
   }
   el("empty-state").classList.remove("hidden");
 }
 
-async function loadSidebar() {
-  const decks = await api("GET", "/api/decks");
+async function loadDeckCardSidebar() {
+  if (!app.activeSessionId || !activeSession()?.deckCardAvailable) {
+    el("categories").innerHTML = "";
+    return;
+  }
+  const decks = await deckcardApi("GET", "/decks");
   const byCategory = new Map();
   for (const deck of decks) {
     if (!byCategory.has(deck.category)) byCategory.set(deck.category, []);
@@ -85,10 +558,6 @@ function markActiveDeck(name) {
   }
 }
 
-// Deck metadata (Title, Description, Counter1/Counter2, ...) comes straight
-// from the deck-catalog module (2111) — rendered here both for the deck
-// view itself and, compactly, alongside a card being edited so its deck
-// context stays visible.
 function renderDeckMeta(deck, targetId) {
   const target = el(targetId);
   target.innerHTML = "";
@@ -124,9 +593,6 @@ function renderDeckMeta(deck, targetId) {
   }
 }
 
-// --- "By card" view: one row per unique card, deduplicated across any
-// multiple occurrences, with the set of direction letters it occurs with.
-
 const CARD_SORTS = {
   id: { label: "Sort: Card ID", cmp: (a, b) => a.ID.localeCompare(b.ID) },
   preview: { label: "Sort: Preview (A–Z)", cmp: (a, b) => (a.preview || "").localeCompare(b.preview || "") },
@@ -135,7 +601,7 @@ const CARD_SORTS = {
 function renderCardList(deck) {
   const list = el("card-list");
   list.innerHTML = "";
-  const cards = [...deck.cards].sort(CARD_SORTS[state.cardSortBy].cmp);
+  const cards = [...deck.cards].sort(CARD_SORTS[deckcardState.cardSortBy].cmp);
   for (const card of cards) {
     const li = document.createElement("li");
     const idSpan = document.createElement("span");
@@ -156,13 +622,6 @@ function renderCardList(deck) {
   }
 }
 
-// --- "By order" view: deck.Cards[]'s own array order *is* the real
-// presentation sequence, which the grouped "by card" view above collapses
-// away — one row per occurrence (a card can occur more than once, once per
-// side it's presented on). Sorting here is purely a display reorder — each
-// occurrence still carries its true `index` for the edit/delete API calls,
-// independent of how it's currently sorted on screen.
-
 const ORDER_SORTS = {
   position: { label: "Sort: Position (presentation order)", cmp: (a, b) => a.index - b.index },
   id: { label: "Sort: Card ID", cmp: (a, b) => a.cardId.localeCompare(b.cardId) || a.index - b.index },
@@ -172,7 +631,7 @@ const ORDER_SORTS = {
 function renderOccurrences(deck) {
   const list = el("occurrence-list");
   list.innerHTML = "";
-  const occurrences = [...(deck.occurrences || [])].sort(ORDER_SORTS[state.occurrenceSortBy].cmp);
+  const occurrences = [...(deck.occurrences || [])].sort(ORDER_SORTS[deckcardState.occurrenceSortBy].cmp);
   for (const occ of occurrences) {
     const li = document.createElement("li");
 
@@ -227,8 +686,8 @@ function populateAddOccurrenceCardOptions(deck) {
 }
 
 function populateSortSelect() {
-  const sorts = state.deckViewMode === "order" ? ORDER_SORTS : CARD_SORTS;
-  const currentKey = state.deckViewMode === "order" ? state.occurrenceSortBy : state.cardSortBy;
+  const sorts = deckcardState.deckViewMode === "order" ? ORDER_SORTS : CARD_SORTS;
+  const currentKey = deckcardState.deckViewMode === "order" ? deckcardState.occurrenceSortBy : deckcardState.cardSortBy;
   const select = el("sort-select");
   select.innerHTML = "";
   for (const [key, { label }] of Object.entries(sorts)) {
@@ -242,18 +701,18 @@ function populateSortSelect() {
 
 function handleSortChange() {
   const value = el("sort-select").value;
-  if (state.deckViewMode === "order") {
-    state.occurrenceSortBy = value;
-    renderOccurrences(state.currentDeck);
+  if (deckcardState.deckViewMode === "order") {
+    deckcardState.occurrenceSortBy = value;
+    renderOccurrences(deckcardState.currentDeck);
   } else {
-    state.cardSortBy = value;
-    renderCardList(state.currentDeck);
+    deckcardState.cardSortBy = value;
+    renderCardList(deckcardState.currentDeck);
   }
 }
 
 async function updateOccurrenceLetter(deckName, index, letter) {
   try {
-    await api("PUT", `/api/decks/${encodeURIComponent(deckName)}/occurrences/${index}`, { letter });
+    await deckcardApi("PUT", `/decks/${encodeURIComponent(deckName)}/occurrences/${index}`, { letter });
   } catch (err) {
     alert(err.message);
   }
@@ -262,20 +721,20 @@ async function updateOccurrenceLetter(deckName, index, letter) {
 }
 
 async function deleteOccurrence(deckName, index) {
-  await api("DELETE", `/api/decks/${encodeURIComponent(deckName)}/occurrences/${index}`);
+  await deckcardApi("DELETE", `/decks/${encodeURIComponent(deckName)}/occurrences/${index}`);
   await openDeck(deckName);
   showOrderView();
 }
 
-async function addOccurrence() {
+async function addOccurrenceToDeck() {
   const cardId = el("add-occurrence-card").value;
   const letter = el("add-occurrence-letter").value;
   if (!cardId) return;
-  await api("POST", `/api/decks/${encodeURIComponent(state.currentDeckName)}/occurrences`, {
+  await deckcardApi("POST", `/decks/${encodeURIComponent(deckcardState.currentDeckName)}/occurrences`, {
     cardId,
     letter,
   });
-  await openDeck(state.currentDeckName);
+  await openDeck(deckcardState.currentDeckName);
   showOrderView();
 }
 
@@ -284,54 +743,54 @@ function toggleAddOccurrenceBar() {
 }
 
 async function shuffleDeck() {
-  if (!state.currentDeckName) return;
-  await api("POST", `/api/decks/${encodeURIComponent(state.currentDeckName)}/shuffle`, {});
-  await openDeck(state.currentDeckName);
+  if (!deckcardState.currentDeckName) return;
+  await deckcardApi("POST", `/decks/${encodeURIComponent(deckcardState.currentDeckName)}/shuffle`, {});
+  await openDeck(deckcardState.currentDeckName);
   showOrderView();
 }
 
 function showCardListView() {
-  state.deckViewMode = "card";
+  deckcardState.deckViewMode = "card";
   el("view-by-card-btn").classList.add("active");
   el("view-by-order-btn").classList.remove("active");
   el("shuffle-btn").classList.add("hidden");
   el("card-list").classList.remove("hidden");
   el("order-view").classList.add("hidden");
   populateSortSelect();
-  if (state.currentDeck) renderCardList(state.currentDeck);
+  if (deckcardState.currentDeck) renderCardList(deckcardState.currentDeck);
 }
 
 function showOrderView() {
-  state.deckViewMode = "order";
+  deckcardState.deckViewMode = "order";
   el("view-by-order-btn").classList.add("active");
   el("view-by-card-btn").classList.remove("active");
   el("shuffle-btn").classList.remove("hidden");
   el("card-list").classList.add("hidden");
   el("order-view").classList.remove("hidden");
   populateSortSelect();
-  if (state.currentDeck) renderOccurrences(state.currentDeck);
+  if (deckcardState.currentDeck) renderOccurrences(deckcardState.currentDeck);
 }
 
 async function openDeck(name) {
-  state.currentDeckName = name;
-  state.currentCardId = null;
+  deckcardState.currentDeckName = name;
+  deckcardState.currentCardId = null;
   markActiveDeck(name);
 
-  const deck = await api("GET", `/api/decks/${encodeURIComponent(name)}`);
-  state.currentDeck = deck;
+  const deck = await deckcardApi("GET", `/decks/${encodeURIComponent(name)}`);
+  deckcardState.currentDeck = deck;
   el("deck-title").textContent = `${deck.Name} — ${deck.Title || ""}`;
   renderDeckMeta(deck, "deck-meta");
 
   populateAddOccurrenceCardOptions(deck);
   el("add-occurrence").classList.add("hidden");
 
-  if (state.deckViewMode === "order") {
+  if (deckcardState.deckViewMode === "order") {
     showOrderView();
   } else {
     showCardListView();
   }
 
-  showPanel("deck-view");
+  showDeckCardPanel("deck-view");
 }
 
 function setPreview(fieldId, previewId) {
@@ -345,13 +804,11 @@ function wireLivePreview() {
 }
 
 async function openCard(id) {
-  const card = await api("GET", `/api/cards/${encodeURIComponent(id)}`);
-  state.currentCardId = card.ID;
+  const card = await deckcardApi("GET", `/cards/${encodeURIComponent(id)}`);
+  deckcardState.currentCardId = card.ID;
   const owningDeck =
-    state.currentDeck && state.currentDeck.Name === card.DECK_ID ? state.currentDeck : null;
-  el("card-editor-title").textContent = owningDeck
-    ? `${card.ID} — ${owningDeck.Title || ""}`
-    : card.ID;
+    deckcardState.currentDeck && deckcardState.currentDeck.Name === card.DECK_ID ? deckcardState.currentDeck : null;
+  el("card-editor-title").textContent = owningDeck ? `${card.ID} — ${owningDeck.Title || ""}` : card.ID;
   el("card-error").classList.add("hidden");
   renderDeckMeta(owningDeck, "card-deck-meta");
 
@@ -362,7 +819,7 @@ async function openCard(id) {
     setPreview(`field-${field}`, `preview-${field}`);
   }
 
-  showPanel("card-editor");
+  showDeckCardPanel("card-editor");
 }
 
 async function saveCard() {
@@ -371,10 +828,10 @@ async function saveCard() {
     body[field] = el(`field-${field}`).value;
   }
   try {
-    await api("PUT", `/api/cards/${encodeURIComponent(state.currentCardId)}`, body);
+    await deckcardApi("PUT", `/cards/${encodeURIComponent(deckcardState.currentCardId)}`, body);
     el("card-error").classList.add("hidden");
-    await openDeck(state.currentDeckName);
-    await openCard(state.currentCardId);
+    await openDeck(deckcardState.currentDeckName);
+    await openCard(deckcardState.currentCardId);
   } catch (err) {
     el("card-error").textContent = err.message;
     el("card-error").classList.remove("hidden");
@@ -382,25 +839,19 @@ async function saveCard() {
 }
 
 async function deleteCard() {
-  if (!confirm(`Delete card ${state.currentCardId}?`)) return;
-  await api("DELETE", `/api/cards/${encodeURIComponent(state.currentCardId)}`);
-  await openDeck(state.currentDeckName);
-  showPanel("deck-view");
+  if (!confirm(`Delete card ${deckcardState.currentCardId}?`)) return;
+  await deckcardApi("DELETE", `/cards/${encodeURIComponent(deckcardState.currentCardId)}`);
+  await openDeck(deckcardState.currentDeckName);
+  showDeckCardPanel("deck-view");
 }
 
 async function createCard() {
-  if (!state.currentDeckName) return;
-  const card = await api("POST", "/api/cards", { DECK_ID: state.currentDeckName });
-  await loadSidebar();
-  await openDeck(state.currentDeckName);
+  if (!deckcardState.currentDeckName) return;
+  const card = await deckcardApi("POST", "/cards", { DECK_ID: deckcardState.currentDeckName });
+  await loadDeckCardSidebar();
+  await openDeck(deckcardState.currentDeckName);
   await openCard(card.ID);
 }
-
-// --- Deck create/edit form. Both share the same field set and markup;
-// create prefills NEW_DECK_DEFAULTS-matching values client-side (the
-// server fills the same defaults for anything omitted/blank anyway) and
-// leaves `ID` for the server to assign, edit prefills the deck's current
-// values and leaves every field (including `ID`) editable.
 
 const NEW_DECK_FORM_DEFAULTS = {
   Enabled: true,
@@ -444,41 +895,41 @@ function readDeckFormValues() {
 }
 
 function openNewDeckForm() {
-  state.deckFormMode = "create";
+  deckcardState.deckFormMode = "create";
   el("deck-form-title").textContent = "New deck";
   el("deck-form-submit-btn").textContent = "Create";
   el("df-Name").disabled = false;
   setDeckFormValues(NEW_DECK_FORM_DEFAULTS);
   el("df-ID").placeholder = "(auto-assigned)";
   el("deck-form-error").classList.add("hidden");
-  showPanel("deck-form");
+  showDeckCardPanel("deck-form");
 }
 
 function openEditDeckForm() {
-  if (!state.currentDeck) return;
-  state.deckFormMode = "edit";
-  el("deck-form-title").textContent = `Edit ${state.currentDeck.Name}`;
+  if (!deckcardState.currentDeck) return;
+  deckcardState.deckFormMode = "edit";
+  el("deck-form-title").textContent = `Edit ${deckcardState.currentDeck.Name}`;
   el("deck-form-submit-btn").textContent = "Save";
   el("df-Name").disabled = true;
   el("df-ID").placeholder = "";
-  setDeckFormValues(state.currentDeck);
+  setDeckFormValues(deckcardState.currentDeck);
   el("deck-form-error").classList.add("hidden");
-  showPanel("deck-form");
+  showDeckCardPanel("deck-form");
 }
 
 async function submitDeckForm() {
   const values = readDeckFormValues();
-  if (state.deckFormMode === "create" && !values.Name) return;
+  if (deckcardState.deckFormMode === "create" && !values.Name) return;
 
   try {
-    if (state.deckFormMode === "create") {
-      const deck = await api("POST", "/api/decks", values);
-      await loadSidebar();
+    if (deckcardState.deckFormMode === "create") {
+      const deck = await deckcardApi("POST", "/decks", values);
+      await loadDeckCardSidebar();
       await openDeck(deck.Name);
     } else {
-      await api("PUT", `/api/decks/${encodeURIComponent(state.currentDeck.Name)}`, values);
-      await loadSidebar();
-      await openDeck(state.currentDeck.Name);
+      await deckcardApi("PUT", `/decks/${encodeURIComponent(deckcardState.currentDeck.Name)}`, values);
+      await loadDeckCardSidebar();
+      await openDeck(deckcardState.currentDeck.Name);
     }
     el("deck-form-error").classList.add("hidden");
   } catch (err) {
@@ -487,9 +938,9 @@ async function submitDeckForm() {
   }
 }
 
-let searchDebounceTimer = null;
+let deckcardSearchDebounceTimer = null;
 
-function renderSearchResults(results) {
+function renderDeckCardSearchResults(results) {
   const container = el("search-results");
   container.innerHTML = "";
   const hasResults = results.decks.length > 0 || results.cards.length > 0;
@@ -529,26 +980,51 @@ function renderSearchResults(results) {
   }
 }
 
-async function runSearch(query) {
+async function runDeckCardSearch(query) {
   if (!query.trim()) {
     el("search-results").classList.add("hidden");
     return;
   }
-  const results = await api("GET", `/api/search?q=${encodeURIComponent(query)}`);
-  renderSearchResults(results);
+  const results = await deckcardApi("GET", `/search?q=${encodeURIComponent(query)}`);
+  renderDeckCardSearchResults(results);
 }
 
-function wireSearch() {
+function wireDeckCardSearch() {
   el("search-input").addEventListener("input", (e) => {
-    clearTimeout(searchDebounceTimer);
+    clearTimeout(deckcardSearchDebounceTimer);
     const query = e.target.value;
-    searchDebounceTimer = setTimeout(() => runSearch(query), 200);
+    deckcardSearchDebounceTimer = setTimeout(() => runDeckCardSearch(query), 200);
   });
 }
 
+// --- Init -------------------------------------------------------------
+
 function init() {
+  for (const btn of document.querySelectorAll(".tab")) {
+    btn.addEventListener("click", () => showView(btn.dataset.view));
+  }
+  el("open-path-btn").addEventListener("click", openBundlePath);
+  el("open-path-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") openBundlePath();
+  });
+  el("active-session-select").addEventListener("change", (e) => setActiveSession(e.target.value));
+
+  el("explorer-search").addEventListener("input", (e) => {
+    clearTimeout(init._explorerSearchTimer);
+    init._explorerSearchTimer = setTimeout(() => runExplorerSearch(e.target.value), 200);
+  });
+  el("explorer-sort").addEventListener("change", renderExplorerList);
+  el("explorer-toggle-deobfuscated").addEventListener("click", toggleExplorerDeobfuscated);
+
+  el("compare-run-btn").addEventListener("click", runCompare);
+
+  el("editor-open-btn").addEventListener("click", openInEditor);
+  el("editor-save-patch-btn").addEventListener("click", saveEditorPatch);
+
+  el("patches-apply-btn").addEventListener("click", applyPreviewedPatch);
+
   wireLivePreview();
-  wireSearch();
+  wireDeckCardSearch();
   el("new-card-btn").addEventListener("click", createCard);
   el("save-card-btn").addEventListener("click", saveCard);
   el("delete-card-btn").addEventListener("click", deleteCard);
@@ -560,10 +1036,19 @@ function init() {
   el("shuffle-btn").addEventListener("click", shuffleDeck);
   el("sort-select").addEventListener("change", handleSortChange);
   el("add-occurrence-toggle-btn").addEventListener("click", toggleAddOccurrenceBar);
-  el("add-occurrence-btn").addEventListener("click", addOccurrence);
+  el("add-occurrence-btn").addEventListener("click", addOccurrenceToDeck);
 
-  showEmptyState();
-  loadSidebar();
+  showDeckCardEmptyState();
+  renderSessionBar();
+  loadExistingSessions();
+}
+
+async function loadExistingSessions() {
+  app.sessions = await api("GET", "/api/sessions");
+  if (app.sessions.length && !app.activeSessionId) app.activeSessionId = app.sessions[0].id;
+  renderSessionBar();
+  populateComparePickers();
+  refreshCurrentView();
 }
 
 init();

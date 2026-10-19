@@ -7,7 +7,14 @@ import { minify } from "terser";
 import { loadManifest } from "./deobfuscate.js";
 import { readModuleSource } from "../parseBundle.js";
 import { extractFactoryBody } from "../factory.js";
-import { diffModuleFactories, canonicalizeFactoryBody, pairByHash } from "../diff.js";
+import {
+  diffModuleFactories,
+  canonicalizeFactoryBody,
+  pairByHash,
+  extractAssignReturnShape,
+  propertyKeyName,
+  switchCaseTestNode,
+} from "../diff.js";
 import { reassembleBundle } from "../reassemble.js";
 
 const generate = generatorPkg.default ?? generatorPkg;
@@ -100,32 +107,168 @@ function buildFactoryBindingRenameMap({ oFactory, rFactory, oForR }) {
   return map;
 }
 
-// Rebuilds the original module's factory statement list with the human's
-// diffed edits (computed between the refactor baseline R and the modified
-// M) applied at the corresponding structurally-matched locations in O —
-// never by just using M wholesale, since M may reference rule-rewritten
-// helper calls (e.g. `_interopRequireWildcard`) that only exist in the
-// readable deobfuscated view, not in O, and may use parameter names O's
-// factory never declares.
-export function buildPatchedFactoryStatements({ oFactory, rFactory, mFactory }) {
-  const oCanon = canonicalizeFactoryBody(oFactory);
-  const rCanon = canonicalizeFactoryBody(rFactory);
-
-  const { pairs } = pairByHash(rCanon, oCanon);
+// Builds the R-index -> O-index correspondence for a statement/case list:
+// hash-match first, then positional fallback for same-index leftovers (a
+// statement unchanged between R and M but rewritten by a deobfuscation rule
+// won't hash-match O, but still corresponds 1:1 by position, since rule
+// rewriting never adds/removes statements).
+function computeOForRByHash(rCanonList, oCanonList, rRawLength, oRawLength) {
+  const { pairs } = pairByHash(rCanonList, oCanonList);
   const oForR = new Map(pairs.map((p) => [p.aIdx, p.bIdx]));
-  // Positional fallback: statements unchanged between R and M but rewritten
-  // by a deobfuscation rule (so they don't hash-match O) still correspond
-  // 1:1 by position, since rule rewriting never adds/removes statements.
-  const rStatementCount = rFactory.body.body.length;
-  const oStatements = oFactory.body.body;
-  for (let i = 0; i < rStatementCount; i++) {
-    if (!oForR.has(i) && i < oStatements.length) oForR.set(i, i);
+  for (let i = 0; i < rRawLength; i++) {
+    if (!oForR.has(i) && i < oRawLength) oForR.set(i, i);
+  }
+  return oForR;
+}
+
+// Switch cases and Object.assign-return properties have intrinsic identity
+// (a case's test, a property's key) rather than positional identity — an
+// unmatched one is a genuinely different case/property, not a
+// renamed-in-place node, so (unlike computeOForRByHash) there is no
+// positional fallback here.
+function computeOForRByKey(rKeyNodes, oKeyNodes) {
+  const { pairs } = pairByHash(rKeyNodes, oKeyNodes);
+  return new Map(pairs.map((p) => [p.aIdx, p.bIdx]));
+}
+
+function rebuildAssignReturnArgument(oShape, newProperties) {
+  const clone = t.cloneNode(oShape.argumentNode, true);
+  if (oShape.kind === "call") {
+    clone.arguments[2].properties = newProperties;
+  } else {
+    clone.properties = [t.cloneNode(clone.properties[0], true), ...newProperties];
+  }
+  return clone;
+}
+
+// Reapplies an R->M property-level diff (`diffObjectAssignProperties`'s
+// entries, via `extractAssignReturnShape`) onto O's own property list,
+// keeping every O property the diff doesn't mention untouched — this is
+// what lets a target bundle's own unrelated Object.assign properties
+// survive reapplication.
+function reapplyObjectProperties({ oProps, propEntries, mProps }) {
+  const newProps = oProps.map((p) => t.cloneNode(p, true));
+  for (const entry of propEntries) {
+    if (entry.kind === "modified") {
+      const key = propertyKeyName(entry.rNode);
+      const idx = newProps.findIndex((p) => propertyKeyName(p) === key);
+      if (idx !== -1) {
+        newProps[idx] = t.objectProperty(newProps[idx].key, t.cloneNode(mProps[entry.mIdx].value, true));
+      }
+    } else if (entry.kind === "removed") {
+      const key = propertyKeyName(entry.rNode);
+      const idx = newProps.findIndex((p) => propertyKeyName(p) === key);
+      if (idx !== -1) newProps.splice(idx, 1);
+    }
+  }
+  const addedEntries = propEntries.filter((e) => e.kind === "added").sort((a, b) => a.mIdx - b.mIdx);
+  for (const entry of addedEntries) {
+    newProps.push(t.cloneNode(mProps[entry.mIdx], true));
+  }
+  return newProps;
+}
+
+// Reapplies an R->M switch-case diff (`diffSwitchCases`'s entries) onto O's
+// own case list, keeping any O case the diff doesn't mention (matched by
+// test hash) untouched — this is what lets a target bundle's own unrelated
+// switch case survive reapplication.
+function applySwitchCaseDiff({ oCases, oCanonCases, rCanonCases, mCases, entries }) {
+  const oForR = computeOForRByKey(rCanonCases.map(switchCaseTestNode), oCanonCases.map(switchCaseTestNode));
+
+  const removedOIdx = new Set();
+  const replacements = new Map();
+  for (const entry of entries) {
+    if (entry.kind === "modified") {
+      const oIdx = oForR.get(entry.rIdx);
+      if (oIdx === undefined) {
+        throw new Error("patch-back: could not locate the original switch case for a modified entry");
+      }
+      const oCase = oCases[oIdx];
+      const rCase = rCanonCases[entry.rIdx];
+      const mCase = mCases[entry.mIdx];
+      const newConsequent = entry.children
+        ? applyStatementDiff({
+            oStatements: oCase.consequent,
+            oCanonStatements: oCanonCases[oIdx].consequent,
+            rCanonStatements: rCase.consequent,
+            mStatements: mCase.consequent,
+            entries: entry.children,
+          })
+        : mCase.consequent;
+      replacements.set(oIdx, t.switchCase(oCase.test ? t.cloneNode(oCase.test, true) : null, newConsequent));
+    } else if (entry.kind === "removed") {
+      const oIdx = oForR.get(entry.rIdx);
+      if (oIdx !== undefined) removedOIdx.add(oIdx);
+    }
   }
 
-  const entries = diffModuleFactories(rFactory, mFactory);
+  const insertions = [];
+  let lastAnchorOIdx = -1;
+  const mOrderedEntries = entries.filter((e) => e.mIdx !== undefined).sort((a, b) => a.mIdx - b.mIdx);
+  for (const entry of mOrderedEntries) {
+    if (entry.kind === "added") {
+      insertions.push({ afterOIdx: lastAnchorOIdx, node: mCases[entry.mIdx] });
+    } else {
+      const oIdx = oForR.get(entry.rIdx);
+      if (oIdx !== undefined) lastAnchorOIdx = oIdx;
+    }
+  }
 
-  const renameMap = buildFactoryBindingRenameMap({ oFactory, rFactory, oForR });
-  const mStatements = realignFactoryBindings(mFactory, renameMap).body.body;
+  const newCases = [...insertionsAfter(insertions, -1)];
+  for (let oIdx = 0; oIdx < oCases.length; oIdx++) {
+    if (!removedOIdx.has(oIdx)) {
+      newCases.push(replacements.has(oIdx) ? replacements.get(oIdx) : oCases[oIdx]);
+    }
+    newCases.push(...insertionsAfter(insertions, oIdx));
+  }
+  return newCases;
+}
+
+// Builds the replacement node for a top-level "modified" entry. Without
+// `entryChildren` (no recognized nested shape, or the diff engine fell back
+// to whole-statement handling) this is the existing behavior: M's statement
+// wholesale. With `entryChildren` (a switch-case or Object.assign-property
+// sub-diff), the replacement is built by reapplying that sub-diff onto O's
+// own matched node instead, so O's own unrelated cases/properties within
+// that same statement survive.
+function reapplyToOStatement({ oNode, oCanonNode, rNode, mNode, entryChildren }) {
+  if (!entryChildren) return mNode;
+
+  if (rNode.type === "SwitchStatement" && oNode.type === "SwitchStatement" && mNode.type === "SwitchStatement") {
+    return t.switchStatement(
+      t.cloneNode(oNode.discriminant, true),
+      applySwitchCaseDiff({
+        oCases: oNode.cases,
+        oCanonCases: oCanonNode.cases,
+        rCanonCases: rNode.cases,
+        mCases: mNode.cases,
+        entries: entryChildren,
+      })
+    );
+  }
+
+  const oShape = extractAssignReturnShape(oNode);
+  if (rNode.type === "ReturnStatement" && oShape && mNode.type === "ReturnStatement") {
+    const mShape = extractAssignReturnShape(mNode);
+    const newProps = reapplyObjectProperties({
+      oProps: oShape.properties,
+      propEntries: entryChildren,
+      mProps: mShape ? mShape.properties : [],
+    });
+    return t.returnStatement(rebuildAssignReturnArgument(oShape, newProps));
+  }
+
+  return mNode;
+}
+
+// Generalized version of the statement-list reconciliation algorithm:
+// applies an R->M statement-list diff (`entries`, from `diffStatementList`)
+// onto O's own statement list, recursing into nested switch-case/
+// Object.assign-property sub-diffs via `reapplyToOStatement` so a target's
+// own unrelated content at any nesting level survives. Used both for a
+// factory's top-level body and (recursively) for a switch case's body.
+function applyStatementDiff({ oStatements, oCanonStatements, rCanonStatements, mStatements, entries }) {
+  const oForR = computeOForRByHash(rCanonStatements, oCanonStatements, rCanonStatements.length, oStatements.length);
 
   const removedOIdx = new Set();
   const replacements = new Map();
@@ -137,7 +280,16 @@ export function buildPatchedFactoryStatements({ oFactory, rFactory, mFactory }) 
           `patch-back: could not locate the original statement for a modified entry (R index ${entry.rIdx})`
         );
       }
-      replacements.set(oIdx, mStatements[entry.mIdx]);
+      replacements.set(
+        oIdx,
+        reapplyToOStatement({
+          oNode: oStatements[oIdx],
+          oCanonNode: oCanonStatements[oIdx],
+          rNode: rCanonStatements[entry.rIdx],
+          mNode: mStatements[entry.mIdx],
+          entryChildren: entry.children,
+        })
+      );
     } else if (entry.kind === "removed") {
       const oIdx = oForR.get(entry.rIdx);
       if (oIdx !== undefined) removedOIdx.add(oIdx);
@@ -171,6 +323,34 @@ export function buildPatchedFactoryStatements({ oFactory, rFactory, mFactory }) 
   }
 
   return newStatements;
+}
+
+// Rebuilds the original module's factory statement list with the human's
+// diffed edits (computed between the refactor baseline R and the modified
+// M) applied at the corresponding structurally-matched locations in O —
+// never by just using M wholesale, since M may reference rule-rewritten
+// helper calls (e.g. `_interopRequireWildcard`) that only exist in the
+// readable deobfuscated view, not in O, and may use parameter names O's
+// factory never declares.
+export function buildPatchedFactoryStatements({ oFactory, rFactory, mFactory }) {
+  const oCanon = canonicalizeFactoryBody(oFactory);
+  const rCanon = canonicalizeFactoryBody(rFactory);
+  const oStatements = oFactory.body.body;
+
+  const oForR = computeOForRByHash(rCanon, oCanon, rFactory.body.body.length, oStatements.length);
+
+  const entries = diffModuleFactories(rFactory, mFactory);
+
+  const renameMap = buildFactoryBindingRenameMap({ oFactory, rFactory, oForR });
+  const mStatements = realignFactoryBindings(mFactory, renameMap).body.body;
+
+  return applyStatementDiff({
+    oStatements,
+    oCanonStatements: oCanon,
+    rCanonStatements: rCanon,
+    mStatements,
+    entries,
+  });
 }
 
 async function patchModule({ bundlePath, manifest, moduleId, baselinePath, currentPath }) {

@@ -1,6 +1,6 @@
 import { loadIndex } from "../parseBundle.js";
 
-function walk(cache, startId, direction, depth) {
+export function walk(cache, startId, direction, depth) {
   const field = direction === "deps" ? "deps" : "dependents";
   const visited = new Map(); // id -> depth at which first seen
   let frontier = [startId];

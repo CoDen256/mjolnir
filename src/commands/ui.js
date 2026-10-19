@@ -1,7 +1,30 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { exec } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { parse } from "@babel/parser";
+import { loadIndex, readModuleSource } from "../parseBundle.js";
+import { extractFactoryBody } from "../factory.js";
+import { diffModuleFactories, serializeDiffEntries } from "../diff.js";
+import { walk } from "./deps.js";
+import {
+  loadManifest,
+  deobfuscateModuleSource,
+  ensureModuleDeobfuscated,
+  deobfuscatedModulePath,
+} from "./deobfuscate.js";
+import { runExplode } from "./explode.js";
+import { compareSessions, diffChangedModule } from "../compareBundles.js";
+import {
+  DEFAULT_PATCHES_DIR,
+  listPatches,
+  loadPatch,
+  savePatch,
+  previewPatch,
+  applyPatch,
+} from "../patches.js";
 import {
   loadDeckCardModel,
   saveDeckCardModel,
@@ -16,11 +39,15 @@ import {
   searchDecks,
   searchCards,
   nextDeckId,
+  locateDeckCardModules,
   NEW_CARD_SKELETON,
   NEW_DECK_DEFAULTS,
 } from "../deckData.js";
 
 const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "../ui-assets");
+const DEFAULT_EDITOR_CMD = "code {path}";
+const SEARCH_CONTEXT_CHARS = 80;
+const SEARCH_RESULT_LIMIT = 50;
 
 const STATIC_FILES = {
   "/": { file: "index.html", contentType: "text/html; charset=utf-8" },
@@ -58,6 +85,199 @@ function readJsonBody(req) {
   });
 }
 
+function serveStatic(req, res, pathname) {
+  const entry = STATIC_FILES[pathname];
+  if (!entry) {
+    sendError(res, 404, "not found");
+    return;
+  }
+  const filePath = path.join(ASSETS_DIR, entry.file);
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      sendError(res, 404, "not found");
+      return;
+    }
+    res.writeHead(200, { "Content-Type": entry.contentType });
+    res.end(data);
+  });
+}
+
+function parseModuleSource(source) {
+  return parse(source, { sourceType: "script", allowReturnOutsideFunction: true });
+}
+
+// --- Session store -----------------------------------------------------
+//
+// A session is an in-memory, server-lifetime-only record of one opened
+// bundle, keyed by a deterministic id derived from its resolved absolute
+// path — opening the same path twice returns the same session rather than
+// creating a duplicate. Everything (Explorer, Compare, Editor, Patches,
+// deck/card) resolves its target bundle through a session id instead of a
+// server-wide closed-over path, which is what lets more than one bundle be
+// open at once.
+
+function sessionIdFor(resolvedPath) {
+  return crypto.createHash("sha1").update(resolvedPath).digest("hex").slice(0, 12);
+}
+
+function createSessionStore() {
+  const sessions = new Map();
+
+  function openByPath(bundlePath) {
+    if (!bundlePath || typeof bundlePath !== "string") {
+      throw new Error("a bundle path is required");
+    }
+    const resolvedPath = path.resolve(bundlePath);
+    const id = sessionIdFor(resolvedPath);
+    const existing = sessions.get(id);
+    if (existing) return existing;
+
+    if (!fs.existsSync(resolvedPath)) {
+      throw new Error(`no such file: ${resolvedPath}`);
+    }
+    let cache;
+    try {
+      cache = loadIndex(resolvedPath);
+    } catch (err) {
+      throw new Error(`could not parse bundle at ${resolvedPath}: ${err.message}`);
+    }
+
+    const session = {
+      id,
+      bundlePath: resolvedPath,
+      cache,
+      explodedReady: false,
+      manifest: null,
+      deckCardAvailable: undefined,
+    };
+    sessions.set(id, session);
+    return session;
+  }
+
+  return { openByPath, get: (id) => sessions.get(id), list: () => [...sessions.values()] };
+}
+
+function refreshSessionCache(session) {
+  session.cache = loadIndex(session.bundlePath);
+}
+
+// Lazily builds/refreshes the exploded-module manifest a session needs for
+// classification, deobfuscation, and deck/card access — never required just
+// to browse raw module source (Explorer's base list/search/show work off
+// the module index cache alone).
+function ensureExploded(session) {
+  if (session.explodedReady) return session.manifest;
+  runExplode(session.bundlePath);
+  session.manifest = loadManifest(session.bundlePath);
+  session.explodedReady = true;
+  return session.manifest;
+}
+
+function deckCardAvailable(session) {
+  if (session.deckCardAvailable !== undefined) return session.deckCardAvailable;
+  try {
+    const manifest = ensureExploded(session);
+    locateDeckCardModules(session.bundlePath, manifest);
+    session.deckCardAvailable = true;
+  } catch {
+    session.deckCardAvailable = false;
+  }
+  return session.deckCardAvailable;
+}
+
+function sessionSummary(session) {
+  return {
+    id: session.id,
+    bundlePath: session.bundlePath,
+    moduleCount: session.cache.moduleCount,
+    entryId: session.cache.entryId,
+    deckCardAvailable: deckCardAvailable(session),
+  };
+}
+
+// Invalidates everything about a session that's derived from the bundle's
+// current on-disk bytes — called after any write (a deck/card save, a
+// committed patch) so the next request re-derives from the bundle file
+// rather than trusting now-stale offsets, matching the tool's existing
+// "never trust stale state" posture.
+function invalidateSessionAfterWrite(session) {
+  refreshSessionCache(session);
+  session.explodedReady = false;
+  session.manifest = null;
+  session.deckCardAvailable = undefined;
+}
+
+function requireSession(sessions, res, id) {
+  const session = sessions.get(id);
+  if (!session) {
+    sendError(res, 404, `no open session "${id}"`);
+    return null;
+  }
+  return session;
+}
+
+// --- Explorer ------------------------------------------------------------
+
+function moduleListEntry(session, id, mod) {
+  const manifestEntry = session.manifest && session.manifest[id];
+  return {
+    id: Number(id),
+    size: mod.size,
+    verboseName: mod.verboseName,
+    looksMinified: mod.looksMinified,
+    deps: mod.deps.length,
+    dependents: mod.dependents.length,
+    classification: manifestEntry ? manifestEntry.classification : null,
+  };
+}
+
+function searchModules(session, { query, regex = false, limit = SEARCH_RESULT_LIMIT }) {
+  if (!query || !query.trim()) return [];
+  const source = fs.readFileSync(session.bundlePath, "utf8");
+  const re = regex
+    ? new RegExp(query, "g")
+    : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+
+  const results = [];
+  const ids = Object.keys(session.cache.modules).map(Number).sort((a, b) => a - b);
+  outer: for (const id of ids) {
+    const mod = session.cache.modules[id];
+    const body = source.slice(mod.start, mod.end);
+    re.lastIndex = 0;
+    let match;
+    while ((match = re.exec(body))) {
+      const from = Math.max(0, match.index - SEARCH_CONTEXT_CHARS);
+      const to = Math.min(body.length, match.index + match[0].length + SEARCH_CONTEXT_CHARS);
+      results.push({ moduleId: id, snippet: body.slice(from, to).replace(/\s+/g, " ") });
+      if (results.length >= limit) break outer;
+      if (re.lastIndex === match.index) re.lastIndex++;
+    }
+  }
+  return results;
+}
+
+// --- Editor ---------------------------------------------------------------
+
+function runEditorCommand(commandTemplate, filePath) {
+  const cmd = commandTemplate.replace("{path}", JSON.stringify(filePath));
+  return new Promise((resolve) => {
+    exec(cmd, (error, stdout, stderr) => {
+      resolve({
+        success: !error,
+        code: error ? (typeof error.code === "number" ? error.code : 1) : 0,
+        stderr: stderr ? stderr.toString() : error ? error.message : "",
+      });
+    });
+  });
+}
+
+// --- Deck/Card editor (mounted, not rewritten) ----------------------------
+//
+// The deck/card API is reused verbatim from the pre-workbench `ui <bundle>`
+// server, parameterized only by which bundle path it closes over — unchanged
+// from before except that the bundle path now comes from a resolved session
+// instead of a single server-wide argument.
+
 function deckSummaries(decks, cards) {
   const cardCountByDeck = new Map();
   for (const card of cards) {
@@ -80,7 +300,6 @@ function findCard(cards, id) {
 }
 
 const PREVIEW_MAX_LENGTH = 80;
-const SEARCH_RESULT_LIMIT = 50;
 
 function previewText(card) {
   const plainText = stripHtml(card.N);
@@ -93,9 +312,6 @@ function cardSummary(card, directions = []) {
   return { ID: card.ID, DECK_ID: card.DECK_ID, N: card.N, preview: previewText(card), directions };
 }
 
-// A deck's `Cards[]` *array order* is the actual presentation sequence —
-// this mirrors it 1:1 (one entry per occurrence, in order) rather than
-// deduplicating by card id the way cardSummary's per-deck list does.
 function occurrenceSummaries(deck, cardsById) {
   return deck.Cards.map((ref, index) => {
     const cardId = ref.Card.slice(0, -1);
@@ -105,28 +321,7 @@ function occurrenceSummaries(deck, cardsById) {
   });
 }
 
-function serveStatic(req, res, pathname) {
-  const entry = STATIC_FILES[pathname];
-  if (!entry) {
-    sendError(res, 404, "not found");
-    return;
-  }
-  const filePath = path.join(ASSETS_DIR, entry.file);
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      sendError(res, 404, "not found");
-      return;
-    }
-    res.writeHead(200, { "Content-Type": entry.contentType });
-    res.end(data);
-  });
-}
-
-// Builds the route handler table. Every mutating handler reloads the model
-// fresh from the bundle, applies its edit, validates, and saves — each
-// request is its own atomic load-edit-validate-save cycle, so there is no
-// server-held draft state to go stale between requests.
-function createRoutes(bundlePath) {
+function createDeckCardRoutes(bundlePath) {
   return [
     {
       method: "GET",
@@ -171,9 +366,6 @@ function createRoutes(bundlePath) {
         if (findDeck(model.decks, body.Name)) {
           return { status: 400, body: { error: `deck "${body.Name}" already exists` } };
         }
-        // ID is always server-assigned (never trusts a client-supplied
-        // value) to guarantee uniqueness; every other field falls back to
-        // NEW_DECK_DEFAULTS when the request omits or blanks it.
         const deck = { ID: nextDeckId(model.decks), Name: body.Name, Title: body.Title || "" };
         for (const [key, defaultValue] of Object.entries(NEW_DECK_DEFAULTS)) {
           deck[key] = body[key] !== undefined && body[key] !== "" ? body[key] : defaultValue;
@@ -192,10 +384,6 @@ function createRoutes(bundlePath) {
         const model = loadDeckCardModel(bundlePath);
         const deck = findDeck(model.decks, name);
         if (!deck) return { status: 404, body: { error: `no deck named "${name}"` } };
-        // Only `Name` is protected — `Cards` is editable via direct API use
-        // (the frontend never sends it), so an edit that leaves a reference
-        // unresolved is caught by saveDeckCardModel's validation, not
-        // blocked at the route level.
         Object.assign(deck, body, { Name: deck.Name });
         saveDeckCardModel(bundlePath, model);
         return { status: 200, body: deck };
@@ -234,8 +422,6 @@ function createRoutes(bundlePath) {
           A: body.A ?? "X",
         };
         model.cards.push(card);
-        // New cards get both a front (N) and a back (E) occurrence by
-        // default, not just front.
         addOccurrence(deck, id, "N");
         addOccurrence(deck, id, "E");
 
@@ -251,10 +437,6 @@ function createRoutes(bundlePath) {
         const model = loadDeckCardModel(bundlePath);
         const card = findCard(model.cards, id);
         if (!card) return { status: 404, body: { error: `no card with id "${id}"` } };
-        // Only `ID` is protected — `DECK_ID` is editable (e.g. moving a
-        // card between decks), so an edit that leaves it unresolved is
-        // caught by saveDeckCardModel's referential-integrity check, not
-        // blocked at the route level.
         Object.assign(card, body, { ID: card.ID });
         saveDeckCardModel(bundlePath, model);
         return { status: 200, body: card };
@@ -279,9 +461,6 @@ function createRoutes(bundlePath) {
       },
     },
     {
-      // Adds a new presentation occurrence of an existing card to a deck's
-      // Cards[] sequence (e.g. "also quiz this card's back"), always
-      // appended at the end — the UI never offers to pick a position.
       method: "POST",
       pattern: /^\/api\/decks\/([^/]+)\/occurrences$/,
       handler: (match, body) => {
@@ -380,8 +559,259 @@ function createRoutes(bundlePath) {
   ];
 }
 
-export function createServer(bundlePath) {
-  const routes = createRoutes(bundlePath);
+const DECKCARD_PREFIX_PATTERN = /^\/api\/sessions\/([^/]+)\/deckcard(\/.*)?$/;
+
+// --- Route table ------------------------------------------------------
+
+function createRoutes(sessions, { patchesDir, editorCmd }) {
+  return [
+    {
+      method: "GET",
+      pattern: /^\/api\/sessions$/,
+      handler: () => ({ status: 200, body: sessions.list().map(sessionSummary) }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/sessions$/,
+      handler: (match, body) => {
+        const session = sessions.openByPath(body && body.path);
+        return { status: 201, body: sessionSummary(session) };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/sessions\/([^/]+)$/,
+      handler: (match, body, url, res) => {
+        const session = requireSession(sessions, res, match[1]);
+        if (!session) return null;
+        return { status: 200, body: sessionSummary(session) };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/sessions\/([^/]+)\/modules$/,
+      handler: (match, body, url, res) => {
+        const session = requireSession(sessions, res, match[1]);
+        if (!session) return null;
+        ensureExploded(session);
+        const modules = Object.entries(session.cache.modules).map(([id, mod]) =>
+          moduleListEntry(session, id, mod)
+        );
+        return { status: 200, body: modules };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/sessions\/([^/]+)\/search$/,
+      handler: (match, body, url, res) => {
+        const session = requireSession(sessions, res, match[1]);
+        if (!session) return null;
+        const query = url.searchParams.get("q") || "";
+        const regex = url.searchParams.get("regex") === "true";
+        const limit = Number(url.searchParams.get("limit")) || SEARCH_RESULT_LIMIT;
+        return { status: 200, body: searchModules(session, { query, regex, limit }) };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/sessions\/([^/]+)\/modules\/(\d+)$/,
+      handler: (match, body, url, res) => {
+        const session = requireSession(sessions, res, match[1]);
+        if (!session) return null;
+        const id = Number(match[2]);
+        const mod = session.cache.modules[id];
+        if (!mod) return { status: 404, body: { error: `module ${id} not found` } };
+        const source = readModuleSource(session.bundlePath, mod);
+        return {
+          status: 200,
+          body: {
+            id,
+            verboseName: mod.verboseName,
+            size: mod.size,
+            looksMinified: mod.looksMinified,
+            deps: mod.deps,
+            dependents: mod.dependents,
+            source,
+          },
+        };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/sessions\/([^/]+)\/modules\/(\d+)\/deobfuscated$/,
+      handler: (match, body, url, res) => {
+        const session = requireSession(sessions, res, match[1]);
+        if (!session) return null;
+        const id = Number(match[2]);
+        const mod = session.cache.modules[id];
+        if (!mod) return { status: 404, body: { error: `module ${id} not found` } };
+        const source = readModuleSource(session.bundlePath, mod);
+        return { status: 200, body: { code: deobfuscateModuleSource(source) } };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/sessions\/([^/]+)\/modules\/(\d+)\/deps$/,
+      handler: (match, body, url, res) => {
+        const session = requireSession(sessions, res, match[1]);
+        if (!session) return null;
+        const id = Number(match[2]);
+        const mod = session.cache.modules[id];
+        if (!mod) return { status: 404, body: { error: `module ${id} not found` } };
+        const direction = url.searchParams.get("direction") === "dependents" ? "dependents" : "deps";
+        const depth = Number(url.searchParams.get("depth")) || 1;
+        const visited = walk(session.cache, id, direction, depth);
+        return { status: 200, body: { direction, depth, modules: [...visited.entries()].map(([nid, d]) => ({ id: nid, depth: d })) } };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/sessions\/([^/]+)\/modules\/(\d+)\/deobfuscate$/,
+      handler: (match, body, url, res) => {
+        const session = requireSession(sessions, res, match[1]);
+        if (!session) return null;
+        ensureExploded(session);
+        const id = Number(match[2]);
+        const result = ensureModuleDeobfuscated(session.bundlePath, id);
+        return { status: 200, body: result };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/sessions\/([^/]+)\/modules\/(\d+)\/open-in-editor$/,
+      handler: async (match, body, url, res) => {
+        const session = requireSession(sessions, res, match[1]);
+        if (!session) return null;
+        ensureExploded(session);
+        const id = Number(match[2]);
+        const { path: filePath } = ensureModuleDeobfuscated(session.bundlePath, id);
+        const result = await runEditorCommand(editorCmd, filePath);
+        return { status: 200, body: { path: filePath, ...result } };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/sessions\/([^/]+)\/modules\/(\d+)\/live-diff$/,
+      handler: (match, body, url, res) => {
+        const session = requireSession(sessions, res, match[1]);
+        if (!session) return null;
+        const id = Number(match[2]);
+        const mod = session.cache.modules[id];
+        if (!mod) return { status: 404, body: { error: `module ${id} not found` } };
+
+        const filePath = deobfuscatedModulePath(session.bundlePath, id);
+        if (!fs.existsSync(filePath)) {
+          return { status: 404, body: { error: "module has not been opened for editing yet" } };
+        }
+
+        const originalSource = readModuleSource(session.bundlePath, mod);
+        const baseline = deobfuscateModuleSource(originalSource);
+        const current = fs.readFileSync(filePath, "utf8");
+
+        try {
+          const rFactory = extractFactoryBody(parseModuleSource(baseline)).factory;
+          const mFactory = extractFactoryBody(parseModuleSource(current)).factory;
+          const diff = serializeDiffEntries(diffModuleFactories(rFactory, mFactory));
+          return { status: 200, body: { path: filePath, baseline, current, diff } };
+        } catch (err) {
+          return { status: 400, body: { error: `could not parse current edit: ${err.message}`, path: filePath, baseline, current } };
+        }
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/compare$/,
+      handler: (match, body, url, res) => {
+        const a = requireSession(sessions, res, url.searchParams.get("a"));
+        if (!a) return null;
+        const b = requireSession(sessions, res, url.searchParams.get("b"));
+        if (!b) return null;
+        return { status: 200, body: compareSessions(a.bundlePath, a.cache, b.bundlePath, b.cache) };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/compare\/diff$/,
+      handler: (match, body, url, res) => {
+        const a = requireSession(sessions, res, url.searchParams.get("a"));
+        if (!a) return null;
+        const b = requireSession(sessions, res, url.searchParams.get("b"));
+        if (!b) return null;
+        const aModuleId = Number(url.searchParams.get("aModuleId"));
+        const bModuleId = Number(url.searchParams.get("bModuleId"));
+        const aMod = a.cache.modules[aModuleId];
+        const bMod = b.cache.modules[bModuleId];
+        if (!aMod || !bMod) return { status: 404, body: { error: "module not found in one of the two sessions" } };
+        return { status: 200, body: { diff: diffChangedModule(a.bundlePath, aMod, b.bundlePath, bMod) } };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/patches$/,
+      handler: () => ({ status: 200, body: listPatches(patchesDir) }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/patches$/,
+      handler: (match, body) => {
+        const patch = savePatch(patchesDir, body || {});
+        return { status: 201, body: patch };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/patches\/([^/]+)\/preview$/,
+      handler: async (match, body, url, res) => {
+        const session = requireSession(sessions, res, body && body.sessionId);
+        if (!session) return null;
+        const patch = loadPatch(patchesDir, decodeURIComponent(match[1]));
+        const { targetModuleId, currentSource, newSource } = await previewPatch({
+          bundlePath: session.bundlePath,
+          cache: session.cache,
+          patch,
+        });
+        const rFactory = extractFactoryBody(parseModuleSource(currentSource)).factory;
+        const mFactory = extractFactoryBody(parseModuleSource(newSource)).factory;
+        const diff = serializeDiffEntries(diffModuleFactories(rFactory, mFactory));
+        return { status: 200, body: { targetModuleId, diff } };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/patches\/([^/]+)\/apply$/,
+      handler: async (match, body, url, res) => {
+        const session = requireSession(sessions, res, body && body.sessionId);
+        if (!session) return null;
+        const patch = loadPatch(patchesDir, decodeURIComponent(match[1]));
+        const result = await applyPatch({ bundlePath: session.bundlePath, cache: session.cache, patch });
+        invalidateSessionAfterWrite(session);
+        return { status: 200, body: result };
+      },
+    },
+  ];
+}
+
+function dispatchDeckCard(session, subPath, req, res, url, body) {
+  // The reused deck/card route table's patterns (`/^\/api\/decks$/`, etc.)
+  // were written for the pre-workbench server's top-level paths; re-add the
+  // `/api` prefix stripped off by the session/deckcard mount point so they
+  // match unmodified.
+  const fullPath = `/api${subPath}`;
+  const routes = createDeckCardRoutes(session.bundlePath);
+  const route = routes.find((r) => r.method === req.method && r.pattern.test(fullPath));
+  if (!route) {
+    sendError(res, 404, "no such route");
+    return;
+  }
+  const match = fullPath.match(route.pattern);
+  const { status, body: resBody } = route.handler(match, body, url);
+  if (["POST", "PUT", "DELETE"].includes(req.method)) invalidateSessionAfterWrite(session);
+  sendJson(res, status, resBody);
+}
+
+export function createServer({ patchesDir = DEFAULT_PATCHES_DIR, editorCmd = DEFAULT_EDITOR_CMD } = {}) {
+  const sessions = createSessionStore();
+  const routes = createRoutes(sessions, { patchesDir, editorCmd });
 
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
@@ -391,25 +821,41 @@ export function createServer(bundlePath) {
       return;
     }
 
-    const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
-    if (!route) {
-      sendError(res, 404, "no such route");
-      return;
-    }
-
+    const deckCardMatch = url.pathname.match(DECKCARD_PREFIX_PATTERN);
     try {
-      const body = ["POST", "PUT"].includes(req.method) ? await readJsonBody(req) : undefined;
+      const body = ["POST", "PUT", "DELETE"].includes(req.method) ? await readJsonBody(req) : undefined;
+
+      if (deckCardMatch) {
+        const session = sessions.get(deckCardMatch[1]);
+        if (!session) {
+          sendError(res, 404, `no open session "${deckCardMatch[1]}"`);
+          return;
+        }
+        if (!deckCardAvailable(session)) {
+          sendError(res, 404, "this bundle has no deck/card module pair");
+          return;
+        }
+        dispatchDeckCard(session, deckCardMatch[2] || "/", req, res, url, body);
+        return;
+      }
+
+      const route = routes.find((r) => r.method === req.method && r.pattern.test(url.pathname));
+      if (!route) {
+        sendError(res, 404, "no such route");
+        return;
+      }
       const match = url.pathname.match(route.pattern);
-      const { status, body: resBody } = route.handler(match, body, url);
-      sendJson(res, status, resBody);
+      const result = await route.handler(match, body, url, res);
+      if (result === null) return; // handler already sent an error response
+      sendJson(res, result.status, result.body);
     } catch (err) {
       sendError(res, 400, err.message);
     }
   });
 }
 
-export function runUi(bundlePath, { port = 0 } = {}) {
-  const server = createServer(bundlePath);
+export function runUi({ port = 0, patchesDir = DEFAULT_PATCHES_DIR, editorCmd = DEFAULT_EDITOR_CMD } = {}) {
+  const server = createServer({ patchesDir, editorCmd });
   server.listen(port, "127.0.0.1", () => {
     const { port: boundPort } = server.address();
     console.log(`bundle-tool ui listening at http://127.0.0.1:${boundPort}`);

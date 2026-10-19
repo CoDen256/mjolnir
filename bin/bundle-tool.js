@@ -82,9 +82,13 @@ program
   });
 
 program
-  .command("ui <bundle>")
-  .description("Start a local browser-based editor for a bundle's decks and cards")
+  .command("ui")
+  .description("Start the bundle-workbench app server (open bundles by path from within the UI)")
   .option("--port <n>", "port to listen on (0 = pick any free port)", "0")
-  .action((bundle, opts) => runUi(bundle, { port: Number(opts.port) }));
+  .option("--patches-dir <dir>", "directory to read/write patch files, relative to CWD", "patches")
+  .option("--editor-cmd <cmd>", "shell command template to open a module file, {path} substituted", "code {path}")
+  .action((opts) =>
+    runUi({ port: Number(opts.port), patchesDir: opts.patchesDir, editorCmd: opts.editorCmd })
+  );
 
 program.parseAsync(process.argv);

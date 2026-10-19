@@ -51,6 +51,24 @@ export function applyRules(ast) {
   return usedRules;
 }
 
+// Rewrites one module's source by applying every recognized deobfuscation
+// rule, same as a single iteration of `runDeobfuscate`'s loop — factored out
+// so the UI's Explorer/Editor views can deobfuscate a single module on
+// demand without touching every other module in the bundle.
+export function deobfuscateModuleSource(source) {
+  const ast = parse(source, { sourceType: "script", allowReturnOutsideFunction: true });
+  const usedRules = applyRules(ast);
+
+  let code = generate(ast, { comments: true, retainLines: false }).code;
+  if (usedRules.size > 0) {
+    const helperDecls = [...usedRules]
+      .map((rule) => generate(rule.helperDeclaration, { comments: false }).code)
+      .join("\n\n");
+    code = `${helperDecls}\n\n${code}`;
+  }
+  return code;
+}
+
 export function runDeobfuscate(bundlePath) {
   const manifest = loadManifest(bundlePath);
   const explodedDir = explodedDirFor(bundlePath);
@@ -73,18 +91,7 @@ export function runDeobfuscate(bundlePath) {
     console.log(
       `[${index + 1}/${total}] module ${idStr} (${Math.round(source.length / 1024)}KB)...`
     );
-    const ast = parse(source, { sourceType: "script", allowReturnOutsideFunction: true });
-
-    const usedRules = applyRules(ast);
-
-    let code = generate(ast, { comments: true, retainLines: false }).code;
-    if (usedRules.size > 0) {
-      const helperDecls = [...usedRules]
-        .map((rule) => generate(rule.helperDeclaration, { comments: false }).code)
-        .join("\n\n");
-      code = `${helperDecls}\n\n${code}`;
-    }
-
+    const code = deobfuscateModuleSource(source);
     fs.writeFileSync(path.join(outDir, `${idStr}.js`), code);
     deobfuscatedCount++;
   });
@@ -92,4 +99,32 @@ export function runDeobfuscate(bundlePath) {
   console.log(
     `deobfuscated ${deobfuscatedCount} logic modules to ${outDir} (skipped ${skippedCount} data modules)`
   );
+}
+
+// Path the Editor view writes a single module's deobfuscated source to —
+// matches `runDeobfuscate`'s own per-module output path, so a module
+// deobfuscated individually and one deobfuscated via the bulk command land
+// in the same place.
+export function deobfuscatedModulePath(bundlePath, moduleId) {
+  return path.join(explodedDirFor(bundlePath), "deobfuscated", `${moduleId}.js`);
+}
+
+// Ensures a single module's deobfuscated file exists on disk, writing it
+// (reusing `deobfuscateModuleSource`) only if it isn't already there —
+// opening an already-edited module must never regenerate over the user's
+// edit.
+export function ensureModuleDeobfuscated(bundlePath, moduleId) {
+  const outPath = deobfuscatedModulePath(bundlePath, moduleId);
+  if (fs.existsSync(outPath)) return { path: outPath, created: false };
+
+  const manifest = loadManifest(bundlePath);
+  const mod = manifest[moduleId];
+  if (!mod) throw new Error(`module ${moduleId} not found in manifest`);
+
+  const source = fs.readFileSync(path.join(explodedDirFor(bundlePath), mod.path), "utf8");
+  const code = mod.classification === "data" ? source : deobfuscateModuleSource(source);
+
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, code);
+  return { path: outPath, created: true };
 }
