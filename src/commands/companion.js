@@ -54,6 +54,13 @@ export function appendCompanion(bundleBuffer, companionSource, { buildId, name }
 }
 
 export function runCompanion(bundlePath, outputPath, companionFile, buildId) {
+  // Create the output directory if needed — otherwise writeFileSync throws a
+  // raw ENOENT stack at the end of the work, after the bundle is built.
+  const outDir = path.dirname(outputPath);
+  if (outDir && outDir !== "." && !fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir, { recursive: true });
+  }
+
   const bundle = fs.readFileSync(bundlePath);
   const companionSource = fs.readFileSync(companionFile, "utf8");
   const name = path.basename(companionFile).replace(/\.js$/, "");
