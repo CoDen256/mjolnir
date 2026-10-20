@@ -513,8 +513,15 @@ public final class OtaPackage implements Package, ReactNativeHostHandler, Runnab
             if (id != null && !keep.contains(id)) {
                 f.delete();
                 new File(base, "boot-ok-" + id).delete();
-                new File(base, "bad-" + id).delete();
                 deleteAttempts(base, id);
+                // bad-<id> is deliberately NOT deleted: it is a permanent
+                // tombstone (section 4 — "never cleared automatically"). If it were
+                // swept here with the bundle, a current.json still naming the
+                // quarantined id would re-download the identical bytes next launch
+                // (refresh's bad-<id> skip would see no marker), re-quarantine, and
+                // burn ~6 MB every GC cycle forever. Keeping the empty marker — one
+                // 0-byte file per ever-quarantined build — closes that loop.
+                // Reconciles section 2 with section 4; see tun ADR D65.
             }
         }
     }
