@@ -45,17 +45,35 @@
 
 ## 8. Build, sign, install
 
-- [ ] 8.1 Assemble the embedded fallback bundle: **plain stock v1.5.12** base bundle + JS companion (paywall patch deferred — D61); place as `assets/index.android.bundle`
-- [ ] 8.2 **Substitute `__MJOLNIR_OTA_URL__` / `__MJOLNIR_OTA_TOKEN__`** via `patches/native/substitute.sh <out-dir>` (env `MJOLNIR_OTA_URL`/`MJOLNIR_OTA_TOKEN`; refuses non-https and refuses to emit smali with a surviving placeholder), then gate the built dex with `patches/native/substitute.sh --check-dex <classes.dex>`. An unsubstituted placeholder ships an APK whose every fetch 401s, forever and silently (D64)
-- [ ] 8.3 Build → align → sign via the existing `0306.orig` pipeline
-- [ ] 8.4 Install on the device and run §9. Rebuilding is cheap (D66) — iterate rather than gating on a perfect first build
+- [x] 8.1 Embedded fallback = **plain stock v1.5.12** base bundle, `b3ad6aee…5741` (paywall patch deferred — D61). Ships as-is from `base/`; no companion in the embedded tier, which is correct — tier 4 has no buildId and is never watchdogged (contract §2)
+- [x] 8.2 **Substitute `__MJOLNIR_OTA_URL__` / `__MJOLNIR_OTA_TOKEN__`** via `patches/native/substitute.sh <out-dir>` (env `MJOLNIR_OTA_URL`/`MJOLNIR_OTA_TOKEN`; refuses non-https and refuses to emit smali with a surviving placeholder), then gate the built dex with `patches/native/substitute.sh --check-dex <classes.dex>`. An unsubstituted placeholder ships an APK whose every fetch 401s, forever and silently (D64)
+- [x] 8.3 Build → align → sign — **`apk/build.sh`**: stage `base/` into untracked `build/deploy/` → substitute (D64) → overlay the patch (asserts `OtaPackage` landed, `LazyHolder` is patched, no placeholder survives) → `at bl -fvazs -k ~/.android/debug.keystore` → unzip and gate every `classes*.dex`. Emits `build/deploy/signed.mjolnir.merged.apk` and prints its signer
+- [x] 8.4 Installed; signer `d2a16b2d…675b` matches the existing install, so it upgraded in place
 
 ## 9. Acceptance — the irreversible-step gate
 
-- [ ] 9.1 Boots the **stock** embedded bundle first (dex integrity) before any OTA
-- [ ] 9.2 Tier 4 → tier 1: publish a bundle, confirm fetch + `pending` + promote-to-`active`, then confirm `active` load on next launch
-- [ ] 9.3 Watchdog: a deliberately-crashing bundle is quarantined (`bad-<id>`) after two launches and falls back to the previous good bundle
-- [ ] 9.4 Rollback: repoint `current.json` at an older `buildId`; confirm the device fetches it (identity, not ordering — D26)
+- [x] 9.1 **PASS** — L1 `select tier=asset path=null`. Dex sound: no `VerifyError`, no `AbstractMethodError`, no `ArrayIndexOutOfBounds` from the 5→6 array edit
+- [x] 9.2 **PASS** — L2 `tier=pending path=…/bundle-b000002.js`, L3 and L4 `tier=active`. L4 is the load-bearing one: no quarantine means the companion's `boot-ok-b000002` was written
+- [ ] 9.3 Watchdog **positive**: a deliberately-crashing bundle is quarantined (`bad-<id>`) after two launches and falls back. Run this **last** — it leaves a permanent tombstone by design (D65)
+- [ ] 9.4 Rollback: repoint `current.json` at an older `buildId`; confirm the device fetches it (identity, not ordering — D26). Note `b000001` has **no companion**, so rolling back to it will legitimately quarantine on its third launch — expected, not a bug
 - [ ] 9.5 `config.json`: write a new token; confirm the next refresh uses it, and that a malformed/non-https config falls back without crashing
-- [ ] 9.6 Re-run `bin/ota-verify.sh` against the VPS (16/16)
-- [ ] 9.7 If any contract clause proved wrong during implementation, record an ADR amendment in `tun/docs/07-decisions.md` (never a silent deviation)
+- [x] 9.6 `bin/ota-verify.sh` 16/16 against the VPS
+- [x] 9.7 Amendments recorded, never silent: **D65** (GC must preserve `bad-<id>` tombstones — §2 reconciled with §4), **D66/P29** (`Context` must not be dereferenced at `Package` registration time — found as a hard launch crash on first install), **D67** (P2 proven on device)
+
+## 10. Next — the first real OTA payoff (P3)
+
+Proves the workflow this project exists for: a behaviour change shipped as a
+file, with no APK and no reinstall.
+
+- [ ] 10.1 Re-derive the paywall patch against the **v1.5.12** base bundle. The
+      June technique (`0f6f580`/`b962691`/`a1f8f1f`, Redux `SET_PAYWALL_VISIBLE`
+      injection, fingerprint `27/07/2040`) is authoritative, but it was written
+      against v1.5.10 — re-derive, do not cherry-pick. The anchor
+      `case e.SET_PAYWALL_VISIBLE:return Object.assign({},_,{paywall_visible:t.payload})`
+      is present verbatim in v1.5.12
+- [ ] 10.2 `bundle-tool companion --build-id b000003` to add the boot-ok writer
+- [ ] 10.3 Publish as **b000003** (`ota-publish.sh` now refuses a buildId that
+      disagrees with the baked companion id, and refuses a bundle with no
+      companion at all)
+- [ ] 10.4 Force-stop, launch twice: expect `tier=pending` then `tier=active`,
+      and the paywall gone. **No APK rebuild.** If this works, P3 is real
