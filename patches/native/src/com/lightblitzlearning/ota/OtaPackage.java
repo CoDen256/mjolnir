@@ -79,8 +79,29 @@ public final class OtaPackage implements Package, ReactNativeHostHandler, Runnab
 
     @Override
     public List createReactNativeHostHandlers(Context c) {
-        this.ctx = c.getApplicationContext();
+        // Called from MainApplication's CONSTRUCTOR (via ReactNativeHostWrapper),
+        // BEFORE attachBaseContext(). At that point the Application is a
+        // ContextWrapper whose mBase is still null, so c.getApplicationContext()
+        // throws NPE and the process dies before it starts — `Unable to
+        // instantiate application`. Store the reference as-is and resolve the
+        // real context lazily in baseDir(), which only runs once the app is
+        // fully attached. Do NOT "simplify" this back to getApplicationContext().
+        this.ctx = c;
         return Collections.singletonList(this);
+    }
+
+    /**
+     * The OTA directory, resolving the application context lazily. Safe to call
+     * only after the Application is attached (i.e. from getJSBundleFile or the
+     * daemon) — never from createReactNativeHostHandlers.
+     */
+    private File baseDir() {
+        Context c = ctx;
+        Context app = c.getApplicationContext(); // non-null once attached
+        if (app != null) {
+            c = app;
+        }
+        return new File(c.getFilesDir(), "mjolnir-ota");
     }
 
     // ----- ReactNativeHostHandler: every method but getJSBundleFile mirrors the
@@ -116,7 +137,7 @@ public final class OtaPackage implements Package, ReactNativeHostHandler, Runnab
         }
         String selected = null;
         try {
-            File base = new File(ctx.getFilesDir(), "mjolnir-ota");
+            File base = baseDir();
             base.mkdirs();
             selected = selectBundle(base);
             startDaemon();
@@ -251,7 +272,7 @@ public final class OtaPackage implements Package, ReactNativeHostHandler, Runnab
     @Override
     public void run() {
         try {
-            File base = new File(ctx.getFilesDir(), "mjolnir-ota");
+            File base = baseDir();
             try {
                 refresh(base);
             } catch (Throwable ignored) {
