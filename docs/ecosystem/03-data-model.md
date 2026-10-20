@@ -1,11 +1,23 @@
 # Data model: capture → item → card
 
+> **Ownership split (D43).** This document spans two services. Read it with
+> this line in mind:
+>
+> | owned by **stabbur** | owned by **mjolnir/hub** |
+> |---|---|
+> | `capture`, `item` (text, translations, context, audio, pos, inflections, transcription, kind, status), `grammar_rule`, audio blobs | `card_slots` (permanent 6-char ids), `decks` C20–C29, card **type a–e**, projection to N/E/X/A, occurrences, lag-11 interleave, `publications`, `build_jobs` |
+>
+> stabbur has no decks, no card ids, no occurrences, no N/E/X/A. The `item`
+> sketch below still shows `type`, `deck_code` and `card_no` inline — those
+> three live in hub's mirror of the item, not in stabbur. **This section needs
+> a restructuring pass to reflect the split properly.**
+
 ## Three distinct entities (do not merge them)
 
 | Entity | What it is | Lives in |
 |---|---|---|
-| **capture** | a raw lexical intent grabbed in the wild, unclassified | `lexis.captures` |
-| **item** | a triaged, enriched thing you intend to learn | `lexis.items` |
+| **capture** | a raw lexical intent grabbed in the wild, unclassified | `stabbur.captures` |
+| **item** | a triaged, enriched thing you intend to learn | `stabbur.items` |
 | **card** | the Mjølnir projection of an item (N/E/X/A + occurrences) | generated, not stored |
 
 A phonexa **`Token` is NOT a capture.** A Token is a *phoneme instance*

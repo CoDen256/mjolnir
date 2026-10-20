@@ -1,106 +1,103 @@
-# Services, boundaries and hosting
+# Tun — services, repos and deployment
 
-## Why these seams
+**Tun** = the farmyard: the shared centre every building faces. The naming
+family is a Norwegian farm — `smia` the forge, `stabbur` the storehouse.
 
-The cut lines are chosen by **blast radius and change cadence**, not by domain
-tidiness:
+## Repos (6)
 
-- The **device-facing contract is effectively frozen** (the phone is hard to
-  update, and a broken sync loses study progress). It must not share a process
-  with code you iterate on daily.
-- **Bundle building is a job, not a request** (parses/reassembles a 6 MB bundle,
-  may synthesize audio; 30–60 s). It must not run inside a web request.
-- **Linguistics providers are shared** by two different clients (lexis triage and
-  the browser extension) and are rate-limited/expensive → one cached service.
-- **phonexa has frozen parts** (`/stream`, `js/realtime.js`) and a 92 KB
-  `formanter.py`. New domains must not be added to that file.
+| repo | contains | depends on |
+|---|---|---|
+| **tun** | `compose.yaml`, Caddyfile, backup scripts, **ecosystem docs (this directory)**, shared UI shell | — |
+| **mjolnir** | `docs/findings.md`, `tool/`, `patches/js/`, `patches/native/`, `apk/`, `builder/`, `hub/` | stabbur |
+| **stabbur** | captures, items, enrichment orchestration, triage UI, audio blobs | smia |
+| **smia** | `/inflect` `/ipa` `/tts` `/stt` `/translate`, provider chains, `/ui` | nothing |
+| **phonexa** | phonetics lab (unchanged) | smia (optional), stabbur (optional import) |
+| **hover-translate** | capture client (fork, store releases) | stabbur, smia |
 
-## Service list
+`mjolnir` is **self-contained for everything Mjølnir**: bundle format knowledge,
+the JS patch set, the native patch source, the APK rebuild pipeline, the builder
+and the device-facing hub. It is not coupled to phonexa.
 
-| Service | Faces | Contains | Change cadence |
-|---|---|---|---|
-| **mjolnir-hub** | the phone | `/ota/current.json`, bundle+manifest serving, `/mjolnir/userdata`, device heartbeat | frozen protocol, rare |
-| **lexis** | your browser + extension | capture intake, triage UI, items, decks, publish trigger, device status panel | constant |
-| **smia** | lexis + extension | `/inflect`, `/ipa`, `/tts`, `/stt`, `/translate` + provider-health UI | occasional |
-| **builder** | nothing (worker) | polls `build_jobs`, runs bundle-tool as a library, emits bundle + audio manifest | occasional |
-| **phonexa** | your browser | existing phonetics lab, unchanged | rare |
-| **postgres** | internal | all schemas | — |
-| **caddy** (or nginx) | internet | TLS, routing, **static serving of bundles and blobs** | — |
+`findings.md` lives in `mjolnir`. Cross-repo design (this directory) lives in
+`tun`, which is also the "where do I start" entry point.
 
-### Recommended packaging for v1
-
-Run **phonexa + lexis in one container** (separate Flask blueprint, separate
-schema, separate module tree `lexis/` — never inside `formanter.py`). Keep
-**mjolnir-hub separate**. That preserves the one separation that actually
-matters (device-facing vs everything else) while keeping ops small. Split lexis
-out later if it grows.
-
-So: `caddy`, `phonexa+lexis`, `smia`, `mjolnir-hub`, `builder`, `postgres` — six
-containers.
-
-### What "builder" means
-
-A plain background process with no web interface. Pressing **Publish** in lexis
-writes a row into `build_jobs`; the builder notices it, does the work, writes
-status/progress back; the web page polls and shows it. Exactly the CI-job
-pattern. No Redis/Celery needed for a single user — table polling is enough.
-
-### What caddy/nginx is for
-
-1. **TLS** — one certificate for the whole domain (Caddy does this automatically).
-2. **Routing** — `/lexis/*` → lexis, `/ota/*` → hub, `/smia/*` → smia.
-3. **Static serving** — the 6 MB bundle and thousands of small mp3s are served
-   straight off disk. Python is bad at shoving bytes; a web server is built for
-   it. Blobs are immutable and content-addressed, so they get
-   `Cache-Control: immutable` and are never revalidated.
-
-Caddy is the better choice here purely because HTTPS is automatic.
-
-## Database layout (one Postgres, several schemas)
+## Dependency graph
 
 ```
-phonetics : languages, vowels, consonants, samples, tokens,
-            sample_analyses, shadowing_media, shadowing_segments, users, settings
-lexis     : captures, items, grammar_rules, decks, card_slots,
-            publications, build_jobs
-hub       : userdata, userdata_history, device_state
-smia      : lookup_cache, provider_health
-shared    : blobs(sha256 pk, bytes_len, mime, kind, created_at)
+hover-translate ──capture──► stabbur ──enrich──► smia        (smia depends on nothing)
+                                 ▲
+                                 │ pull: GET /api/items?status=ready&since=…
+                                 │       + blobs by sha256
+                            mjolnir/hub ──OTA + sync──► device
+                            mjolnir/builder
+
+phonexa ──► smia (optional)        phonexa ◄── stabbur blob import (optional, by hash)
 ```
 
-## Blob store
+One-directional. stabbur does not know hub exists. smia is a leaf.
 
-**Decision: migrate all audio to content-addressed blobs.**
+## Division of knowledge
 
-Today phonexa stores sample audio on disk with `Sample.url = "file://<storage_key>"`.
-That indirection already exists, so the migration is swapping `storage_key` for
-`sha256`. Benefits that pay for it:
+| | stabbur | mjolnir/hub |
+|---|---|---|
+| knows | text, translations, context, audio, pos, inflections, transcription, kind (`word`/`phrase`/`sentence`/`grammar-rule`), status | `card_slots` (permanent 6-char ids), deck assignment C20–C29, card types a–e, projection to N/E/X/A, occurrences, lag-11 interleave, bundle assembly, audio manifest, device sync |
+| does NOT know | decks, card ids, occurrences, N/E/X/A, anything Mjølnir | how content was captured or enriched |
 
-- automatic dedup (same clip captured twice = one file)
-- immutable URLs → `Cache-Control: immutable`, no invalidation logic anywhere
-- **the device's audio cache diff becomes trivial**: compare the manifest's
-  hashes against the filenames present on disk
-- re-cutting one clip cannot invalidate any other clip
-- backups are append-only and incrementally syncable
+stabbur would survive switching to a different SRS app entirely.
 
-One store serves: phonexa samples, capture clips, TTS output, and Mjølnir
-device audio. Needs refcounting or periodic GC (see `08-pitfalls.md` #20).
+## Audio
 
-## Hosting sizing (Strato)
+**stabbur owns the canonical learning audio**; content-addressing is a
+*convention*, not a central blob service.
 
-Whisper is dropped (cloud STT only), which removes the heaviest component.
+```
+smia     stateless — /tts returns BYTES. Private cache only.
+stabbur  canonical: capture clips (wide + trimmed), TTS/Forvo results. blob/<sha256>
+hub      per-build SNAPSHOT of exactly what the device needs
+phonexa  its own sample audio (bound to Sample/Token/analysis); may import by hash
+```
 
-| Component | RAM |
-|---|---|
-| Postgres | 256–512 MB |
-| phonexa + lexis (numpy/parselmouth in flight) | 300–500 MB |
-| smia | ~100 MB |
-| mjolnir-hub | ~80 MB |
-| builder (peaks while parsing/reassembling a 6 MB bundle) | 500 MB – 1 GB |
-| ffmpeg slicing (brief spikes) | 100–200 MB |
-| caddy | ~20 MB |
+A central blob service would make studying depend on stabbur being up. The
+snapshot removes that. Duplication costs ~30 KB per clip — nothing against 100 GB.
+The hash being the filename makes every transfer self-verifying.
 
-**Floor: 2 vCPU / 4 GB RAM / 80 GB SSD. Comfortable: 4 vCPU / 8 GB.**
-Disk drivers: Norsk ordbank import (~1 GB with indexes), audio blobs (grows
-with use, 1–5 GB over years), kept bundles (~6 MB × 10). Must be a VPS/root
-server — shared hosting cannot run Docker.
+## UI
+
+Every service ships its own UI with database exploration, in phonexa's spirit.
+Served under **one domain by path** — `/stabbur`, `/smia`, `/mjolnir`, `/phonexa` —
+with a shared header/nav so four UIs feel like one system. The shell is vendored
+CSS, not a shared package (solo-dev simplicity over DRY).
+
+## Deployment
+
+One Contabo VPS: **8 GB RAM, 100 GB disk** (comfortably above the 4 GB floor).
+
+```
+caddy           TLS, path routing, STATIC serving of bundles and blobs
+postgres        separate logical DB per service — NO cross-service FKs
+stabbur         web + API
+smia            web + API
+phonexa         web + API (existing; /stream and js/realtime.js FROZEN)
+mjolnir-hub     device-facing: /ota, /mjolnir/userdata, heartbeat
+mjolnir-builder worker: polls build_jobs → bundle + audio manifest
+```
+
+Rough RAM: postgres 256–512 MB · phonexa 300–500 MB · stabbur ~150 MB ·
+smia ~100 MB · hub ~80 MB · builder 500 MB–1 GB while assembling · caddy ~20 MB.
+Disk: ordbank import ~1 GB, audio blobs 1–5 GB over years, kept bundles ~6 MB × 10.
+
+**Separate databases, not schemas** — it is what makes service independence
+structural rather than nominal.
+
+### What `builder` is
+
+A background process with no web interface. Building a bundle takes 30–60 s
+(parse 6 MB, inject cards, reassemble, hash, gather audio). Publishing writes a
+row to `build_jobs`; the builder picks it up and writes status back; the UI polls.
+The CI-job pattern. No Redis/Celery for a single user.
+
+### What `caddy` is for
+
+TLS (automatic), path routing, and serving the 6 MB bundles and thousands of
+small mp3s straight off disk. Python should never be in the path of those bytes.
+Blobs are immutable and content-addressed → `Cache-Control: immutable`.

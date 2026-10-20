@@ -159,7 +159,7 @@ payload rather than a separate call:
 { activeBuildId, pendingBuildId, audioCached, audioTotal, lastFetchError, bootOk }
 ```
 
-lexis renders this as a device panel. **Version selection is a server-side
+hub renders this as a device panel. **Version selection is a server-side
 control**: `/ota/current.json` points wherever you tell it. That gives you
 rollback from your laptop instead of needing the phone — strictly better than an
 in-app picker, and it respects the "no new Mjølnir views" constraint.

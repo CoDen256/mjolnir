@@ -9,7 +9,7 @@ Date of this batch: **2026-10-20**.
 | # | Decision | Why | Status |
 |---|---|---|---|
 | D01 | Host publicly on Strato; auth is a long random shared token, not an identity system | Single user; the phone must reach the server from anywhere | accepted |
-| D02 | Drop Anki entirely; no migration | phonexa/lexis replaces it; nothing worth migrating | accepted |
+| D02 | Drop Anki entirely; no migration | phonexa/stabbur replaces it; nothing worth migrating | accepted |
 | D03 | New cards ship by **regenerating the whole bundle**, not by runtime card fetching | The deck/card modules are read synchronously at import; making them async has unknown blast radius inside a reverse-engineered bundle. Regeneration is a build-step problem, already solved by bundle-tool | accepted |
 | D04 | **One APK build, forever.** The native patch does the smallest possible job | Native is frozen and unfixable after shipping; JS is redeployable. Anything that could need a bug fix must live in JS | accepted |
 | D05 | Audio download/cache/playback is a **pure JS patch** — no native work | Verified: `ExponentFileSystem` is already registered in the APK and reachable from the bundle; `playUrl` → `MediaPlayer.setDataSource(Context, Uri)` accepts `file://` | accepted |
@@ -22,11 +22,24 @@ Date of this batch: **2026-10-20**.
 | D12 | Device identity is a locally-generated **device id**; no accounts | Single user, no sign-in wall exists, nothing needs identity | accepted |
 | D13 | **No new UI inside Mjølnir** | Patching app screens is the highest-risk, least-rebasable work | accepted |
 | D14 | Recall progress and pronunciation progress stay **unlinked** | Explicit scope decision; revisit later if desired | accepted |
-| D15 | Services: `mjolnir-hub` separate from everything else; `lexis` as a blueprint beside phonexa; `smia` separate; `builder` as a worker | Cut by blast radius and change cadence: the device-facing contract must stay up and stable while lexis churns daily | accepted |
+| D15 | Services: `mjolnir-hub` separate from everything else; `stabbur` as a blueprint beside phonexa; `smia` separate; `builder` as a worker | Cut by blast radius and change cadence: the device-facing contract must stay up and stable while stabbur churns daily | accepted |
 | D16 | Extract **smia** — one service for inflect / ipa / tts / stt / translate | All five share a shape (providers + fallback + cache); removes duplication from hover-translate and phonexa | accepted |
 | D17 | Drop self-hosted Whisper; **cloud STT only**, interface left open | Too heavy for the box | accepted |
 | D18 | Five fixed card types (a word, b expression, c listening, d pronunciation, e grammar) with computed `A` and occurrence lists | Projection stays pure; all five shapes are attested in stock data | accepted |
 | D19 | One deck per type / part-of-speech | Decks are Mjølnir's pacing unit (`MaxInterval`, `AutoTickStreak`, `AutoHammerCount`) | accepted |
+| D35 | Hosting: **Contabo VPS, 8 GB RAM, 100 GB disk** (2026-10-20) | Above the 4 GB floor; Docker-capable | accepted |
+| D36 | ~~Services grouped with phonexa as the server monorepo~~ | — | **SUPERSEDED by D37** |
+| D37 | **Mjølnir is a self-contained repo**: tool + JS patches + native patch source + apk pipeline + builder + hub + findings. Zero phonexa dependency | Everything that only exists to serve the device shares one body of knowledge (the bundle format). Coupling it to phonexa mixes two unrelated change cadences | accepted |
+| D38 | ~~content owns `card_slots`; contract is a JSON build payload~~ | — | **SUPERSEDED by D43** |
+| D41 | The ecosystem is named **Tun** (the farmyard — the shared centre every building faces). Services: **smia** (forge/linguistics), **stabbur** (storehouse/content), **mjolnir**, **phonexa** | A coherent metaphor family aids recall for a solo dev holding a large system | accepted |
+| D42 | **Six repos**: `tun` (deployment + ecosystem docs + shared UI shell), `mjolnir` (tool + patches + native + apk + builder + hub + findings), `stabbur`, `smia`, `phonexa`, `hover-translate`. Separate logical databases per service; **no cross-service FKs** | Independence must be structural, not nominal. `tun` is the entry point and the home for cross-repo docs; `findings.md` stays with mjolnir | accepted |
+| D43 | **stabbur is Mjølnir-independent.** It knows text/translations/context/audio/pos/inflections/transcription/kind/status. **hub** owns `card_slots` (permanent ids), deck assignment, card types a–e, projection to N/E/X/A, interleave | The card ledger belongs to whoever knows the format. stabbur survives switching SRS apps entirely | accepted |
+| D44 | hub **pulls** from stabbur (`GET /api/items?status=ready&since=…`); stabbur does not know hub exists | One-directional dependency | accepted |
+| D45 | **Audio: stabbur owns the canonical learning audio** (capture clips, TTS/Forvo results). smia is stateless and returns bytes. hub keeps a **per-build snapshot** of exactly what the device needs. phonexa keeps its own sample audio and may import by hash | Content-addressing is a *convention*, not a central service — a central blob service would make studying depend on stabbur being up. Duplication costs ~30 KB/clip, i.e. nothing | accepted |
+| D46 | Every service ships its own UI with database exploration, served under one domain by path with a shared header/nav (vendored CSS, not a package) | Four UIs must feel like one system | accepted |
+| D47 | Bundle validation uses **sha256 over TLS**, not signing | Adequate for a single user on their own VPS; signing is unfixable-later complexity for a threat model that does not apply | accepted |
+| D39 | Native patch reads `ota-config.json` (url + token) from `documentDirectory` if present, else baked-in defaults | The server URL and token would otherwise be frozen forever; a domain or token change would require a reinstall. Makes the only truly irreversible choice reversible | accepted |
+| D40 | Sequence starts with the **native patch**, not the cold-start measurement | The native patch does not depend on the cold-start answer, and once OTA works, testing a padded bundle is a file copy instead of an APK rebuild | accepted |
 | D20 | ~~Custom decks use a new `P` category with a UI patch~~ | — | **SUPERSEDED by D21** |
 | D21 | Custom decks continue the **`C` category, `C20`–`C29`** | The `P` patch needs 2 extra `useState` pairs, 5th cases in two switches, section headers, scroll offsets and the approach selector, all inside mod 2119 — the largest, most rebase-fragile UI module. Not worth it for a cosmetic grouping | accepted |
 | D22 | Card IDs are **exactly 6 chars**, minted at publish, **permanent**, never reused | Hard-coded `slice(0,6)` in mods 2110/2112/2124/2131; SRS progress records point at them | forced |

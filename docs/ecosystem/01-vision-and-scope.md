@@ -26,7 +26,7 @@ Everything else is an extension of this loop.
 ## The five modules
 
 ```
-hover-translate ──capture──► lexis ──publish──► mjolnir-hub ──OTA──► Mjølnir
+hover-translate ──capture──► stabbur ──publish──► mjolnir-hub ──OTA──► Mjølnir
    (capture)                 (triage,            (device-facing)      (device)
                               decks, publish)
                                  │
@@ -38,7 +38,7 @@ hover-translate ──capture──► lexis ──publish──► mjolnir-hub 
 ## Scope boundaries (deliberate)
 
 - **No new UI inside Mjølnir.** The app's screens stay as-is. All authoring and
-  browsing happens in phonexa/lexis or the extension.
+  browsing happens in phonexa/stabbur or the extension.
 - **No Firebase.** Progress backup goes to our own server, mirroring the
   Firestore document shape so the app-side change stays minimal.
 - **No link between recall progress and pronunciation progress.** Mjølnir card

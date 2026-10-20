@@ -1,4 +1,6 @@
-# Norwegian learning ecosystem — documentation index
+# Tun — Norwegian learning ecosystem
+
+*Tun: the farmyard — the shared centre every building faces.*
 
 **Start here.** This directory is the single source of truth for the cross-repo
 ecosystem (phonexa + mjølnir/bundle-tool + hover-translate + new services).
@@ -26,17 +28,23 @@ and editable by you.
 | `09-open-questions.md` | Unresolved, with enough context to resume | When picking up again |
 | `10-roadmap.md` | Phases, ordering, what to do first | Deciding what to work on |
 
-Mjølnir app internals (reverse-engineering findings) live one level up in
-`../mjolnir-findings.md` — that is the authority on how the stock app behaves.
+Mjølnir app internals (reverse-engineering findings) live in the **mjolnir**
+repo as `docs/findings.md` (today: `bundle-tool/docs/mjolnir-findings.md`) — that is the authority on how the stock app behaves.
 
 ## Related repos
 
 | Repo | Role |
 |---|---|
-| `/home/coden/dev/bundle-tool` | Mjølnir bundle analysis/patching + these docs |
-| `/home/coden/dev/phonexa` | Phonetics lab (Flask + Postgres); future home of lexis |
-| `/home/coden/dev/hover-translate` | Chrome/Firefox/Edge MV3 capture client |
-| `/home/coden/rev/mjolnir/0306.orig/orig` | Decompiled APK, smali, rebuild pipeline |
+| `tun` | deployment (compose, Caddy, backups), **these docs**, shared UI shell |
+| `mjolnir` | `docs/findings.md`, tool, JS + native patches, apk pipeline, builder, hub |
+| `stabbur` | captures, items, enrichment, triage UI, audio blobs |
+| `smia` | linguistics providers (inflect / ipa / tts / stt / translate) |
+| `phonexa` | phonetics lab (existing) |
+| `hover-translate` | capture client (existing fork) |
+
+**Repo moves are pending** — today everything still sits in
+`/home/coden/dev/bundle-tool`, `/home/coden/dev/phonexa`,
+`/home/coden/dev/hover-translate` and `/home/coden/rev/mjolnir/`.
 
 ## Status
 

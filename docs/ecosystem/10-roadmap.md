@@ -67,7 +67,7 @@ After this: **every future change is a file on the server.**
 
 ## P4 — Content spine *(first visible payoff)*
 
-- [ ] `lexis` schema: items, decks, `card_slots`, publications, `build_jobs`
+- [ ] `stabbur` schema: items, decks, `card_slots`, publications, `build_jobs`
 - [ ] Projector: item → `{N,E,X,D,A}` + occurrences, per the five types
 - [ ] Interleaver: append-only, min lag 11
 - [ ] `builder` worker invoking bundle-tool as a library
@@ -80,7 +80,7 @@ After this: **every future change is a file on the server.**
 - [ ] Firestore shim (optimistic local doc, flush queue, Timestamp revival,
       create-on-first-use)
 - [ ] Swap the handle in mod 2080; strip `getIdToken` / `currentUser` guards
-- [ ] Device status piggybacked on the sync PATCH; status panel in lexis
+- [ ] Device status piggybacked on the sync PATCH; status panel in stabbur
 - [ ] Restore hook (write `persist:primary` pre-rehydration)
 
 ## P6 — smia
