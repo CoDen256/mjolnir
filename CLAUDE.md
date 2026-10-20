@@ -1,15 +1,26 @@
 # CLAUDE.md
 
-## Norwegian learning ecosystem
+## mjolnir — part of the Tun ecosystem
 
-This repo is one module of a cross-repo ecosystem (phonexa + mjølnir/bundle-tool
-+ hover-translate + new services smia/lexis/mjolnir-hub).
+This repo owns **everything that knows the Mjølnir bundle format or talks to the
+device**: the bundle tool, the JS patch set, the native patch source, the APK
+rebuild pipeline, the builder, and the device-facing hub.
 
-**All ecosystem design, decisions, pitfalls and the roadmap live in
-`/home/coden/dev/bundle-tool/docs/ecosystem/` — start at `README.md`.**
-Mjølnir app internals: `/home/coden/dev/bundle-tool/docs/mjolnir-findings.md`.
+Sibling repos: `tun` (deployment + ecosystem docs), `stabbur` (learning content),
+`smia` (linguistics), `phonexa` (phonetics lab), `hover-translate` (capture client).
 
-Do not re-derive those decisions; read `07-decisions.md` first.
+**Cross-repo design, decisions, pitfalls and the roadmap live in
+`/home/coden/dev/tun/docs/` — start at `README.md`, then `07-decisions.md`.**
+Do not re-derive settled decisions.
 
-See `docs/mjolnir-findings.md` for the reverse-engineering record and
-`openspec/` for specs of this tool.
+**Mjølnir app internals (reverse-engineering record): `docs/findings.md`.**
+Its §2 and §6 contain two errors corrected in the appended "Corrections"
+section — always read that section.
+
+`openspec/` holds specs for the bundle tool itself.
+
+## Note on naming
+
+The directory is `mjolnir`, but the npm package, the CLI binary
+(`bin/bundle-tool.js`) and the GitHub remote are still called `bundle-tool`.
+That is deliberate — the tool keeps its own name; only the repo was regrouped.
