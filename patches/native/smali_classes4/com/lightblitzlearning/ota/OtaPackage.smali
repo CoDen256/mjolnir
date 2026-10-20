@@ -202,7 +202,7 @@
 .method private static bundleId(Ljava/lang/String;)Ljava/lang/String;
     .registers 5
 
-    .line 519
+    .line 526
     const-string v0, "bundle-"
 
     invoke-virtual {p0, v0}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
@@ -223,7 +223,7 @@
 
     goto :goto_2b
 
-    .line 520
+    .line 527
     :cond_12
     invoke-virtual {v0}, Ljava/lang/String;->length()I
 
@@ -243,7 +243,7 @@
 
     move-result-object p0
 
-    .line 521
+    .line 528
     invoke-static {p0}, Lcom/lightblitzlearning/ota/OtaPackage;->validId(Ljava/lang/String;)Z
 
     move-result v0
@@ -255,7 +255,7 @@
     :cond_2a
     return-object v2
 
-    .line 519
+    .line 526
     :cond_2b
     :goto_2b
     return-object v2
@@ -264,23 +264,23 @@
 .method private static closeQuietly(Ljava/io/Closeable;)V
     .registers 1
 
-    .line 640
+    .line 647
     if-eqz p0, :cond_7
 
-    .line 642
+    .line 649
     :try_start_2
     invoke-interface {p0}, Ljava/io/Closeable;->close()V
     :try_end_5
     .catch Ljava/io/IOException; {:try_start_2 .. :try_end_5} :catch_6
 
-    .line 645
+    .line 652
     goto :goto_7
 
-    .line 643
+    .line 650
     :catch_6
     move-exception p0
 
-    .line 647
+    .line 654
     :cond_7
     :goto_7
     return-void
@@ -370,10 +370,10 @@
 .method private static countAttempts(Ljava/io/File;Ljava/lang/String;)I
     .registers 6
 
-    .line 556
+    .line 563
     const/4 v0, 0x0
 
-    .line 557
+    .line 564
     :goto_1
     new-instance v1, Ljava/io/File;
 
@@ -419,7 +419,7 @@
 
     goto :goto_1
 
-    .line 558
+    .line 565
     :cond_2d
     return v0
 .end method
@@ -427,10 +427,10 @@
 .method private static deleteAttempts(Ljava/io/File;Ljava/lang/String;)V
     .registers 6
 
-    .line 562
+    .line 569
     const/4 v0, 0x1
 
-    .line 564
+    .line 571
     :goto_1
     new-instance v1, Ljava/io/File;
 
@@ -470,15 +470,15 @@
 
     if-eqz v2, :cond_2f
 
-    .line 565
+    .line 572
     invoke-virtual {v1}, Ljava/io/File;->delete()Z
 
-    .line 566
+    .line 573
     add-int/lit8 v0, v0, 0x1
 
     goto :goto_1
 
-    .line 568
+    .line 575
     :cond_2f
     return-void
 .end method
@@ -486,7 +486,7 @@
 .method private download(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/io/File;Ljava/io/File;J)Z
     .registers 29
 
-    .line 358
+    .line 365
     move-object/from16 v1, p0
 
     move-object/from16 v0, p6
@@ -508,19 +508,19 @@
     :try_end_11
     .catch Ljava/lang/Exception; {:try_start_b .. :try_end_11} :catch_174
 
-    .line 361
+    .line 368
     nop
 
-    .line 362
+    .line 369
     nop
 
-    .line 363
+    .line 370
     nop
 
-    .line 364
+    .line 371
     nop
 
-    .line 366
+    .line 373
     const/4 v8, 0x0
 
     move-object/from16 v9, p1
@@ -535,25 +535,25 @@
     .catch Ljava/io/IOException; {:try_start_1a .. :try_end_1e} :catch_163
     .catchall {:try_start_1a .. :try_end_1e} :catchall_153
 
-    .line 367
+    .line 374
     if-nez v9, :cond_2c
 
-    .line 396
+    .line 403
     invoke-static {v8}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v8}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz v9, :cond_2b
 
     invoke-virtual {v9}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 367
+    .line 374
     :cond_2b
     return v6
 
-    .line 368
+    .line 375
     :cond_2c
     :try_start_2c
     invoke-virtual {v9}, Ljava/net/HttpURLConnection;->getInputStream()Ljava/io/InputStream;
@@ -563,7 +563,7 @@
     .catch Ljava/io/IOException; {:try_start_2c .. :try_end_30} :catch_14a
     .catchall {:try_start_2c .. :try_end_30} :catchall_141
 
-    .line 369
+    .line 376
     :try_start_30
     new-instance v11, Ljava/io/FileOutputStream;
 
@@ -572,16 +572,16 @@
     .catch Ljava/io/IOException; {:try_start_30 .. :try_end_35} :catch_13b
     .catchall {:try_start_30 .. :try_end_35} :catchall_135
 
-    .line 370
+    .line 377
     const/16 v12, 0x2000
 
     :try_start_37
     new-array v12, v12, [B
 
-    .line 371
+    .line 378
     const-wide/16 v13, 0x0
 
-    .line 373
+    .line 380
     :goto_3b
     invoke-virtual {v10, v12}, Ljava/io/InputStream;->read([B)I
 
@@ -589,7 +589,7 @@
 
     if-ltz v15, :cond_76
 
-    .line 374
+    .line 381
     invoke-static {}, Ljava/lang/System;->currentTimeMillis()J
 
     move-result-wide v16
@@ -601,22 +601,22 @@
 
     if-lez v16, :cond_55
 
-    .line 396
+    .line 403
     invoke-static {v11}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz v9, :cond_54
 
     invoke-virtual {v9}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 374
+    .line 381
     :cond_54
     return v6
 
-    .line 375
+    .line 382
     :cond_55
     move-object/from16 v16, v8
 
@@ -626,32 +626,32 @@
 
     add-long/2addr v13, v8
 
-    .line 376
+    .line 383
     cmp-long v8, v13, p4
 
     if-lez v8, :cond_6b
 
-    .line 396
+    .line 403
     invoke-static {v11}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz p1, :cond_6a
 
     invoke-virtual/range {p1 .. p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 376
+    .line 383
     :cond_6a
     return v6
 
-    .line 377
+    .line 384
     :cond_6b
     :try_start_6b
     invoke-virtual {v11, v12, v6, v15}, Ljava/io/OutputStream;->write([BII)V
 
-    .line 378
+    .line 385
     invoke-virtual {v7, v12, v6, v15}, Ljava/security/MessageDigest;->update([BII)V
 
     move-object/from16 v9, p1
@@ -660,7 +660,7 @@
 
     goto :goto_3b
 
-    .line 380
+    .line 387
     :cond_76
     move-object/from16 v16, v8
 
@@ -668,36 +668,36 @@
 
     invoke-virtual {v11}, Ljava/io/OutputStream;->flush()V
 
-    .line 381
+    .line 388
     invoke-static {v11}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
     :try_end_80
     .catch Ljava/io/IOException; {:try_start_6b .. :try_end_80} :catch_125
     .catchall {:try_start_6b .. :try_end_80} :catchall_123
 
-    .line 382
+    .line 389
     nop
 
-    .line 384
+    .line 391
     cmp-long v4, v13, p4
 
     if-eqz v4, :cond_91
 
-    .line 396
+    .line 403
     invoke-static/range {v16 .. v16}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz p1, :cond_90
 
     invoke-virtual/range {p1 .. p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 384
+    .line 391
     :cond_90
     return v6
 
-    .line 385
+    .line 392
     :cond_91
     :try_start_91
     invoke-virtual {v2}, Ljava/io/File;->length()J
@@ -711,22 +711,22 @@
 
     if-eqz v4, :cond_a5
 
-    .line 396
+    .line 403
     invoke-static/range {v16 .. v16}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz p1, :cond_a4
 
     invoke-virtual/range {p1 .. p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 385
+    .line 392
     :cond_a4
     return v6
 
-    .line 386
+    .line 393
     :cond_a5
     :try_start_a5
     invoke-virtual {v7}, Ljava/security/MessageDigest;->digest()[B
@@ -748,22 +748,22 @@
 
     if-nez v4, :cond_c1
 
-    .line 396
+    .line 403
     invoke-static/range {v16 .. v16}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz p1, :cond_c0
 
     invoke-virtual/range {p1 .. p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 386
+    .line 393
     :cond_c0
     return v6
 
-    .line 387
+    .line 394
     :cond_c1
     :try_start_c1
     invoke-direct {v1, v2}, Lcom/lightblitzlearning/ota/OtaPackage;->activationOk(Ljava/io/File;)Z
@@ -775,22 +775,22 @@
 
     if-nez v4, :cond_d3
 
-    .line 396
+    .line 403
     invoke-static/range {v16 .. v16}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz p1, :cond_d2
 
     invoke-virtual/range {p1 .. p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 387
+    .line 394
     :cond_d2
     return v6
 
-    .line 389
+    .line 396
     :cond_d3
     :try_start_d3
     new-instance v4, Ljava/io/File;
@@ -821,7 +821,7 @@
 
     invoke-direct {v4, v3, v5}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
 
-    .line 390
+    .line 397
     invoke-virtual {v2, v4}, Ljava/io/File;->renameTo(Ljava/io/File;)Z
 
     move-result v2
@@ -831,22 +831,22 @@
 
     if-nez v2, :cond_103
 
-    .line 396
+    .line 403
     invoke-static/range {v16 .. v16}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz p1, :cond_102
 
     invoke-virtual/range {p1 .. p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 390
+    .line 397
     :cond_102
     return v6
 
-    .line 391
+    .line 398
     :cond_103
     :try_start_103
     new-instance v2, Ljava/io/File;
@@ -860,27 +860,27 @@
     .catch Ljava/io/IOException; {:try_start_103 .. :try_end_10d} :catch_11f
     .catchall {:try_start_103 .. :try_end_10d} :catchall_11b
 
-    .line 392
+    .line 399
     nop
 
-    .line 396
+    .line 403
     invoke-static/range {v16 .. v16}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz p1, :cond_119
 
     invoke-virtual/range {p1 .. p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 392
+    .line 399
     :cond_119
     const/4 v0, 0x1
 
     return v0
 
-    .line 396
+    .line 403
     :catchall_11b
     move-exception v0
 
@@ -888,7 +888,7 @@
 
     goto :goto_147
 
-    .line 393
+    .line 400
     :catch_11f
     move-exception v0
 
@@ -896,19 +896,19 @@
 
     goto :goto_150
 
-    .line 396
+    .line 403
     :catchall_123
     move-exception v0
 
     goto :goto_12a
 
-    .line 393
+    .line 400
     :catch_125
     move-exception v0
 
     goto :goto_131
 
-    .line 396
+    .line 403
     :catchall_127
     move-exception v0
 
@@ -921,7 +921,7 @@
 
     goto :goto_157
 
-    .line 393
+    .line 400
     :catch_12e
     move-exception v0
 
@@ -934,7 +934,7 @@
 
     goto :goto_167
 
-    .line 396
+    .line 403
     :catchall_135
     move-exception v0
 
@@ -944,7 +944,7 @@
 
     goto :goto_147
 
-    .line 393
+    .line 400
     :catch_13b
     move-exception v0
 
@@ -954,7 +954,7 @@
 
     goto :goto_150
 
-    .line 396
+    .line 403
     :catchall_141
     move-exception v0
 
@@ -969,7 +969,7 @@
 
     goto :goto_157
 
-    .line 393
+    .line 400
     :catch_14a
     move-exception v0
 
@@ -984,7 +984,7 @@
 
     goto :goto_167
 
-    .line 396
+    .line 403
     :catchall_153
     move-exception v0
 
@@ -995,19 +995,19 @@
     :goto_157
     invoke-static {v8}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz v16, :cond_162
 
     invoke-virtual/range {v16 .. v16}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 399
+    .line 406
     :cond_162
     throw v0
 
-    .line 393
+    .line 400
     :catch_163
     move-exception v0
 
@@ -1015,37 +1015,37 @@
 
     move-object v10, v8
 
-    .line 394
+    .line 401
     :goto_167
     nop
 
-    .line 396
+    .line 403
     invoke-static {v8}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 397
+    .line 404
     invoke-static {v10}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 398
+    .line 405
     if-eqz v16, :cond_173
 
     invoke-virtual/range {v16 .. v16}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 394
+    .line 401
     :cond_173
     return v6
 
-    .line 359
+    .line 366
     :catch_174
     move-exception v0
 
-    .line 360
+    .line 367
     return v6
 .end method
 
 .method private gc(Ljava/io/File;)V
     .registers 18
 
-    .line 472
+    .line 479
     move-object/from16 v0, p0
 
     move-object/from16 v1, p1
@@ -1054,18 +1054,18 @@
 
     move-result-object v2
 
-    .line 473
+    .line 480
     if-nez v2, :cond_b
 
     return-void
 
-    .line 475
+    .line 482
     :cond_b
     new-instance v3, Ljava/util/HashSet;
 
     invoke-direct {v3}, Ljava/util/HashSet;-><init>()V
 
-    .line 476
+    .line 483
     new-instance v4, Ljava/io/File;
 
     const-string v5, "active"
@@ -1076,7 +1076,7 @@
 
     move-result-object v4
 
-    .line 477
+    .line 484
     new-instance v5, Ljava/io/File;
 
     const-string v6, "pending"
@@ -1087,25 +1087,25 @@
 
     move-result-object v5
 
-    .line 478
+    .line 485
     if-eqz v4, :cond_2b
 
     invoke-interface {v3, v4}, Ljava/util/Set;->add(Ljava/lang/Object;)Z
 
-    .line 479
+    .line 486
     :cond_2b
     if-eqz v5, :cond_30
 
     invoke-interface {v3, v5}, Ljava/util/Set;->add(Ljava/lang/Object;)Z
 
-    .line 482
+    .line 489
     :cond_30
     nop
 
-    .line 483
+    .line 490
     nop
 
-    .line 484
+    .line 491
     array-length v4, v2
 
     const-wide/high16 v6, -0x8000000000000000L
@@ -1127,7 +1127,7 @@
 
     aget-object v14, v2, v12
 
-    .line 485
+    .line 492
     invoke-virtual {v14}, Ljava/io/File;->getName()Ljava/lang/String;
 
     move-result-object v15
@@ -1136,12 +1136,12 @@
 
     move-result-object v15
 
-    .line 486
+    .line 493
     if-nez v15, :cond_4b
 
     goto :goto_7c
 
-    .line 487
+    .line 494
     :cond_4b
     new-instance v5, Ljava/io/File;
 
@@ -1171,21 +1171,21 @@
 
     goto :goto_7c
 
-    .line 488
+    .line 495
     :cond_68
     invoke-virtual {v14}, Ljava/io/File;->lastModified()J
 
     move-result-wide v13
 
-    .line 489
+    .line 496
     cmp-long v0, v13, v6
 
     if-lez v0, :cond_76
 
-    .line 490
+    .line 497
     nop
 
-    .line 491
+    .line 498
     move-wide v8, v6
 
     move-object v11, v10
@@ -1196,18 +1196,18 @@
 
     goto :goto_7c
 
-    .line 492
+    .line 499
     :cond_76
     cmp-long v0, v13, v8
 
     if-lez v0, :cond_7c
 
-    .line 493
+    .line 500
     move-wide v8, v13
 
     move-object v11, v15
 
-    .line 484
+    .line 491
     :cond_7c
     :goto_7c
     add-int/lit8 v12, v12, 0x1
@@ -1216,19 +1216,19 @@
 
     goto :goto_3a
 
-    .line 496
+    .line 503
     :cond_81
     if-eqz v10, :cond_86
 
     invoke-interface {v3, v10}, Ljava/util/Set;->add(Ljava/lang/Object;)Z
 
-    .line 497
+    .line 504
     :cond_86
     if-eqz v11, :cond_8b
 
     invoke-interface {v3, v11}, Ljava/util/Set;->add(Ljava/lang/Object;)Z
 
-    .line 499
+    .line 506
     :cond_8b
     array-length v0, v2
 
@@ -1239,12 +1239,12 @@
 
     aget-object v4, v2, v5
 
-    .line 500
+    .line 507
     invoke-virtual {v4}, Ljava/io/File;->getName()Ljava/lang/String;
 
     move-result-object v6
 
-    .line 501
+    .line 508
     const-string v7, ".tmp"
 
     invoke-virtual {v6, v7}, Ljava/lang/String;->endsWith(Ljava/lang/String;)Z
@@ -1253,19 +1253,19 @@
 
     if-eqz v7, :cond_a1
 
-    .line 502
+    .line 509
     invoke-virtual {v4}, Ljava/io/File;->delete()Z
 
-    .line 503
+    .line 510
     goto :goto_e7
 
-    .line 505
+    .line 512
     :cond_a1
     invoke-static {v6}, Lcom/lightblitzlearning/ota/OtaPackage;->bundleId(Ljava/lang/String;)Ljava/lang/String;
 
     move-result-object v6
 
-    .line 506
+    .line 513
     if-eqz v6, :cond_e7
 
     invoke-interface {v3, v6}, Ljava/util/Set;->contains(Ljava/lang/Object;)Z
@@ -1274,10 +1274,10 @@
 
     if-nez v7, :cond_e7
 
-    .line 507
+    .line 514
     invoke-virtual {v4}, Ljava/io/File;->delete()Z
 
-    .line 508
+    .line 515
     new-instance v4, Ljava/io/File;
 
     new-instance v7, Ljava/lang/StringBuilder;
@@ -1300,7 +1300,7 @@
 
     invoke-virtual {v4}, Ljava/io/File;->delete()Z
 
-    .line 509
+    .line 516
     new-instance v4, Ljava/io/File;
 
     new-instance v7, Ljava/lang/StringBuilder;
@@ -1325,17 +1325,17 @@
 
     invoke-virtual {v4}, Ljava/io/File;->delete()Z
 
-    .line 510
+    .line 517
     invoke-static {v1, v6}, Lcom/lightblitzlearning/ota/OtaPackage;->deleteAttempts(Ljava/io/File;Ljava/lang/String;)V
 
-    .line 499
+    .line 506
     :cond_e7
     :goto_e7
     add-int/lit8 v5, v5, 0x1
 
     goto :goto_8d
 
-    .line 513
+    .line 520
     :cond_ea
     return-void
 .end method
@@ -1343,13 +1343,13 @@
 .method private httpGet(Ljava/lang/String;Ljava/lang/String;JI)[B
     .registers 14
 
-    .line 439
+    .line 446
     nop
 
-    .line 440
+    .line 447
     nop
 
-    .line 442
+    .line 449
     const/4 v0, 0x0
 
     :try_start_3
@@ -1360,22 +1360,22 @@
     .catch Ljava/io/IOException; {:try_start_3 .. :try_end_7} :catch_6a
     .catchall {:try_start_3 .. :try_end_7} :catchall_5f
 
-    .line 443
+    .line 450
     if-nez p1, :cond_12
 
-    .line 459
+    .line 466
     invoke-static {v0}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 460
+    .line 467
     if-eqz p1, :cond_11
 
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 443
+    .line 450
     :cond_11
     return-object v0
 
-    .line 444
+    .line 451
     :cond_12
     :try_start_12
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->getInputStream()Ljava/io/InputStream;
@@ -1385,23 +1385,23 @@
     .catch Ljava/io/IOException; {:try_start_12 .. :try_end_16} :catch_5c
     .catchall {:try_start_12 .. :try_end_16} :catchall_5a
 
-    .line 445
+    .line 452
     :try_start_16
     new-instance v1, Ljava/io/ByteArrayOutputStream;
 
     invoke-direct {v1}, Ljava/io/ByteArrayOutputStream;-><init>()V
 
-    .line 446
+    .line 453
     const/16 v2, 0x2000
 
     new-array v2, v2, [B
 
-    .line 447
+    .line 454
     const/4 v3, 0x0
 
     move v4, v3
 
-    .line 449
+    .line 456
     :goto_21
     invoke-virtual {p2, v2}, Ljava/io/InputStream;->read([B)I
 
@@ -1409,7 +1409,7 @@
 
     if-ltz v5, :cond_48
 
-    .line 450
+    .line 457
     invoke-static {}, Ljava/lang/System;->currentTimeMillis()J
 
     move-result-wide v6
@@ -1421,45 +1421,45 @@
 
     if-lez v6, :cond_38
 
-    .line 459
+    .line 466
     invoke-static {p2}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 460
+    .line 467
     if-eqz p1, :cond_37
 
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 450
+    .line 457
     :cond_37
     return-object v0
 
-    .line 451
+    .line 458
     :cond_38
     add-int/2addr v4, v5
 
-    .line 452
+    .line 459
     if-le v4, p5, :cond_44
 
-    .line 459
+    .line 466
     invoke-static {p2}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 460
+    .line 467
     if-eqz p1, :cond_43
 
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 452
+    .line 459
     :cond_43
     return-object v0
 
-    .line 453
+    .line 460
     :cond_44
     :try_start_44
     invoke-virtual {v1, v2, v3, v5}, Ljava/io/ByteArrayOutputStream;->write([BII)V
 
     goto :goto_21
 
-    .line 455
+    .line 462
     :cond_48
     invoke-virtual {v1}, Ljava/io/ByteArrayOutputStream;->toByteArray()[B
 
@@ -1468,19 +1468,19 @@
     .catch Ljava/io/IOException; {:try_start_44 .. :try_end_4c} :catch_58
     .catchall {:try_start_44 .. :try_end_4c} :catchall_55
 
-    .line 459
+    .line 466
     invoke-static {p2}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 460
+    .line 467
     if-eqz p1, :cond_54
 
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 455
+    .line 462
     :cond_54
     return-object p3
 
-    .line 459
+    .line 466
     :catchall_55
     move-exception p3
 
@@ -1488,19 +1488,19 @@
 
     goto :goto_61
 
-    .line 456
+    .line 463
     :catch_58
     move-exception p3
 
     goto :goto_6d
 
-    .line 459
+    .line 466
     :catchall_5a
     move-exception p3
 
     goto :goto_61
 
-    .line 456
+    .line 463
     :catch_5c
     move-exception p2
 
@@ -1508,7 +1508,7 @@
 
     goto :goto_6d
 
-    .line 459
+    .line 466
     :catchall_5f
     move-exception p3
 
@@ -1517,16 +1517,16 @@
     :goto_61
     invoke-static {v0}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 460
+    .line 467
     if-eqz p1, :cond_69
 
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 461
+    .line 468
     :cond_69
     throw p3
 
-    .line 456
+    .line 463
     :catch_6a
     move-exception p1
 
@@ -1534,19 +1534,19 @@
 
     move-object p2, p1
 
-    .line 457
+    .line 464
     :goto_6d
     nop
 
-    .line 459
+    .line 466
     invoke-static {p2}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 460
+    .line 467
     if-eqz p1, :cond_76
 
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 457
+    .line 464
     :cond_76
     return-object v0
 .end method
@@ -1554,7 +1554,7 @@
 .method private static isHex64(Ljava/lang/String;)Z
     .registers 6
 
-    .line 615
+    .line 622
     const/4 v0, 0x0
 
     if-eqz p0, :cond_2a
@@ -1569,19 +1569,19 @@
 
     goto :goto_2a
 
-    .line 616
+    .line 623
     :cond_c
     move v1, v0
 
     :goto_d
     if-ge v1, v2, :cond_28
 
-    .line 617
+    .line 624
     invoke-virtual {p0, v1}, Ljava/lang/String;->charAt(I)C
 
     move-result v3
 
-    .line 618
+    .line 625
     const/16 v4, 0x30
 
     if-lt v3, v4, :cond_1b
@@ -1601,24 +1601,24 @@
 
     goto :goto_27
 
-    .line 616
+    .line 623
     :cond_24
     add-int/lit8 v1, v1, 0x1
 
     goto :goto_d
 
-    .line 618
+    .line 625
     :cond_27
     :goto_27
     return v0
 
-    .line 620
+    .line 627
     :cond_28
     const/4 p0, 0x1
 
     return p0
 
-    .line 615
+    .line 622
     :cond_2a
     :goto_2a
     return v0
@@ -1627,7 +1627,7 @@
 .method private static isHttps(Ljava/lang/String;)Z
     .registers 7
 
-    .line 625
+    .line 632
     if-eqz p0, :cond_12
 
     const/4 v4, 0x0
@@ -1820,12 +1820,12 @@
         }
     .end annotation
 
-    .line 409
+    .line 416
     const/4 v0, 0x0
 
     move v1, v0
 
-    .line 411
+    .line 418
     :goto_2
     invoke-static {}, Ljava/lang/System;->currentTimeMillis()J
 
@@ -1839,7 +1839,7 @@
 
     return-object v3
 
-    .line 412
+    .line 419
     :cond_c
     invoke-static {p1}, Lcom/lightblitzlearning/ota/OtaPackage;->isHttps(Ljava/lang/String;)Z
 
@@ -1849,7 +1849,7 @@
 
     return-object v3
 
-    .line 413
+    .line 420
     :cond_13
     new-instance v2, Ljava/net/URL;
 
@@ -1861,25 +1861,25 @@
 
     check-cast p1, Ljava/net/HttpURLConnection;
 
-    .line 414
+    .line 421
     invoke-virtual {p1, v0}, Ljava/net/HttpURLConnection;->setInstanceFollowRedirects(Z)V
 
-    .line 415
+    .line 422
     const/16 v2, 0x2710
 
     invoke-virtual {p1, v2}, Ljava/net/HttpURLConnection;->setConnectTimeout(I)V
 
-    .line 416
+    .line 423
     const/16 v2, 0x7530
 
     invoke-virtual {p1, v2}, Ljava/net/HttpURLConnection;->setReadTimeout(I)V
 
-    .line 417
+    .line 424
     const-string v2, "GET"
 
     invoke-virtual {p1, v2}, Ljava/net/HttpURLConnection;->setRequestMethod(Ljava/lang/String;)V
 
-    .line 418
+    .line 425
     new-instance v2, Ljava/lang/StringBuilder;
 
     invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V
@@ -1902,23 +1902,23 @@
 
     invoke-virtual {p1, v4, v2}, Ljava/net/HttpURLConnection;->setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V
 
-    .line 420
+    .line 427
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->connect()V
 
-    .line 421
+    .line 428
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->getResponseCode()I
 
     move-result v2
 
-    .line 422
+    .line 429
     const/16 v4, 0xc8
 
     if-ne v2, v4, :cond_54
 
-    .line 423
+    .line 430
     return-object p1
 
-    .line 425
+    .line 432
     :cond_54
     const/16 v4, 0x12d
 
@@ -1942,14 +1942,14 @@
 
     goto :goto_6d
 
-    .line 432
+    .line 439
     :cond_69
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 433
+    .line 440
     return-object v3
 
-    .line 426
+    .line 433
     :cond_6d
     :goto_6d
     const-string v2, "Location"
@@ -1958,10 +1958,10 @@
 
     move-result-object v2
 
-    .line 427
+    .line 434
     invoke-virtual {p1}, Ljava/net/HttpURLConnection;->disconnect()V
 
-    .line 428
+    .line 435
     if-eqz v2, :cond_81
 
     add-int/lit8 v1, v1, 0x1
@@ -1972,16 +1972,16 @@
 
     goto :goto_81
 
-    .line 429
+    .line 436
     :cond_7e
     nop
 
-    .line 430
+    .line 437
     move-object p1, v2
 
     goto :goto_2
 
-    .line 428
+    .line 435
     :cond_81
     :goto_81
     return-object v3
@@ -1990,7 +1990,7 @@
 .method private parseCurrent([B)[Ljava/lang/String;
     .registers 11
 
-    .line 331
+    .line 338
     const-string v0, "size"
 
     const/4 v1, 0x0
@@ -2006,7 +2006,7 @@
 
     invoke-direct {v2, v3}, Lorg/json/JSONObject;-><init>(Ljava/lang/String;)V
 
-    .line 332
+    .line 339
     invoke-virtual {v2, v0}, Lorg/json/JSONObject;->has(Ljava/lang/String;)Z
 
     move-result p1
@@ -2015,7 +2015,7 @@
 
     return-object v1
 
-    .line 333
+    .line 340
     :cond_16
     const-string p1, "buildId"
 
@@ -2023,28 +2023,28 @@
 
     move-result-object p1
 
-    .line 334
+    .line 341
     const-string v3, "url"
 
     invoke-virtual {v2, v3, v1}, Lorg/json/JSONObject;->optString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
 
     move-result-object v3
 
-    .line 335
+    .line 342
     const-string v4, "sha256"
 
     invoke-virtual {v2, v4, v1}, Lorg/json/JSONObject;->optString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
 
     move-result-object v4
 
-    .line 336
+    .line 343
     const-wide/16 v5, -0x1
 
     invoke-virtual {v2, v0, v5, v6}, Lorg/json/JSONObject;->optLong(Ljava/lang/String;J)J
 
     move-result-wide v5
 
-    .line 337
+    .line 344
     if-eqz p1, :cond_62
 
     if-eqz v3, :cond_62
@@ -2053,7 +2053,7 @@
 
     goto :goto_62
 
-    .line 338
+    .line 345
     :cond_35
     invoke-static {p1}, Lcom/lightblitzlearning/ota/OtaPackage;->validId(Ljava/lang/String;)Z
 
@@ -2063,7 +2063,7 @@
 
     return-object v1
 
-    .line 339
+    .line 346
     :cond_3c
     invoke-static {v3}, Lcom/lightblitzlearning/ota/OtaPackage;->isHttps(Ljava/lang/String;)Z
 
@@ -2073,7 +2073,7 @@
 
     return-object v1
 
-    .line 340
+    .line 347
     :cond_43
     invoke-static {v4}, Lcom/lightblitzlearning/ota/OtaPackage;->isHex64(Ljava/lang/String;)Z
 
@@ -2083,7 +2083,7 @@
 
     return-object v1
 
-    .line 341
+    .line 348
     :cond_4a
     const-wide/16 v7, 0x0
 
@@ -2099,7 +2099,7 @@
 
     goto :goto_61
 
-    .line 342
+    .line 349
     :cond_58
     invoke-static {v5, v6}, Ljava/lang/Long;->toString(J)Ljava/lang/String;
 
@@ -2113,21 +2113,21 @@
 
     return-object p1
 
-    .line 341
+    .line 348
     :cond_61
     :goto_61
     return-object v1
 
-    .line 337
+    .line 344
     :cond_62
     :goto_62
     return-object v1
 
-    .line 343
+    .line 350
     :catchall_63
     move-exception p1
 
-    .line 344
+    .line 351
     return-object v1
 .end method
 
@@ -2139,10 +2139,10 @@
         }
     .end annotation
 
-    .line 579
+    .line 586
     nop
 
-    .line 581
+    .line 588
     const/4 v0, 0x0
 
     :try_start_2
@@ -2152,23 +2152,23 @@
     :try_end_7
     .catchall {:try_start_2 .. :try_end_7} :catchall_2b
 
-    .line 582
+    .line 589
     :try_start_7
     new-instance p0, Ljava/io/ByteArrayOutputStream;
 
     invoke-direct {p0}, Ljava/io/ByteArrayOutputStream;-><init>()V
 
-    .line 583
+    .line 590
     const/16 v0, 0x1000
 
     new-array v0, v0, [B
 
-    .line 584
+    .line 591
     const/4 v2, 0x0
 
     move v3, v2
 
-    .line 586
+    .line 593
     :goto_12
     invoke-virtual {v1, v0}, Ljava/io/InputStream;->read([B)I
 
@@ -2176,21 +2176,21 @@
 
     if-ltz v4, :cond_20
 
-    .line 587
+    .line 594
     add-int/2addr v3, v4
 
-    .line 588
+    .line 595
     if-le v3, p1, :cond_1c
 
     goto :goto_20
 
-    .line 589
+    .line 596
     :cond_1c
     invoke-virtual {p0, v0, v2, v4}, Ljava/io/ByteArrayOutputStream;->write([BII)V
 
     goto :goto_12
 
-    .line 591
+    .line 598
     :cond_20
     :goto_20
     invoke-virtual {p0}, Ljava/io/ByteArrayOutputStream;->toByteArray()[B
@@ -2199,13 +2199,13 @@
     :try_end_24
     .catchall {:try_start_7 .. :try_end_24} :catchall_28
 
-    .line 593
+    .line 600
     invoke-static {v1}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 591
+    .line 598
     return-object p0
 
-    .line 593
+    .line 600
     :catchall_28
     move-exception p0
 
@@ -2219,21 +2219,21 @@
     :goto_2c
     invoke-static {v0}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 594
+    .line 601
     throw p0
 .end method
 
 .method private readConfig(Ljava/io/File;)[Ljava/lang/String;
     .registers 6
 
-    .line 309
+    .line 316
     new-instance v0, Ljava/io/File;
 
     const-string v1, "config.json"
 
     invoke-direct {v0, p1, v1}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
 
-    .line 310
+    .line 317
     invoke-virtual {v0}, Ljava/io/File;->isFile()Z
 
     move-result p1
@@ -2244,7 +2244,7 @@
 
     return-object v1
 
-    .line 312
+    .line 319
     :cond_f
     const/high16 p1, 0x10000
 
@@ -2253,12 +2253,12 @@
 
     move-result-object p1
 
-    .line 313
+    .line 320
     if-nez p1, :cond_18
 
     return-object v1
 
-    .line 314
+    .line 321
     :cond_18
     new-instance v0, Lorg/json/JSONObject;
 
@@ -2270,28 +2270,28 @@
 
     invoke-direct {v0, v2}, Lorg/json/JSONObject;-><init>(Ljava/lang/String;)V
 
-    .line 315
+    .line 322
     const-string p1, "url"
 
     invoke-virtual {v0, p1, v1}, Lorg/json/JSONObject;->optString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
 
     move-result-object p1
 
-    .line 316
+    .line 323
     const-string v2, "token"
 
     invoke-virtual {v0, v2, v1}, Lorg/json/JSONObject;->optString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
 
     move-result-object v0
 
-    .line 317
+    .line 324
     if-eqz p1, :cond_41
 
     if-nez v0, :cond_35
 
     goto :goto_41
 
-    .line 318
+    .line 325
     :cond_35
     invoke-static {p1}, Lcom/lightblitzlearning/ota/OtaPackage;->isHttps(Ljava/lang/String;)Z
 
@@ -2301,7 +2301,7 @@
 
     return-object v1
 
-    .line 319
+    .line 326
     :cond_3c
     filled-new-array {p1, v0}, [Ljava/lang/String;
 
@@ -2311,23 +2311,23 @@
 
     return-object p1
 
-    .line 317
+    .line 324
     :cond_41
     :goto_41
     return-object v1
 
-    .line 320
+    .line 327
     :catchall_42
     move-exception p1
 
-    .line 321
+    .line 328
     return-object v1
 .end method
 
 .method private readToken(Ljava/io/File;)Ljava/lang/String;
     .registers 5
 
-    .line 526
+    .line 533
     invoke-virtual {p1}, Ljava/io/File;->isFile()Z
 
     move-result v0
@@ -2338,7 +2338,7 @@
 
     return-object v1
 
-    .line 528
+    .line 535
     :cond_8
     const/16 v0, 0x80
 
@@ -2347,12 +2347,12 @@
 
     move-result-object p1
 
-    .line 529
+    .line 536
     if-nez p1, :cond_11
 
     return-object v1
 
-    .line 530
+    .line 537
     :cond_11
     new-instance v0, Ljava/lang/String;
 
@@ -2364,7 +2364,7 @@
 
     move-result-object p1
 
-    .line 531
+    .line 538
     invoke-static {p1}, Lcom/lightblitzlearning/ota/OtaPackage;->validId(Ljava/lang/String;)Z
 
     move-result v0
@@ -2378,11 +2378,11 @@
     :cond_23
     return-object v1
 
-    .line 532
+    .line 539
     :catch_24
     move-exception p1
 
-    .line 533
+    .line 540
     return-object v1
 .end method
 
@@ -2495,7 +2495,7 @@
 
     move-result-wide v4
 
-    .line 296
+    .line 303
     new-instance v0, Ljava/io/File;
 
     new-instance v2, Ljava/lang/StringBuilder;
@@ -2528,7 +2528,7 @@
 
     move-result v0
 
-    if-eqz v0, :cond_8a
+    if-nez v0, :cond_b4
 
     new-instance v0, Ljava/io/File;
 
@@ -2552,17 +2552,16 @@
 
     invoke-direct {v0, v8, v2}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
 
-    .line 297
+    .line 304
     invoke-virtual {v0}, Ljava/io/File;->exists()Z
 
     move-result v0
 
-    if-nez v0, :cond_8a
+    if-eqz v0, :cond_8a
 
-    .line 298
-    return-void
+    goto :goto_b4
 
-    .line 301
+    .line 308
     :cond_8a
     new-instance v0, Ljava/io/File;
 
@@ -2590,7 +2589,7 @@
 
     invoke-direct {v0, v8, v2}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
 
-    .line 302
+    .line 309
     move-object v7, v0
 
     move-object v2, v11
@@ -2605,11 +2604,16 @@
 
     if-nez v1, :cond_b3
 
-    .line 303
+    .line 310
     invoke-virtual {v7}, Ljava/io/File;->delete()Z
 
-    .line 305
+    .line 312
     :cond_b3
+    return-void
+
+    .line 305
+    :cond_b4
+    :goto_b4
     return-void
 .end method
 
@@ -2761,21 +2765,21 @@
 .method private static toHex([B)Ljava/lang/String;
     .registers 7
 
-    .line 629
+    .line 636
     const-string v0, "0123456789abcdef"
 
     invoke-virtual {v0}, Ljava/lang/String;->toCharArray()[C
 
     move-result-object v0
 
-    .line 630
+    .line 637
     array-length v1, p0
 
     mul-int/lit8 v1, v1, 0x2
 
     new-array v1, v1, [C
 
-    .line 631
+    .line 638
     const/4 v2, 0x0
 
     :goto_c
@@ -2783,12 +2787,12 @@
 
     if-ge v2, v3, :cond_26
 
-    .line 632
+    .line 639
     aget-byte v3, p0, v2
 
     and-int/lit16 v3, v3, 0xff
 
-    .line 633
+    .line 640
     mul-int/lit8 v4, v2, 0x2
 
     ushr-int/lit8 v5, v3, 0x4
@@ -2797,7 +2801,7 @@
 
     aput-char v5, v1, v4
 
-    .line 634
+    .line 641
     add-int/lit8 v4, v4, 0x1
 
     and-int/lit8 v3, v3, 0xf
@@ -2806,12 +2810,12 @@
 
     aput-char v3, v1, v4
 
-    .line 631
+    .line 638
     add-int/lit8 v2, v2, 0x1
 
     goto :goto_c
 
-    .line 636
+    .line 643
     :cond_26
     new-instance p0, Ljava/lang/String;
 
@@ -2823,7 +2827,7 @@
 .method private static touch(Ljava/io/File;)V
     .registers 2
 
-    .line 572
+    .line 579
     :try_start_0
     new-instance v0, Ljava/io/FileOutputStream;
 
@@ -2833,14 +2837,14 @@
     :try_end_8
     .catch Ljava/io/IOException; {:try_start_0 .. :try_end_8} :catch_9
 
-    .line 575
+    .line 582
     goto :goto_a
 
-    .line 573
+    .line 580
     :catch_9
     move-exception p0
 
-    .line 576
+    .line 583
     :goto_a
     return-void
 .end method
@@ -2996,20 +3000,20 @@
 .method private static validId(Ljava/lang/String;)Z
     .registers 7
 
-    .line 601
+    .line 608
     const/4 v0, 0x0
 
     if-nez p0, :cond_4
 
     return v0
 
-    .line 602
+    .line 609
     :cond_4
     invoke-virtual {p0}, Ljava/lang/String;->length()I
 
     move-result v1
 
-    .line 603
+    .line 610
     const/4 v2, 0x1
 
     if-lt v1, v2, :cond_46
@@ -3020,19 +3024,19 @@
 
     goto :goto_46
 
-    .line 604
+    .line 611
     :cond_10
     move v3, v0
 
     :goto_11
     if-ge v3, v1, :cond_45
 
-    .line 605
+    .line 612
     invoke-virtual {p0, v3}, Ljava/lang/String;->charAt(I)C
 
     move-result v4
 
-    .line 606
+    .line 613
     const/16 v5, 0x41
 
     if-lt v4, v5, :cond_1f
@@ -3083,23 +3087,23 @@
     :goto_3e
     move v4, v2
 
-    .line 608
+    .line 615
     :goto_3f
     if-nez v4, :cond_42
 
     return v0
 
-    .line 604
+    .line 611
     :cond_42
     add-int/lit8 v3, v3, 0x1
 
     goto :goto_11
 
-    .line 610
+    .line 617
     :cond_45
     return v2
 
-    .line 603
+    .line 610
     :cond_46
     :goto_46
     return v0
@@ -3108,7 +3112,7 @@
 .method private writeToken(Ljava/io/File;Ljava/lang/String;)V
     .registers 7
 
-    .line 539
+    .line 546
     new-instance v0, Ljava/io/File;
 
     invoke-virtual {p1}, Ljava/io/File;->getParentFile()Ljava/io/File;
@@ -3139,10 +3143,10 @@
 
     invoke-direct {v0, v1, v2}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
 
-    .line 540
+    .line 547
     nop
 
-    .line 542
+    .line 549
     const/4 v1, 0x0
 
     :try_start_22
@@ -3153,7 +3157,7 @@
     .catch Ljava/io/IOException; {:try_start_22 .. :try_end_27} :catch_49
     .catchall {:try_start_22 .. :try_end_27} :catchall_47
 
-    .line 543
+    .line 550
     :try_start_27
     sget-object v3, Ljava/nio/charset/StandardCharsets;->UTF_8:Ljava/nio/charset/Charset;
 
@@ -3163,19 +3167,19 @@
 
     invoke-virtual {v2, p2}, Ljava/io/OutputStream;->write([B)V
 
-    .line 544
+    .line 551
     invoke-virtual {v2}, Ljava/io/OutputStream;->flush()V
 
-    .line 545
+    .line 552
     invoke-static {v2}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
     :try_end_36
     .catch Ljava/io/IOException; {:try_start_27 .. :try_end_36} :catch_44
     .catchall {:try_start_27 .. :try_end_36} :catchall_41
 
-    .line 546
+    .line 553
     nop
 
-    .line 547
+    .line 554
     :try_start_37
     invoke-virtual {v0, p1}, Ljava/io/File;->renameTo(Ljava/io/File;)Z
 
@@ -3190,7 +3194,7 @@
 
     goto :goto_4d
 
-    .line 551
+    .line 558
     :catchall_41
     move-exception p1
 
@@ -3198,7 +3202,7 @@
 
     goto :goto_52
 
-    .line 548
+    .line 555
     :catch_44
     move-exception p1
 
@@ -3206,39 +3210,39 @@
 
     goto :goto_4a
 
-    .line 551
+    .line 558
     :catchall_47
     move-exception p1
 
     goto :goto_52
 
-    .line 548
+    .line 555
     :catch_49
     move-exception p1
 
-    .line 549
+    .line 556
     :goto_4a
     :try_start_4a
     invoke-virtual {v0}, Ljava/io/File;->delete()Z
     :try_end_4d
     .catchall {:try_start_4a .. :try_end_4d} :catchall_47
 
-    .line 551
+    .line 558
     :cond_4d
     :goto_4d
     invoke-static {v1}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 552
+    .line 559
     nop
 
-    .line 553
+    .line 560
     return-void
 
-    .line 551
+    .line 558
     :goto_52
     invoke-static {v1}, Lcom/lightblitzlearning/ota/OtaPackage;->closeQuietly(Ljava/io/Closeable;)V
 
-    .line 552
+    .line 559
     throw p1
 .end method
 

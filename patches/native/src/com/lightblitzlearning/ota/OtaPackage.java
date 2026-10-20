@@ -291,10 +291,17 @@ public final class OtaPackage implements Package, ReactNativeHostHandler, Runnab
         String sha256 = m[2];
         long size = Long.parseLong(m[3]);
 
-        // Already present and not quarantined? Nothing to fetch (identity, not
-        // ordering — D26). A different buildId always triggers a fetch.
+        // Nothing to fetch when we already have this build OR it is quarantined.
+        // The `bad-<id>` arm matters: recovery from a bad build is publishing a
+        // NEW buildId (D52), never re-downloading the same bytes — `bad-<id>`
+        // means the bundle crashed at runtime, not that its bytes were wrong, so
+        // a re-fetch produces byte-identical content that is quarantined again.
+        // Without this arm, a `current.json` that still names a quarantined id
+        // would re-download ~6 MB every launch forever and keep that id pinned in
+        // GC's keep-set. Identity, not ordering (D26): a genuinely different
+        // buildId has neither file and does fetch.
         if (new File(base, "bundle-" + buildId + ".js").isFile()
-                && !new File(base, "bad-" + buildId).exists()) {
+                || new File(base, "bad-" + buildId).exists()) {
             return;
         }
 
