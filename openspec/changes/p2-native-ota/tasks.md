@@ -1,7 +1,7 @@
 ## 1. Pre-flight against the build base
 
 - [x] 1.1 Confirm the five hook facts on `base/smali.mjolnir.merged` v1.5.12 still hold: LazyHolder 5-entry array, wrapper lazy chain at `ReactNativeHostWrapperBase.smali:148`, `ReactNativeHostHandler` + `$-CC` defaults, `Package.createReactNativeHostHandlers`, `FileSystemModule.smali:2784` filesDir anchor
-- [ ] 1.2 Record the baked-in OTA URL and bearer token to compile in (operator input — Open Question); confirm they match the live P1 endpoints
+- [x] 1.2 Baked-in URL/token are written as **placeholders** (`__MJOLNIR_OTA_URL__`, `__MJOLNIR_OTA_TOKEN__`) in the `const-string`s of D-N6, substituted at build time. The operator supplies the real values immediately before assembling (D64) — the smali does not need them to be written or reviewed
 - [x] 1.3 Fallback-bundle pairing decided: the embedded tier-4 bundle is **plain stock v1.5.12** (built from this base); the paywall patch is **deferred** to a later OTA bundle, not baked in (D61)
 
 ## 2. Native patch — the new handler class
@@ -46,8 +46,9 @@
 ## 8. Build, sign, install
 
 - [ ] 8.1 Assemble the embedded fallback bundle: **plain stock v1.5.12** base bundle + JS companion (paywall patch deferred — D61); place as `assets/index.android.bundle`
-- [ ] 8.2 Build → align → sign via the existing `0306.orig` pipeline
-- [ ] 8.3 Install on the device; **do not ship the same day it is written**
+- [ ] 8.2 **Substitute `__MJOLNIR_OTA_URL__` / `__MJOLNIR_OTA_TOKEN__`** with the live values, then **fail the build if either placeholder survives** — grep the assembled smali *and* the built dex (`strings classes*.dex`). An unsubstituted placeholder ships an APK whose every fetch 401s, forever and silently (D64)
+- [ ] 8.3 Build → align → sign via the existing `0306.orig` pipeline
+- [ ] 8.4 Install on the device; **do not ship the same day it is written**
 
 ## 9. Acceptance — the irreversible-step gate
 
