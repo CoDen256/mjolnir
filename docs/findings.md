@@ -127,6 +127,52 @@ this install permanently (expected, given it's a resigned sideload). After
 that one patch, every future bundle change is just a file swap on the server
 — no more APK rebuilds.
 
+### 4a. The JS-side companion (boot-ok marker, config rotation, debug reporter)
+
+The native loader (P2) depends on a JS half that writes the `boot-ok-<buildId>`
+watchdog marker (D52). It is **redeployable JS**, and three facts let it attach
+to the bundle without touching a single existing module byte:
+
+- The bundle is **not IIFE-wrapped** — it opens `var __BUNDLE_START_TIME__=…`
+  and `__r` is a genuine global. It ends with the entry calls
+  `__r(160);\n__r(0);` followed by `//# sourceMappingURL` / `//# debugId`
+  comments. So **top-level code appended after the entry call runs at startup**,
+  right after module 0 registers the root component
+  (`AppRegistry.registerComponent(<cfg>.name, () => App.default)`).
+- A native module is reachable two ways. `requireNativeModule(name)` (module
+  2150) is `ensureNativeModulesAreInstalled(); globalThis.expo?.modules?.[name]
+  ?? NativeModulesProxy.default[name] ?? null`. The bare
+  `globalThis.expo.modules.<Name>` path is **not** equivalent — it skips the
+  install call and the proxy fallback. The companions therefore try
+  `__r(2150).requireNativeModule('ExponentFileSystem')` first and keep the bare
+  path only as a fallback: if that shortcut ever yielded `undefined`, no
+  `boot-ok` would be written and **every** build would be quarantined on its
+  third launch, silently, looking like a native bug. Either way gives
+  `documentDirectory`, `writeAsStringAsync`, `makeDirectoryAsync`,
+  `readDirectoryAsync` with **no dep-array edit** — `__r` is keyed by absolute
+  module id, so no dependency entry is required. (The patch system's `patchback`
+  rewrites only a module's factory *body* and re-emits the original
+  `__d(…, id, [deps])` tail — it *cannot* add a dependency — which is exactly
+  why the dep-free `globalThis.expo.modules` route matters.)
+- `documentDirectory` is the `file://…/files/` URI form **with a trailing
+  slash**; native addresses the same markers via the bare `getFilesDir()` path
+  (D56). Both resolve to the same file — the scheme asymmetry is correct, not a
+  bug to "fix."
+
+Mechanism: `bundle-tool companion <in> <out> <companion.js> [--build-id <id>]`
+(`src/commands/companion.js`) substitutes `__MJOLNIR_BUILD_ID__` and splices the
+snippet in **before the sourcemap comments, after `__r(0);`**, modifying zero
+module bytes. The companions live in `patches/js/`:
+`boot-ok-companion.js` (the marker writer; a 3 s timer that fires only if the
+process survives, with a bounded retry while expo modules finish installing),
+`config-rotate.js` (exposes `globalThis.__mjolnirRotateOtaConfig(url, token)`,
+https-only — D39/D53), and `ota-debug-report.js` (debug-only; logs the
+`mjolnir-ota/` state to logcat under `ReactNativeJS`, corroborating native's
+D63 breadcrumb). The buildId is substituted at build time because the publish
+pipeline that would bake it does not exist in `mjolnir` yet (publishing today is
+`tun/bin/ota-publish.sh`); pass the **same** id to that script so the marker
+pairs with `bundle-<id>.js`.
+
 ## 5. Audio: no native patching needed at all
 
 Audio files live in `res/raw/` (e.g. `a01001.mp3`), one per card id, 2870

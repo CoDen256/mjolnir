@@ -19,7 +19,7 @@ turns out to be wrong during implementation, that is an ADR amendment in
 | handler interface | `…/core/interfaces/ReactNativeHostHandler.smali` + `…$-CC.smali` | `getJSBundleFile(Z)Ljava/lang/String;` plus `$default$` no-ops for every other method |
 | package interface | `…/core/interfaces/Package.smali:63` | `createReactNativeHostHandlers(Landroid/content/Context;)Ljava/util/List;` |
 | filesDir anchor | `smali_classes4/expo/modules/filesystem/FileSystemModule.smali:2784` | `documentDirectory == Uri.fromFile(getFilesDir()) + "/"` (D56) |
-| embedded bundle | `assets/index.android.bundle` | 6 003 611 B = the contract's `current.json` `size` |
+| embedded bundle | `assets/index.android.bundle` | v1.5.12 base bundle, 6 003 611 B; equals the *illustrative* `size` in §1's `current.json` example — the P1 verify was measured against the v1.5.10 patched bundle (6 003 468 B), nothing depends on size (D58) |
 
 Permissions already present (findings §4): `INTERNET`, `WRITE_EXTERNAL_STORAGE`,
 `RECEIVE_BOOT_COMPLETED`, `FOREGROUND_SERVICE`. No manifest edit.
@@ -35,8 +35,9 @@ Permissions already present (findings §4): `INTERNET`, `WRITE_EXTERNAL_STORAGE`
 **Non-Goals:**
 - Version ordering, audio, retry/backoff, UI, self-healing (§8 — forbidden).
 - Signature verification (D47 — sha256-over-TLS only).
-- Applying the paywall JS patch (`0f6f580`/`b962691`/`a1f8f1f`) — a build step
-  on the embedded bundle, orthogonal to native (see Migration Plan).
+- Applying the paywall JS patch (`0f6f580`/`b962691`/`a1f8f1f`) — **deferred**
+  out of this APK (D61); it ships later as its own OTA bundle, not baked into
+  the embedded fallback (which is plain stock v1.5.12).
 - Any server work (P1 is live).
 
 ## Decisions
@@ -152,9 +153,10 @@ native half is frozen.
   → The new class must declare every `ReactNativeHostHandler` method, each
   forwarding to its `$default$`; confirmed the `-CC` class exists in the base.
 - **Embedded fallback / native version mismatch.** The frozen shell is v1.5.12;
-  the embedded fallback bundle must be a v1.5.12-compatible bundle (ideally the
-  paywall-patched v1.5.12 bundle), not the superseded April `if(false)` bundle.
-  → Pin the fallback to a bundle built from this same base (Migration Plan).
+  the embedded fallback bundle is **plain stock v1.5.12** (the paywall patch is
+  deferred, D61) — v1.5.12-compatible by construction, not the superseded April
+  `if(false)` bundle. → Pin the fallback to a bundle built from this same base
+  (Migration Plan).
 - **Baked-in token leaks in the APK.** Accepted (D47 threat model: single user,
   own VPS); rotatable via `config.json` if ever needed.
 - **Two fast kills within 3 s falsely quarantine a good bundle (D52).** Accepted
@@ -168,12 +170,12 @@ native half is frozen.
 2. **Write the patch:** add `OtaPackage` smali under
    `smali_classes4/com/lightblitzlearning/ota/`; apply the `<clinit>` 5→6 edit.
 3. **Prepare the embedded fallback bundle:** take the v1.5.12 base
-   `index.android.bundle` and re-apply the paywall patch (preserve the last 3
-   commits `0f6f580`/`b962691`/`a1f8f1f` of
-   `rev/mjolnir/0306.orig/orig/smali.merged.mjolnir/assets`; the
-   `SET_PAYWALL_VISIBLE` anchor is present verbatim in the base) plus the JS
-   companion. This bundle is the APK's tier-4 asset **and** should be the first
-   `buildId` published to the VPS.
+   `index.android.bundle` **as-is** (plain stock — the paywall patch is
+   deferred, D61) and add only the JS companion. This bundle is the APK's
+   tier-4 asset. Note the first *companion-bearing* bundle published to the VPS
+   must be `b000002`, not `b000001`: `b000001` carries no `boot-ok` companion
+   and would be quarantined on its third launch, so it must not be the bundle
+   the patched APK first fetches (D62).
 4. **Build → align → sign** via the existing `0306.orig` pipeline; **do not ship
    the same day it is written.**
 5. **Rollback strategy:** the frozen patch itself has none post-install — that
@@ -199,9 +201,8 @@ native half is frozen.
   frozen APK — which P1 token, and is it the one that should be the permanent
   bootstrap? (Rotatable later via `config.json`, but the baked-in value is the
   last resort.) Needs the operator's input before signing.
-- **Fallback bundle pairing.** Confirm the embedded tier-4 bundle is the
-  paywall-patched **v1.5.12** bundle (not a newer app version), so native and JS
-  agree on available native modules. (Resolved in principle by building the
-  fallback from this same base; confirm at build time.)
+- **Fallback bundle pairing.** ✅ Resolved (D61): the embedded tier-4 bundle is
+  **plain stock v1.5.12** (paywall deferred), built from this same base, so
+  native and JS agree on available native modules.
 - **Package vs. two classes (D-N2)** and **exact `$-CC` forwarding list** are
   apply-time smali details to lock against the base, not open design questions.

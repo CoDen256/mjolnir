@@ -9,6 +9,7 @@ import { runDeobfuscate } from "../src/commands/deobfuscate.js";
 import { runCheck } from "../src/commands/check.js";
 import { runDiff } from "../src/commands/diff.js";
 import { runPatchback } from "../src/commands/patchback.js";
+import { runCompanion } from "../src/commands/companion.js";
 import { runUi } from "../src/commands/ui.js";
 
 const program = new Command();
@@ -79,6 +80,16 @@ program
   )
   .action(async (bundle, outputBundle, patches) => {
     await runPatchback(bundle, patches, outputBundle);
+  });
+
+program
+  .command("companion <bundle> <output-bundle> <companion-file>")
+  .description(
+    "Append a redeployable JS companion (e.g. patches/js/boot-ok-companion.js) after the bundle entry; no module bytes change"
+  )
+  .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if the companion uses it)")
+  .action(async (bundle, outputBundle, companionFile, opts) => {
+    runCompanion(bundle, outputBundle, companionFile, opts.buildId);
   });
 
 program

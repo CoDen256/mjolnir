@@ -1,8 +1,8 @@
 ## 1. Pre-flight against the build base
 
-- [ ] 1.1 Confirm the five hook facts on `base/smali.mjolnir.merged` v1.5.12 still hold: LazyHolder 5-entry array, wrapper lazy chain at `ReactNativeHostWrapperBase.smali:148`, `ReactNativeHostHandler` + `$-CC` defaults, `Package.createReactNativeHostHandlers`, `FileSystemModule.smali:2784` filesDir anchor
+- [x] 1.1 Confirm the five hook facts on `base/smali.mjolnir.merged` v1.5.12 still hold: LazyHolder 5-entry array, wrapper lazy chain at `ReactNativeHostWrapperBase.smali:148`, `ReactNativeHostHandler` + `$-CC` defaults, `Package.createReactNativeHostHandlers`, `FileSystemModule.smali:2784` filesDir anchor
 - [ ] 1.2 Record the baked-in OTA URL and bearer token to compile in (operator input — Open Question); confirm they match the live P1 endpoints
-- [ ] 1.3 Decide the fallback-bundle pairing: the embedded tier-4 bundle will be the paywall-patched **v1.5.12** bundle built from this base
+- [x] 1.3 Fallback-bundle pairing decided: the embedded tier-4 bundle is **plain stock v1.5.12** (built from this base); the paywall patch is **deferred** to a later OTA bundle, not baked in (D61)
 
 ## 2. Native patch — the new handler class
 
@@ -39,13 +39,13 @@
 
 ## 7. JS companion (redeployable, §4 JS side / §5)
 
-- [ ] 7.1 Add a bundle module that, 3 s after root mount, writes `documentDirectory + "mjolnir-ota/boot-ok-<buildId>"` (empty); not on first render alone
-- [ ] 7.2 Bake the running `buildId` into the companion at publish time so the marker pairs with the loaded bundle
-- [ ] 7.3 (Optional capability) helper to rewrite `config.json` with a new https `{url, token}` for rotation — never a non-https url
+- [x] 7.1 `patches/js/boot-ok-companion.js`: appended after `__r(0)`, a 3 s timer (survives → writes `documentDirectory + "mjolnir-ota/boot-ok-<buildId>"` empty; crash within 3 s → no marker) with a bounded retry while expo modules install; FS resolved via the app's own `__r(2150).requireNativeModule('ExponentFileSystem')` (which calls `ensureNativeModulesAreInstalled()` and falls back to `NativeModulesProxy`), degrading to the bare `globalThis.expo.modules` lookup only if that fails
+- [x] 7.2 `buildId` substituted at build via `bundle-tool companion --build-id` (no publish pipeline in `mjolnir` yet; `tun/bin/ota-publish.sh` is the publisher — pass the SAME id). `__MJOLNIR_BUILD_ID__` placeholder, mirroring the token
+- [x] 7.3 `patches/js/config-rotate.js`: exposes `globalThis.__mjolnirRotateOtaConfig(url, token)`, https-only (rejects non-https before writing) — D39/D53
 
 ## 8. Build, sign, install
 
-- [ ] 8.1 Assemble the embedded fallback bundle: v1.5.12 base bundle + re-applied paywall patch (`0f6f580`/`b962691`/`a1f8f1f`) + JS companion; place as `assets/index.android.bundle`
+- [ ] 8.1 Assemble the embedded fallback bundle: **plain stock v1.5.12** base bundle + JS companion (paywall patch deferred — D61); place as `assets/index.android.bundle`
 - [ ] 8.2 Build → align → sign via the existing `0306.orig` pipeline
 - [ ] 8.3 Install on the device; **do not ship the same day it is written**
 
