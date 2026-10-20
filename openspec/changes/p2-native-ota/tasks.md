@@ -48,7 +48,7 @@
 - [ ] 8.1 Assemble the embedded fallback bundle: **plain stock v1.5.12** base bundle + JS companion (paywall patch deferred — D61); place as `assets/index.android.bundle`
 - [ ] 8.2 **Substitute `__MJOLNIR_OTA_URL__` / `__MJOLNIR_OTA_TOKEN__`** via `patches/native/substitute.sh <out-dir>` (env `MJOLNIR_OTA_URL`/`MJOLNIR_OTA_TOKEN`; refuses non-https and refuses to emit smali with a surviving placeholder), then gate the built dex with `patches/native/substitute.sh --check-dex <classes.dex>`. An unsubstituted placeholder ships an APK whose every fetch 401s, forever and silently (D64)
 - [ ] 8.3 Build → align → sign via the existing `0306.orig` pipeline
-- [ ] 8.4 Install on the device; **do not ship the same day it is written**
+- [ ] 8.4 Install on the device and run §9. Rebuilding is cheap (D66) — iterate rather than gating on a perfect first build
 
 ## 9. Acceptance — the irreversible-step gate
 
