@@ -1,5 +1,9 @@
 # Mjølnir reverse-engineering notes
 
+> **Read the "Corrections and additional findings (2026-10-20)" section at the
+> end before trusting §2 and §6** -- two statements there are wrong.
+> Ecosystem design built on this document: `docs/ecosystem/README.md`.
+
 App: `com.lightblitzlearning.mjolnir` (Expo + React Native, JSC bundle — not Hermes
 bytecode). Decompiled APK: `/home/coden/rev/mjolnir/0306.orig/orig/smali.merged.mjolnir`.
 
@@ -187,7 +191,7 @@ storage format; current writes store it as a plain array.
 **Per-card progress record** (from the actual scheduler, module `2119`):
 ```js
 {
-  ID, language, DECK_ID,
+  ID, language, DECK_ID,   // !! `language` is the DIRECTION letter N/E/A -- see C1
   Stage: number,       // 0 = brand new, climbs with successful reviews (200+ = graduated)
   Park: boolean,        // true = archived — this is the "archived cards" flag
   Postponed, Graduated: boolean,
@@ -206,7 +210,8 @@ Bt(dayjs(card.Time).subtract(4,'h'), dayjs().subtract(4,'h')) <= 0   // due
 `Bt` just diffs two dates as `YYYYMMDD` integers. The `subtract(4h)` everywhere
 means the app's "day" rolls over at **4am local time**, not midnight. This
 isn't a classic SM-2 algorithm (no `easeFactor`/variable `interval` per card)
-— it's a simpler staged/box system. The deck-level `MaxInterval` /
+— it's a simpler staged/box system.  **[WRONG — see C2. `CF` *is* an ease factor
+and mod 2133 holds the interval tables.]** The deck-level `MaxInterval` /
 `AutoTickStreak` / `AutoHammerCount` fields (§1) are almost certainly the
 coarser pacing knobs (new cards/day, how forgiving a miss is), separate from
 per-card `Stage`. Exactly how `Stage` maps to day-gaps wasn't fully traced —
@@ -247,3 +252,173 @@ the Redux-level fix.
 **Net effect of all three, as currently applied:** both `SET_APP_OPENED_COUNTER`
 and `SET_PAYWALL_VISIBLE` unconditionally force the app into "subscribed"
 state on their very next dispatch, regardless of actual purchase status.
+
+---
+
+# Corrections and additional findings (2026-10-20)
+
+Two statements above are **wrong**; several gaps are now filled. This section
+supersedes anything that contradicts it.
+
+## C1. `language` is not a language — it is the direction letter ⚠️ CORRECTION
+
+§6's progress record lists a `language` field without explanation. It holds the
+**occurrence direction letter** (`"N"` / `"E"` / `"A"`), taken from the last
+character of the occurrence string:
+
+```js
+// mod 2110, drawNewCards
+k.language = p.card.substr(p.card.length - 1);   // "A05001E" → "E"
+k.DECK_ID  = p.deck;
+```
+
+Every progress lookup keys on the **triple** `{ID, language, DECK_ID}`
+(mods 2110, 2124, 2131):
+
+```js
+t.ID === e.card.slice(0,6) && t.language === e.card.substr(e.card.length-1) && t.DECK_ID === e.deck
+```
+
+**Therefore each occurrence of a card is scheduled independently.** A card with
+occurrences `A`, `E`, `N` holds three separate SRS states, not one.
+
+## C2. It *is* SM-2-shaped — `CF` is the ease factor ⚠️ CORRECTION
+
+§6 says "This isn't a classic SM-2 algorithm (no `easeFactor`/variable `interval`
+per card)". Mod **2133** holds the tables, in **minutes**:
+
+```js
+GraduationStage: [                       // pre-graduation learning steps
+  {Hard: 1,   OK: 2,    Easy: 5},
+  {Panic: 1,  Hard: 2,  OK: 5,    Easy: 10},
+  {Panic: 1,  Hard: 3,  OK: 10,   Easy: 2880},
+  {Panic: 1,  Hard: 5,  OK: 1440, Easy: 2880},
+]
+CFStage: [                               // post-graduation
+  {Panic: 1, VeryHard: 5,  Hard: 15,   OK: 2880, Easy: 4320},
+  {Panic: 1, VeryHard: 5,  Hard: 1440, OK: 4320, Easy: 7200},
+  {Panic: 1, VeryHard: 10, Hard: 2880, OK: 5760, Easy: 8640},
+]
+CF4: { Hard: {min:25,  max:80,  value:50},     // percentages — an EASE FACTOR
+       OK:   {min:110, max:200, value:137.5},
+       Easy: {min:150, max:500, value:180} }
+```
+
+1440 = 1 day, 2880 = 2 d, 8640 = 6 d. Minute-granularity learning steps
+graduating into day-granularity — which is why the 4 am rollover only appears in
+the dueness check. `CF` is an ease factor in percent. The exact transition logic
+in mod 2119 is still not fully traced.
+
+Mod 2133 also holds `globalOptions` (tutorial flags, study schedule, `AutoPark`,
+`AutoTag`, `FreshPark`, font/skin) and `options.newDailyCards: 5`.
+
+## C3. Card IDs are exactly 6 characters — hard-coded
+
+```js
+// mod 2112 — the card index
+getCard(t) { return 6 == t.length ? this.cards[t] : this.cards[t.substr(0, 6)]; }
+```
+
+plus `card.slice(0, 6)` in mods **2110, 2124, 2131**. Occurrence strings are
+therefore exactly 7. Any generated card id must be 6 chars.
+
+## C4. `PullCounter` is a block index — 5 occurrences per pull
+
+```js
+// mod 2110, drawNewCards
+var v = 5 * PullCounter;
+var u = premium ? deck.Cards.slice(v, v+5)
+                : deck.Cards.filter(n => "N" === n.P).slice(v, v+5);
+… deck.PullCounter++;
+```
+
+`PullCounter` lives in synced userdata (`decksInfo`). Consequences:
+
+- **Appending to `Cards[]` is safe** — new entries land beyond the counter.
+- **Reordering is catastrophic** — the counter then points at different cards and
+  you silently, permanently *skip* some. (Duplicates would be caught by the
+  `{ID, language, DECK_ID}` dedup at 2119:314; skips would not.)
+- The non-premium branch filters to `P === "N"` **before** slicing, so the free
+  tier indexes a different array entirely.
+
+## C5. Occurrence statistics across all 2790 stock cards
+
+| set | count |
+|---|---|
+| `EN` | 1124 |
+| `N` | 987 |
+| `AEN` | 376 |
+| `A` | 278 |
+| `AE` | 98 |
+| `E` | 58 |
+
+`A`-only and `E`-only are both well-used, so audio-only and answer-side-audio
+cards are supported paths, not edge cases.
+
+## C6. `Cards[]` ordering is minimum-lag re-insertion, not shuffling
+
+```
+C16 (50 cards × NE):
+NNNNNNNNNNN ENENNENENNENENNENEN… EEEEEEEEEEEEEEEEEEEEEEEE
+└─ 11 new ─┘ └ each E lands 11 behind its own N ┘ └ tail ┘
+```
+
+Measured minimum lags per deck do **not** correlate with `MaxInterval`,
+`AutoTickStreak` or `AutoHammerCount` — C13–C17 are structurally identical and
+all use 11, while A08 and B08 use 1. Different authoring batches, different
+recipes. C13–C17 is the cleanest, clearly machine-generated family.
+
+A lag of 11 is meaningful given C4: with 5 occurrences per pull, lag ≥ 11 puts a
+card's occurrences at least two pull-blocks apart.
+
+## C7. The deck-list screen groups by `Name.charAt(0)` and needs contiguity
+
+```js
+// mod 2119
+switch (I.default[l].Name.charAt(0)) { case "Z": … case "A": … case "B": … case "C": }   // no default
+… findIndex(first of group) … findIndex(last of group) + 1
+```
+
+Four `useState` pairs hold the per-category index ranges (`Be/Ue`, `Le/tt`,
+`Me/ot`, `qe/st`), plus a second `switch (F)` on the selected approach. So:
+
+- A deck whose name starts with anything else is **invisible** in the UI.
+- Each category's decks must be a **contiguous range** of the deck array.
+
+Existing deck names (37): `Z01–Z02, A01–A11, B01–B14, C01, C03, C10–C17` —
+note the gaps at C02 and C04–C09, and nothing after C17.
+
+## C8. Sync semantics (mod 2080) and local persistence
+
+- Every op is `.get()` then `.update()` → **read-then-field-merge**, not replace.
+- `if (doc.exists)` guards mean a **missing document silently disables all writes**.
+- `updateSetting` additionally returns early while `completedSessions == 0`.
+- `accountCreationDate` is a Firestore **`Timestamp`** (`.toDate()`), not a `Date`.
+- `getUserData()` is called from **exactly two places** — the Google and Apple
+  sign-in success handlers (mods 2205, 2114). Nothing reads the server at startup.
+- The Redux store is
+  `createStore(persistReducer({key:"primary", storage: AsyncStorage, stateReconciler}, …))`
+  (mod **953**) → local state lives under the AsyncStorage key **`persist:primary`**.
+
+**Therefore: local is the working copy and Firestore is pure backup.** A restore
+can be performed by writing `persist:primary` before redux-persist rehydrates.
+
+## C9. Nothing native is needed for audio or file storage
+
+- `expo/modules/filesystem/FileSystemPackage` is **one of the five packages
+  registered** in `ExpoModulesPackageList$LazyHolder`, exposing `downloadAsync`,
+  `getInfoAsync`, `makeDirectoryAsync`, `moveAsync`, `deleteAsync`,
+  `readAsStringAsync`, `writeAsStringAsync`, `documentDirectory`, `cacheDirectory`
+  under the native module name **`ExponentFileSystem`**.
+- The JS bundle contains `requireNativeModule` / `NativeModulesProxy` /
+  `expo-modules-core` (mods 2143, 2148–2150, 2171), so that module is reachable
+  from a patched bundle with no native work.
+- `RNSoundPlayerModule.playUrl` → `prepareUrl` →
+  `MediaPlayer.setDataSource(Context, Uri)` — which accepts `file:///…`.
+- Audio playback call site: `playSoundFile(r.ID.toLowerCase(), 'mp3')` (mod 2124),
+  gated on the shown side matching the card's `A` pointer.
+
+## C10. Related documentation
+
+Ecosystem design built on these findings lives in `docs/ecosystem/`.
+Start at `docs/ecosystem/README.md`.
