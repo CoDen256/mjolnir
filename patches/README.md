@@ -4,7 +4,8 @@ The patch set applied to Mjølnir's `index.android.bundle` and APK.
 
 - `js/` — bundle patches. **Redeployable**: a bug here is fixed by publishing a
   new bundle. Audio resolver (mod 1440), sync shim (mod 2080), prefetcher,
-  paywall (mods 968 / 2119). The OTA **companions** also live here but are not
+  "My account" build-version row (mod 2176, OpenSpec `p2-native-ota` task 10.1).
+  The OTA **companions** also live here but are not
   module patches — they are top-level snippets appended after the bundle entry
   by `bundle-tool companion` (they need no module dep; see `../docs/findings.md`
   §4a): `boot-ok-companion.js` (the D52 watchdog marker), `config-rotate.js`

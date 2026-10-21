@@ -2,7 +2,7 @@
 
 - [x] 1.1 Confirm the five hook facts on `base/smali.mjolnir.merged` v1.5.12 still hold: LazyHolder 5-entry array, wrapper lazy chain at `ReactNativeHostWrapperBase.smali:148`, `ReactNativeHostHandler` + `$-CC` defaults, `Package.createReactNativeHostHandlers`, `FileSystemModule.smali:2784` filesDir anchor
 - [x] 1.2 Baked-in URL/token are written as **placeholders** (`__MJOLNIR_OTA_URL__`, `__MJOLNIR_OTA_TOKEN__`) in the `const-string`s of D-N6, substituted at build time. The operator supplies the real values immediately before assembling (D64) — the smali does not need them to be written or reviewed
-- [x] 1.3 Fallback-bundle pairing decided: the embedded tier-4 bundle is **plain stock v1.5.12** (built from this base); the paywall patch is **deferred** to a later OTA bundle, not baked in (D61)
+- [x] 1.3 Fallback-bundle pairing decided: the embedded tier-4 bundle is **plain stock v1.5.12** (built from this base), unmodified — the first content/UI change ships later as an OTA bundle, not baked in (D68)
 
 ## 2. Native patch — the new handler class
 
@@ -45,7 +45,7 @@
 
 ## 8. Build, sign, install
 
-- [x] 8.1 Embedded fallback = **plain stock v1.5.12** base bundle, `b3ad6aee…5741` (paywall patch deferred — D61). Ships as-is from `base/`; no companion in the embedded tier, which is correct — tier 4 has no buildId and is never watchdogged (contract §2)
+- [x] 8.1 Embedded fallback = **plain stock v1.5.12** base bundle, `b3ad6aee…5741`, unmodified (D68). Ships as-is from `base/`; no companion in the embedded tier, which is correct — tier 4 has no buildId and is never watchdogged (contract §2)
 - [x] 8.2 **Substitute `__MJOLNIR_OTA_URL__` / `__MJOLNIR_OTA_TOKEN__`** via `patches/native/substitute.sh <out-dir>` (env `MJOLNIR_OTA_URL`/`MJOLNIR_OTA_TOKEN`; refuses non-https and refuses to emit smali with a surviving placeholder), then gate the built dex with `patches/native/substitute.sh --check-dex <classes.dex>`. An unsubstituted placeholder ships an APK whose every fetch 401s, forever and silently (D64)
 - [x] 8.3 Build → align → sign — **`apk/build.sh`**: stage `base/` into untracked `build/deploy/` → substitute (D64) → overlay the patch (asserts `OtaPackage` landed, `LazyHolder` is patched, no placeholder survives) → `at bl -fvazs -k ~/.android/debug.keystore` → unzip and gate every `classes*.dex`. Emits `build/deploy/signed.mjolnir.merged.apk` and prints its signer
 - [x] 8.4 Installed; signer `d2a16b2d…675b` matches the existing install, so it upgraded in place
@@ -63,17 +63,38 @@
 ## 10. Next — the first real OTA payoff (P3)
 
 Proves the workflow this project exists for: a behaviour change shipped as a
-file, with no APK and no reinstall.
+file, with no APK and no reinstall. The paywall patch is **not** part of this
+project's plan (superseded by D68) — this is a small, low-stakes UI change
+instead, chosen because it directly makes OTA state observable from the app
+itself, with no `adb`.
 
-- [ ] 10.1 Re-derive the paywall patch against the **v1.5.12** base bundle. The
-      June technique (`0f6f580`/`b962691`/`a1f8f1f`, Redux `SET_PAYWALL_VISIBLE`
-      injection, fingerprint `27/07/2040`) is authoritative, but it was written
-      against v1.5.10 — re-derive, do not cherry-pick. The anchor
-      `case e.SET_PAYWALL_VISIBLE:return Object.assign({},_,{paywall_visible:t.payload})`
-      is present verbatim in v1.5.12
+- [ ] 10.1 **UI patch: show the running OTA build on the "My account" screen.**
+      Module **2176** renders a label/value list (`Name`, `User E-mail ID`,
+      `Completed sessions`, `Cards archived`, `Cards in progress`,
+      `Subscription status`) via repeated
+      `jsx(View,{style:_.item},[jsx(Text,{style:_.label},"<Label>"),
+      jsx(Text,{style:_.value},<value>)])` blocks (`assets/index.android.bundle`,
+      search `children:"Name"`). Add one more such row, e.g. label `"App
+      version"`, value = the running `buildId`. Two ways to get the value into
+      JS, in order of preference:
+      1. A tiny new module exporting the `BUILD_ID` the companion already bakes
+         (same `__MJOLNIR_BUILD_ID__` substitution point, task 7.2) — avoids a
+         filesystem read on a screen that may render before the companion's
+         3 s delay elapses.
+      2. Read `mjolnir-ota/active` via `ExponentFileSystem` (module 2150,
+         same resolver pattern as the companion) — slightly more "live" but
+         adds a read and a loading state to a settings screen (§8 forbids new
+         UI/prompts affecting *native selection*, not a value label like this).
+      Use `bundle-tool`'s content-locator patcher (patchback), not raw byte
+      patching — the anchor string above is the locator. Verify the stock
+      "My account" screen still renders unchanged otherwise.
 - [ ] 10.2 `bundle-tool companion --build-id b000003` to add the boot-ok writer
-- [ ] 10.3 Publish as **b000003** (`ota-publish.sh` now refuses a buildId that
+      (same companion as every OTA bundle; unrelated to 10.1, just bundled
+      together)
+- [ ] 10.3 Publish as **b000003** (`ota-publish.sh` refuses a buildId that
       disagrees with the baked companion id, and refuses a bundle with no
       companion at all)
 - [ ] 10.4 Force-stop, launch twice: expect `tier=pending` then `tier=active`,
-      and the paywall gone. **No APK rebuild.** If this works, P3 is real
+      and "My account" shows `b000003`. **No APK rebuild.** If this works, P3
+      is real — and every future change (including the deferred paywall patch,
+      if ever revisited) is a file on the server.

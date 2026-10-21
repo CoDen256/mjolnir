@@ -12,8 +12,8 @@ project; everything else is undone by redeploying a file.
 The contract this patch implements is already frozen in
 `tun/docs/11-ota-contract.md` §1–§6 (Q11–Q16, D04/D08/D26/D39/D47–D57). This
 change implements that document — it does not reopen it. P1's
-`bin/ota-verify.sh` was **first** measured against the v1.5.10 paywall-patched
-bundle (`cfa9da16…`, **6 003 468 bytes**), then re-verified 16/16 against the
+`bin/ota-verify.sh` was **first** measured against an earlier v1.5.10 bundle
+(`cfa9da16…`, **6 003 468 bytes**), then re-verified 16/16 against the
 **v1.5.12 base** (`b3ad6aee…`, 6 003 611 bytes) now published as `b000001`.
 Nothing in the contract depends on a particular bundle size — the `6003611` in
 §1's `current.json` example is illustrative, not a measured constant (D58, §7).
@@ -44,12 +44,9 @@ Nothing in the contract depends on a particular bundle size — the `6003611` in
 - **BREAKING (intended):** the rebuilt APK is re-signed; Play Store updates for
   this install stop permanently. Expected for a resigned sideload (findings §4).
 
-Out of scope: the paywall JS patch — **deferred** out of the P2 APK (D61). It
-ships later as its own OTA bundle (re-applying the last 3 commits `0f6f580`/
-`b962691`/`a1f8f1f` of `rev/mjolnir/0306.orig/orig/smali.merged.mjolnir/assets`
-is a file swap on the VPS, not an APK rebuild); it is **not** baked into the
-embedded fallback, which is plain stock v1.5.12. Also out of scope: the P1
-server side (already live, `docs/11-ota-contract.md` §7).
+Out of scope: the P1 server side (already live, `docs/11-ota-contract.md` §7).
+The embedded fallback bundle is plain stock v1.5.12, unmodified — the first
+content change ships later as an OTA bundle, not baked into the APK.
 
 ## Capabilities
 
@@ -64,9 +61,8 @@ server side (already live, `docs/11-ota-contract.md` §7).
   `config.json` to rotate the OTA URL/token without a reinstall.
 
 ### Modified Capabilities
-<!-- None. The frozen server contract (P1) and the paywall JS patch are
-     unchanged; this change neither modifies nor depends on an existing mjolnir
-     spec's requirements. -->
+<!-- None. The frozen server contract (P1) is unchanged; this change neither
+     modifies nor depends on an existing mjolnir spec's requirements. -->
 
 ## Impact
 

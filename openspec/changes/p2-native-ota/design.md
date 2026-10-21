@@ -35,9 +35,8 @@ Permissions already present (findings §4): `INTERNET`, `WRITE_EXTERNAL_STORAGE`
 **Non-Goals:**
 - Version ordering, audio, retry/backoff, UI, self-healing (§8 — forbidden).
 - Signature verification (D47 — sha256-over-TLS only).
-- Applying the paywall JS patch (`0f6f580`/`b962691`/`a1f8f1f`) — **deferred**
-  out of this APK (D61); it ships later as its own OTA bundle, not baked into
-  the embedded fallback (which is plain stock v1.5.12).
+- Any content/UI change to the embedded bundle — it ships plain stock
+  v1.5.12, and the first real change is an OTA bundle, not baked into the APK.
 - Any server work (P1 is live).
 
 ## Decisions
@@ -153,10 +152,9 @@ native half is frozen.
   → The new class must declare every `ReactNativeHostHandler` method, each
   forwarding to its `$default$`; confirmed the `-CC` class exists in the base.
 - **Embedded fallback / native version mismatch.** The frozen shell is v1.5.12;
-  the embedded fallback bundle is **plain stock v1.5.12** (the paywall patch is
-  deferred, D61) — v1.5.12-compatible by construction, not the superseded April
-  `if(false)` bundle. → Pin the fallback to a bundle built from this same base
-  (Migration Plan).
+  the embedded fallback bundle is **plain stock v1.5.12** — v1.5.12-compatible
+  by construction, not the superseded April `if(false)` bundle. → Pin the
+  fallback to a bundle built from this same base (Migration Plan).
 - **Baked-in token leaks in the APK.** Accepted (D47 threat model: single user,
   own VPS); rotatable via `config.json` if ever needed.
 - **Two fast kills within 3 s falsely quarantine a good bundle (D52).** Accepted
@@ -170,8 +168,8 @@ native half is frozen.
 2. **Write the patch:** add `OtaPackage` smali under
    `smali_classes4/com/lightblitzlearning/ota/`; apply the `<clinit>` 5→6 edit.
 3. **Prepare the embedded fallback bundle:** take the v1.5.12 base
-   `index.android.bundle` **as-is** (plain stock — the paywall patch is
-   deferred, D61) and add only the JS companion. This bundle is the APK's
+   `index.android.bundle` **as-is** (plain stock) and add only the JS
+   companion. This bundle is the APK's
    tier-4 asset. Note the first *companion-bearing* bundle published to the VPS
    must be `b000002`, not `b000001`: `b000001` carries no `boot-ok` companion
    and would be quarantined on its third launch, so it must not be the bundle
@@ -201,8 +199,8 @@ native half is frozen.
   frozen APK — which P1 token, and is it the one that should be the permanent
   bootstrap? (Rotatable later via `config.json`, but the baked-in value is the
   last resort.) Needs the operator's input before signing.
-- **Fallback bundle pairing.** ✅ Resolved (D61): the embedded tier-4 bundle is
-  **plain stock v1.5.12** (paywall deferred), built from this same base, so
-  native and JS agree on available native modules.
+- **Fallback bundle pairing.** ✅ Resolved: the embedded tier-4 bundle is
+  **plain stock v1.5.12**, built from this same base, so native and JS agree
+  on available native modules.
 - **Package vs. two classes (D-N2)** and **exact `$-CC` forwarding list** are
   apply-time smali details to lock against the base, not open design questions.
