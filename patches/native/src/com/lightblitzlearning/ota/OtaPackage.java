@@ -312,17 +312,26 @@ public final class OtaPackage implements Package, ReactNativeHostHandler, Runnab
         String sha256 = m[2];
         long size = Long.parseLong(m[3]);
 
-        // Nothing to fetch when we already have this build OR it is quarantined.
-        // The `bad-<id>` arm matters: recovery from a bad build is publishing a
+        // Quarantined: never retry. Recovery from a bad build is publishing a
         // NEW buildId (D52), never re-downloading the same bytes — `bad-<id>`
         // means the bundle crashed at runtime, not that its bytes were wrong, so
         // a re-fetch produces byte-identical content that is quarantined again.
-        // Without this arm, a `current.json` that still names a quarantined id
-        // would re-download ~6 MB every launch forever and keep that id pinned in
-        // GC's keep-set. Identity, not ordering (D26): a genuinely different
-        // buildId has neither file and does fetch.
-        if (new File(base, "bundle-" + buildId + ".js").isFile()
-                || new File(base, "bad-" + buildId).exists()) {
+        if (new File(base, "bad-" + buildId).exists()) {
+            return;
+        }
+
+        // Already have these bytes on disk — e.g. GC kept it as one of the two
+        // newest boot-ok'd builds, or current.json now names an older id again
+        // (rollback, D26: identity, not ordering). Promote rather than silently
+        // doing nothing: without this, a rollback target that still happens to
+        // be on disk would never get `pending` written and the device would
+        // never switch to it (found 2026-10-21, task 9.4).
+        if (new File(base, "bundle-" + buildId + ".js").isFile()) {
+            String active = readToken(new File(base, "active"));
+            String pending = readToken(new File(base, "pending"));
+            if (!buildId.equals(active) && !buildId.equals(pending)) {
+                writeToken(new File(base, "pending"), buildId);
+            }
             return;
         }
 

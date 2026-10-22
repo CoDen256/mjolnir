@@ -56,6 +56,12 @@
 - [x] 9.2 **PASS** — L2 `tier=pending path=…/bundle-b000002.js`, L3 and L4 `tier=active`. L4 is the load-bearing one: no quarantine means the companion's `boot-ok-b000002` was written
 - [ ] 9.3 Watchdog **positive**: a deliberately-crashing bundle is quarantined (`bad-<id>`) after two launches and falls back. Run this **last** — it leaves a permanent tombstone by design (D65)
 - [ ] 9.4 Rollback: repoint `current.json` at an older `buildId`; confirm the device fetches it (identity, not ordering — D26). Note `b000001` has **no companion**, so rolling back to it will legitimately quarantine on its third launch — expected, not a bug
+      **Bug found 2026-10-21 (D71/P30):** republished `current.json` at
+      `b000002`, whose bundle file was still on disk (kept by GC as one of the
+      two newest boot-ok'd). `refresh()`'s existing-file early-exit never wrote
+      `pending`, so the device stayed on `b000003` across multiple restarts.
+      Fixed in `OtaPackage.java` + regenerated `.smali`; **needs a rebuild,
+      reinstall and a fresh 9.4 run before this task can be checked off**
 - [ ] 9.5 `config.json`: write a new token; confirm the next refresh uses it, and that a malformed/non-https config falls back without crashing
 - [x] 9.6 `bin/ota-verify.sh` 16/16 against the VPS
 - [x] 9.7 Amendments recorded, never silent: **D65** (GC must preserve `bad-<id>` tombstones — §2 reconciled with §4), **D69/P29** (`Context` must not be dereferenced at `Package` registration time — found as a hard launch crash on first install), **D67** (P2 proven on device)
