@@ -54,7 +54,17 @@
 
 - [x] 9.1 **PASS** — L1 `select tier=asset path=null`. Dex sound: no `VerifyError`, no `AbstractMethodError`, no `ArrayIndexOutOfBounds` from the 5→6 array edit
 - [x] 9.2 **PASS** — L2 `tier=pending path=…/bundle-b000002.js`, L3 and L4 `tier=active`. L4 is the load-bearing one: no quarantine means the companion's `boot-ok-b000002` was written
-- [ ] 9.3 Watchdog **positive**: a deliberately-crashing bundle is quarantined (`bad-<id>`) after two launches and falls back. Run this **last** — it leaves a permanent tombstone by design (D65)
+- [x] 9.3 **PASS.** Published `b000crash`: 122-byte bundle, valid 26-byte
+      prefix, body = `throw new Error(...)` before any module code runs — so
+      it satisfies native's cheap validity check but crashes before the
+      companion's `__r(0)` call ever runs, making `boot-ok` structurally
+      impossible. Five-launch `mjolnir-ota` logcat trace:
+      `tier=pending→CRASH (attempt-1)` → `tier=active→CRASH (attempt-2)` →
+      `tier=boot-ok path=bundle-b000003.js` (quarantined `bad-b000crash`,
+      fell back — **no crash**, the recovering launch itself is clean) →
+      `tier=active path=bundle-b000003.js` (recovery holds, D54's rewrite of
+      `active` confirmed). Leaves a permanent `bad-b000crash` tombstone by
+      design (D65)
 - [x] 9.4 **PASS (after a real bug found and fixed, D71/P30).** First attempt:
       republished `current.json` at `b000002`, whose bundle GC had retained
       (one of the two newest boot-ok'd). `refresh()`'s existing-file early-exit
