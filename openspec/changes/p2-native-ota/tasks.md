@@ -55,7 +55,17 @@
 - [x] 9.1 **PASS** — L1 `select tier=asset path=null`. Dex sound: no `VerifyError`, no `AbstractMethodError`, no `ArrayIndexOutOfBounds` from the 5→6 array edit
 - [x] 9.2 **PASS** — L2 `tier=pending path=…/bundle-b000002.js`, L3 and L4 `tier=active`. L4 is the load-bearing one: no quarantine means the companion's `boot-ok-b000002` was written
 - [ ] 9.3 Watchdog **positive**: a deliberately-crashing bundle is quarantined (`bad-<id>`) after two launches and falls back. Run this **last** — it leaves a permanent tombstone by design (D65)
-- [ ] 9.4 Rollback: repoint `current.json` at an older `buildId`; confirm the device fetches it (identity, not ordering — D26). Note `b000001` has **no companion**, so rolling back to it will legitimately quarantine on its third launch — expected, not a bug
+- [x] 9.4 **PASS (after a real bug found and fixed, D71/P30).** First attempt:
+      republished `current.json` at `b000002`, whose bundle GC had retained
+      (one of the two newest boot-ok'd). `refresh()`'s existing-file early-exit
+      only checked quarantined-vs-not and returned either way without checking
+      active/pending, so `pending` was never written — device stayed on
+      `b000003` across multiple restarts with no error. Fixed in
+      `OtaPackage.java`, smali regenerated, rebuilt, reinstalled. **Retest
+      2026-10-22 21:52, PASS**: `mjolnir-ota` logcat confirms
+      `tier=active path=…/bundle-b000002.js` on the very next launch after
+      repointing. Identity-based rollback (D26) now genuinely works with no
+      reinstall
       **Bug found 2026-10-21 (D71/P30):** republished `current.json` at
       `b000002`, whose bundle file was still on disk (kept by GC as one of the
       two newest boot-ok'd). `refresh()`'s existing-file early-exit never wrote
