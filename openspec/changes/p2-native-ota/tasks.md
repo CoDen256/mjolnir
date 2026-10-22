@@ -58,7 +58,7 @@
 - [ ] 9.4 Rollback: repoint `current.json` at an older `buildId`; confirm the device fetches it (identity, not ordering — D26). Note `b000001` has **no companion**, so rolling back to it will legitimately quarantine on its third launch — expected, not a bug
 - [ ] 9.5 `config.json`: write a new token; confirm the next refresh uses it, and that a malformed/non-https config falls back without crashing
 - [x] 9.6 `bin/ota-verify.sh` 16/16 against the VPS
-- [x] 9.7 Amendments recorded, never silent: **D65** (GC must preserve `bad-<id>` tombstones — §2 reconciled with §4), **D66/P29** (`Context` must not be dereferenced at `Package` registration time — found as a hard launch crash on first install), **D67** (P2 proven on device)
+- [x] 9.7 Amendments recorded, never silent: **D65** (GC must preserve `bad-<id>` tombstones — §2 reconciled with §4), **D69/P29** (`Context` must not be dereferenced at `Package` registration time — found as a hard launch crash on first install), **D67** (P2 proven on device)
 
 ## 10. Next — the first real OTA payoff (P3)
 
@@ -68,7 +68,7 @@ project's plan (superseded by D68) — this is a small, low-stakes UI change
 instead, chosen because it directly makes OTA state observable from the app
 itself, with no `adb`.
 
-- [ ] 10.1 **UI patch: show the running OTA build on the "My account" screen.**
+- [x] 10.1 **UI patch: show the running OTA build on the "My account" screen.**
       Module **2176** renders a label/value list (`Name`, `User E-mail ID`,
       `Completed sessions`, `Cards archived`, `Cards in progress`,
       `Subscription status`) via repeated
@@ -88,7 +88,7 @@ itself, with no `adb`.
       Use `bundle-tool`'s content-locator patcher (patchback), not raw byte
       patching — the anchor string above is the locator. Verify the stock
       "My account" screen still renders unchanged otherwise.
-- [ ] 10.2 `bundle-tool companion --build-id b000003` to add the boot-ok writer
+- [x] 10.2 `bundle-tool companion --build-id b000003` to add the boot-ok writer
       (same companion as every OTA bundle; unrelated to 10.1, just bundled
       together)
 - [ ] 10.3 Publish as **b000003** (`ota-publish.sh` refuses a buildId that

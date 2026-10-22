@@ -15,8 +15,17 @@
 // publish pipeline bakes it, the operator passes `--build-id <id>` to
 // `bundle-tool companion` and the SAME id to `tun/bin/ota-publish.sh`, so the
 // marker pairs with `bundle-<id>.js`.
+//
+// It also exposes `globalThis.MJOLNIR_BUILD_ID` synchronously (task 10.1) —
+// this runs right after the entry call (`__r(0);`), long before any screen
+// the user navigates to (e.g. "My account", module 2176) can mount, so that
+// screen reads the real buildId with no filesystem read and no race against
+// the 3 s boot-ok delay below. Unset on the embedded tier-4 asset, which
+// ships with no companion at all (task 8.1) — readers must treat that as
+// "no OTA active", not a bug.
 (function () {
   var BUILD_ID = '__MJOLNIR_BUILD_ID__';
+  if (typeof globalThis !== 'undefined') globalThis.MJOLNIR_BUILD_ID = BUILD_ID;
   var DELAY_MS = 3000; // D52: survive 3 s before declaring boot-ok
   var RETRY_MS = 2000; // expo modules may not be installed yet at T+3s
   var MAX_TRIES = 5; // bounded — a dead build must never retry forever
