@@ -94,7 +94,8 @@ itself, with no `adb`.
 - [ ] 10.3 Publish as **b000003** (`ota-publish.sh` refuses a buildId that
       disagrees with the baked companion id, and refuses a bundle with no
       companion at all)
-- [ ] 10.4 Force-stop, launch twice: expect `tier=pending` then `tier=active`,
-      and "My account" shows `b000003`. **No APK rebuild.** If this works, P3
-      is real — and every future change (including the deferred paywall patch,
-      if ever revisited) is a file on the server.
+- [x] 10.4 **PASS** — force-stop/relaunch cycles confirmed `tier=pending` →
+      `tier=active`, holding `active` (not re-quarantined) over the further
+      launches. "My account" shows `b000003`. **No APK rebuild.** P3 is real —
+      every future change (including the deferred paywall patch, if ever
+      revisited) is a file on the server.
