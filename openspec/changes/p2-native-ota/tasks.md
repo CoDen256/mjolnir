@@ -82,7 +82,20 @@
       `pending`, so the device stayed on `b000003` across multiple restarts.
       Fixed in `OtaPackage.java` + regenerated `.smali`; **needs a rebuild,
       reinstall and a fresh 9.4 run before this task can be checked off**
-- [ ] 9.5 `config.json`: write a new token; confirm the next refresh uses it, and that a malformed/non-https config falls back without crashing
+- [x] 9.5 **PASS (both halves), plus a self-inflicted lockout found and
+      recovered, D72/P31.** Positive: `config-rotate.js` wrote a new token
+      (same URL); VPS token swapped to match; device fetched `b000final`
+      under the NEW token exclusively (old token already dead server-side —
+      proves `config.json` governs, not the baked-in default). Negative: a
+      bundle wrote a non-https `config.json` directly (bypassing
+      `config-rotate.js`'s own guard, to exercise native's own rejection);
+      next cold start, native read it, rejected it, fell back — **no crash**.
+      That fallback landed on the now-rotated-away baked-in token, bricking
+      the OTA channel (not the app) until reinstall — see D72/P31 for why,
+      and why this doesn't indict the contract. Recovered: rebuilt + reinstalled
+      with the rotated token as the new baked-in default; device fetched
+      `b000badcfg2` fresh over the network and the corrected self-heal
+      companion restored `config.json`. Confirmed holding `tier=active`
 - [x] 9.6 `bin/ota-verify.sh` 16/16 against the VPS
 - [x] 9.7 Amendments recorded, never silent: **D65** (GC must preserve `bad-<id>` tombstones — §2 reconciled with §4), **D69/P29** (`Context` must not be dereferenced at `Package` registration time — found as a hard launch crash on first install), **D67** (P2 proven on device)
 
@@ -117,9 +130,8 @@ itself, with no `adb`.
 - [x] 10.2 `bundle-tool companion --build-id b000003` to add the boot-ok writer
       (same companion as every OTA bundle; unrelated to 10.1, just bundled
       together)
-- [ ] 10.3 Publish as **b000003** (`ota-publish.sh` refuses a buildId that
-      disagrees with the baked companion id, and refuses a bundle with no
-      companion at all)
+- [x] 10.3 **PASS** — published as **b000003**; 10.4's fetch/promote proves it
+      landed and was fetched correctly
 - [x] 10.4 **PASS** — force-stop/relaunch cycles confirmed `tier=pending` →
       `tier=active`, holding `active` (not re-quarantined) over the further
       launches. "My account" shows `b000003`. **No APK rebuild.** P3 is real —
