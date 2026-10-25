@@ -20,6 +20,12 @@ there is no application code yet, and none is needed to prove the OTA path.
 Postgres sits behind a compose profile until P4; the other services are listed
 in `compose.yaml` as comments and get added as they are written.
 
+**No node on the VPS itself.** `bin/ota-publish.sh` shells out to
+`node bin/bundle-tool.js` (D-P4) — the `node` compose profile supplies that
+runtime in a container instead, bind-mounting this checkout so the scripts
+run completely unmodified (see "Publish build #1" below). Only `docker` is
+required on the host.
+
 ---
 
 ## First deploy
@@ -27,13 +33,12 @@ in `compose.yaml` as comments and get added as they are written.
 On the VPS, as a non-root user in the `docker` group:
 
 ```sh
-# 1. Docker (Debian/Ubuntu)
+# 1. Docker (Debian/Ubuntu) — the only thing installed on the host itself
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker "$USER"       # log out and back in
 
 # 2. The repo
 git clone <your-remote>/mjolnir.git && cd mjolnir
-npm install
 
 # 3. Config
 cp .env.example .env
@@ -65,8 +70,13 @@ docker compose logs -f caddy          # watch the certificate get issued
 # Copy the stock bundle over from the laptop first, e.g.
 #   scp ~/dev/mjolnir/index.android.bundle vps:~/mjolnir/
 
-bin/ota-publish.sh index.android.bundle b000001 "base 6.0.3 · logic 0 · data 0 (stock)"
-bin/ota-verify.sh
+# Bring up a node runtime in a container (no node needed on the VPS itself).
+docker compose --profile node up -d mjolnir-node
+
+docker compose exec -e ALLOW_NO_COMPANION=1 mjolnir-node \
+  bin/ota-publish.sh index.android.bundle b000001 "base 6.0.3 · logic 0 · data 0 (stock)"
+
+bin/ota-verify.sh   # bash + curl only — runs fine directly on the host
 ```
 
 `ota-publish.sh` refuses a bundle with no boot-ok companion, and refuses one
@@ -83,9 +93,13 @@ it after any Caddy change.
 ## Publishing and rolling back
 
 ```sh
-bin/ota-publish.sh <bundle> <buildId> "<label>"   # publish
-bin/ota-publish.sh <older-bundle> b000001 "..."   # roll back
+docker compose exec mjolnir-node bin/ota-publish.sh <bundle> <buildId> "<label>"   # publish
+docker compose exec mjolnir-node bin/ota-publish.sh <older-bundle> b000001 "..."   # roll back
 ```
+
+(`mjolnir-node` only needs to be started once — `docker compose exec` reaches
+an already-running container. `docker compose --profile node up -d mjolnir-node`
+again if it isn't running.)
 
 Rollback is just repointing `current.json` at a buildId whose bundle is still
 on disk. The device compares identity, never ordering (D26) — it fetches the
@@ -104,6 +118,7 @@ CLI is a thin wrapper over the same module (D76/D-P2).
 mjolnir/
   .env                 secrets — gitignored, back this up separately
   compose.yaml
+  Dockerfile            node runtime for bin/bundle-tool.js + (from P4) builder/hub
   caddy/Caddyfile
   bin/ota-publish.sh
   bin/ota-verify.sh
@@ -138,6 +153,10 @@ From P4, add `pg_dump` of the per-service databases.
   compromised Caddy cannot alter what the device fetches.
 - Postgres is deliberately not published to the host; only sibling containers
   reach it. Start it with `docker compose --profile db up -d` when P4 needs it.
+- `mjolnir-node` bind-mounts the repo rather than copying it in — a `git pull`
+  plus a container restart (`docker compose restart mjolnir-node`) picks up
+  source changes; only rebuild (`docker compose up -d --build mjolnir-node`)
+  when `package.json`/`package-lock.json` change.
 - `TUN_SITE_ADDRESS=:8080` runs the same config over plain HTTP for local
   testing. `ALLOW_HTTP=1` lets the scripts work against it. Never set either on
   the VPS.

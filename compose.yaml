@@ -6,9 +6,16 @@
 # behind compose profiles so `docker compose up -d` brings up exactly what
 # exists.
 #
-#   docker compose up -d                 # P1: caddy alone
-#   docker compose --profile db up -d    # P4 onward: + postgres
+#   docker compose up -d                       # P1: caddy alone
+#   docker compose --profile db up -d          # P4 onward: + postgres
+#   docker compose --profile node up -d        # + a node runtime (no node needed on the VPS itself, D-5.3)
 #
+# The `node` profile's `mjolnir-node` container has no long-running server of
+# its own yet (that's P4's real `builder`/`hub` services, still blocked on
+# stabbur's p4-notes, tasks.md 5.4) — it exists so `bin/ota-publish.sh`
+# (D76/D-P2's CLI, which shells out to `node bin/bundle-tool.js`) can run
+# without installing node on bare metal. The scripts run unmodified inside
+# it — see DEPLOY.md's "Publish build #1" for the exact command.
 services:
   caddy:
     image: caddy:2-alpine
@@ -46,11 +53,31 @@ services:
       timeout: 5s
       retries: 5
 
+  # node + this checkout, nothing else — see the `node` profile note above.
+  # Repo is bind-mounted, not copied into the image, so `git pull` + a
+  # container restart picks up source changes without a rebuild; only
+  # `npm ci` happens at build time (Dockerfile). The two anonymous volumes
+  # keep each package's own `node_modules` (installed at build time) from
+  # being shadowed by the bind mount.
+  mjolnir-node:
+    build: .
+    container_name: mjolnir-node
+    profiles: ["node"]
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/builder/node_modules
+      - /app/hub/node_modules
+
   # Added as each is written (D42). Separate logical DB per service, no
-  # cross-service FKs.
+  # cross-service FKs. Both will run `mjolnir-node`'s same image —
+  # `command: node bin/server.js` (builder) / `command: node bin/server.js`
+  # (hub) — once there's a config to run them against.
   #
   # mjolnir-hub:      device-facing /mjolnir/userdata + heartbeat   (P5)
-  # mjolnir-builder:  worker, polls build_jobs                      (P4)
+  # mjolnir-builder:  worker, polls build_jobs                      (P4, blocked on tasks.md 5.4)
   #
   # stabbur/smia/phonexa deploy separately for now (tun/docs/02-services.md
   # — whether they ever join this compose file is an open question, not
