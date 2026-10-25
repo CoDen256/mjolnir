@@ -36,19 +36,28 @@ separate deployed processes, one database.
    Any PoS Norsk ordbank can hand back that isn't one of the six word-decks
    above (pronomen, interjeksjon, numeral, …) falls through to C26 rather than
    being silently ineligible.
-3. **Hold until a deck has ≥6 newly-eligible notes.** This is a hard floor, not
-   a suggestion — lag-11 interleave needs room to separate a card's own
-   occurrences by at least two pull-blocks (`03-data-model.md`), and one
-   `EN`/`AEN` card alone cannot do that against itself. A deck under threshold
-   just waits for its next run; nothing is lost, nothing is published early.
-4. **Mint `card_slots`** for the (now ≥6) newly-eligible notes only — a
+3. **No floor, of any kind, for any deck (D91 — supersedes the earlier
+   6-note floor, D87/D88).** Mint whatever is eligible, every run, even a
+   single note. Lag-11 is no longer a same-batch property to wait for enough
+   cards to satisfy — see step 6.
+4. **Mint `card_slots`** for every newly-eligible note this run — a
    permanent 6-char id, never reused, assigned once and never touched again.
 5. **Project.** Pure function of `type`: note → `{N, E, X, A}` + the
-   occurrence set (word/expression/listening/pronunciation/grammar each have a
-   fixed shape — `03-data-model.md` §"five note/card types"). Stateless,
-   computed every run, never stored.
-6. **Interleave** the new block's occurrences into the target deck's `Cards[]`
-   at minimum lag 11, append-only.
+   occurrence set. Word/expression is `A, E` only — no `N` (D91: the word is
+   never quizzed text-first; `N`'s *content* still exists and still appears
+   on reveal, it just never triggers a quiz on its own). Stateless, computed
+   every run, never stored.
+6. **`A` ships immediately; `E` is queued cross-batch (D91).** A new card's
+   `A` occurrence is appended to the deck's `Cards[]` in this same run — "A
+   always first." Its `E` occurrence is **not** appended yet: insert a row
+   into `pending_occurrences` (`deck_code, card_id, letter: "E", remaining:
+   11`) instead. Every run, for every deck that minted at least one new
+   card, decrement every *other* pending row in that deck by the count of
+   new `A`'s just added; any row at `remaining <= 0` gets appended this run
+   and removed from the queue. A deck with no new cards this run leaves its
+   queue untouched. Single-occurrence types (listening/pronunciation/
+   grammar) never enter this queue — nothing of their own to space against,
+   they publish the instant they're eligible.
 7. **Regenerate content for every already-minted card, not just the new
    ones.** A note can be edited after being minted; the fix must reach the
    device on the next publish. `Cards[]` positions and `card_slots` are frozen
@@ -71,11 +80,13 @@ separate deployed processes, one database.
 
 ## When a run happens (D78)
 
-A nightly clock checks every deck against its 6-note floor and runs the
-pipeline above automatically for any deck that's crossed it. The operator UI
-exposes the same check live — which decks are close, how many notes each
-still needs, computed the same way as the real run but **without minting
-anything** (a dry run of steps 1–3 only) — plus a "publish now" button to run
+A nightly clock runs the pipeline above automatically — there's no floor to
+check (D91), so it simply mints and publishes whatever is eligible, which may
+be nothing. The operator UI exposes the same forecast live — how many notes
+are eligible per deck right now, and each deck's `pending_occurrences` queue
+depth (how many `E`'s are waiting and roughly how long until each catches up)
+— computed the same way as the real run but **without minting anything**
+(a dry run of steps 1–4 only) — plus a "publish now" button to run
 immediately instead of waiting for the clock. `hub`'s own UI shows the
 resulting history once a publish has actually happened — see
 `../hub/README.md`.

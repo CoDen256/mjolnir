@@ -429,7 +429,25 @@ can be performed by writing `persist:primary` before redux-persist rehydrates.
 - Audio playback call site: `playSoundFile(r.ID.toLowerCase(), 'mp3')` (mod 2124),
   gated on the shown side matching the card's `A` pointer.
 
-## C10. Related documentation
+## C11. `drawNewCards` round-robins across every *selected* deck, not just one
+
+C4 documented the single-deck slice (`deck.Cards.slice(5*PullCounter, +5)`).
+The full picture, confirmed reading mod 2110 directly (2026-10-25): that slice
+sits inside `drawNewCards(n, l, o, f, c, s)`, where `n` is the learner's
+*selected* decks and `o` is the last deck drawn. The function round-robins
+through `n` starting after `o`, pulling one ≤5-occurrence block from a deck
+before advancing to the next, continuing until the session's target count
+`l` is reached or every selected deck is exhausted. Studying with several
+decks enabled therefore interleaves *across* decks within a session, for
+free — real spacing, but probabilistic: it depends entirely on which decks
+are selected and how much content each has, and provides nothing if the
+learner studies one deck alone. `tun/docs/03-data-model.md`'s own
+within-deck lag-11 guarantee (D91) does not rely on this; it's a bonus on
+top, not a substitute — the stock C13–C17 decks encode their own guaranteed
+spacing regardless of what else might be selected, which is the stronger
+property to replicate.
+
+## C12. Related documentation
 
 Ecosystem design built on these findings lives in `tun/docs/`.
 Start at `tun/docs/README.md`.

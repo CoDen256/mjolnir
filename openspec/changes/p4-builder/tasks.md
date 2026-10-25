@@ -291,7 +291,10 @@ Four real, unaddressed gaps found reading the shipped implementation
 end-to-end against the spec and `tun/docs`, after section 5 was closed out.
 Recorded as **D86–D90** in `tun/docs/07-decisions.md` — read those for full
 context before starting any of these; this section is the task-list
-distillation, not the reasoning.
+distillation, not the reasoning. **D87 and D88 (6.2/6.3 below) were since
+resolved together as D91** — the mint floor is removed entirely and replaced
+with a cross-batch persisted-queue mechanism; read D91 and
+`03-data-model.md`'s rewritten interleave section before starting 6.2.
 
 Two things raised by the same review were considered and explicitly
 **declined** by the operator (D90): locking between concurrent publish runs,
@@ -314,24 +317,56 @@ need to change first.
       instead of `upsertCardContent` for that one id. Write a test that
       deliberately throws partway through a multi-deck publish and asserts
       the *next* run still succeeds.
-- [ ] 6.2 **(D87 — exempt single-occurrence decks from the 6-note floor.)**
-      `eligibility.js`'s `MINT_FLOOR` applies to every deck; `03-data-model.md`
-      marks listening/pronunciation/grammar (one occurrence each, per
-      `projector.js`) as needing no floor at all ("n/a — no intra-card lag
-      needed"). Change `decksCrossingFloor` to take each deck's occurrence
-      count into account (via `projector.js`'s per-type `occurrences` length)
-      and treat any single-occurrence deck's floor as 1, not 6. Add a test
-      asserting a single new eligible `listening` note publishes immediately.
-- [ ] 6.3 **(D88 — resolve the lag-11-at-6-cards open question before
-      touching the code.)** This one needs a decision, not a unilateral fix
-      — bring D88 to the operator: does the project accept that same-batch
-      interleaving caps the achievable lag at the batch size (meaning
-      `03-data-model.md`'s "6 cards achieves lag 11" claim gets corrected,
-      not the code), or does `interleaveOccurrences` need to become
-      cross-batch (scheduling an occurrence into a *future* publish's
-      block, which needs a persisted "pending occurrence" queue per deck —
-      a materially bigger change)? Do not implement either without that
-      decision being recorded first.
+- [ ] 6.2 **(D91 — resolves D87+D88 together. Remove the mint floor entirely;
+      replace same-batch interleaving with a cross-batch persisted queue.)**
+      Supersedes 6.2/6.3 as originally written — read `tun/docs/
+      03-data-model.md`'s "Appending new cards to an existing deck" section
+      (rewritten for D91) before starting; this task is its implementation,
+      not a fresh design.
+      1. **Schema**: new `pending_occurrences` table in `hub` (`deck_code,
+         card_id, letter, remaining`), migration alongside the existing
+         `card_slots`/`decks`/`publications`/`build_jobs`.
+      2. **`eligibility.js`**: delete `MINT_FLOOR` and `decksCrossingFloor`
+         entirely — every deck with ≥1 newly-eligible note mints and
+         publishes this run, no threshold of any kind.
+      3. **`projector.js`**: word/expression's `occurrences` becomes
+         `["A", "E"]` (drop `"N"`). Confirm the `N` *field* stays in the
+         projected `{N,E,X,A}` content — only the occurrence/quiz list
+         shrinks, not the card's content shape.
+      4. **Mint path** (`pipeline.js`/`mint.js`): on minting a new card,
+         `createCard` + `addOccurrence(deck, cardId, "A")` happen
+         immediately, same run. Do **not** call `addOccurrence` for `"E"`
+         — instead insert `{deck_code, card_id, letter: "E", remaining: 11}`
+         into `pending_occurrences`.
+      5. **Drain step**, once per deck, per run, after the mint step: count
+         new `A`'s added to that deck this run (`newACount`). If
+         `newACount > 0`, run `UPDATE pending_occurrences SET remaining =
+         remaining - $newACount WHERE deck_code = $deck`, then select every
+         row now at `remaining <= 0`, call `addOccurrence(deck, cardId,
+         "E")` for each, and delete those rows. A deck with `newACount = 0`
+         this run touches nothing in its queue (correct — see the design
+         doc's reasoning).
+      6. **`interleaveOccurrences`** (`injectDeck.js`): this function's
+         original job — ordering a same-batch block for 3-occurrence lag —
+         no longer has a caller once step 4/5 land (every new occurrence
+         append is now either a single immediate `A` or a single drained
+         `E`, never a same-batch block needing internal ordering). Either
+         delete it or repurpose it for the (now simpler) case of ordering
+         multiple same-run `A`'s/drained `E`'s within one deck — check which
+         before removing anything already tested.
+      7. **Tests**: a 2-note publish immediately ships both `A`'s and queues
+         both `E`'s at `remaining=11`; a subsequent run with 1 new note in
+         the same deck decrements the two pending rows to 10 and queues the
+         new card's own `E` at 11; a run with enough cumulative new cards to
+         cross 11 drains the oldest `E` and nothing else; a deck with zero
+         new cards in a run leaves its queue numerically unchanged; a
+         `listening`/`pronunciation`/`grammar` note never touches
+         `pending_occurrences` at all.
+      8. **Forecast UI** (`server.js`/`runForecast`): since there's no floor
+         to report crossing/not-crossing, replace that language with
+         eligible-note counts per deck plus each deck's current
+         `pending_occurrences` depth (useful operator signal: "C20 has 40
+         E's queued, oldest one has 3 to go").
 - [ ] 6.4 **(D89 — wire `grammarRuleLookup` to the endpoint that already
       exists.)** `stabbur`'s `GET /api/grammar_rules` has existed since
       `p4-notes`'s first implementation commit; nothing in `builder` calls
