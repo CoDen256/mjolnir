@@ -126,7 +126,7 @@ export function createServer(pool, config) {
         // D89: fetch stabbur's grammar rules once for this run, not once per
         // note — `type=grammar` notes project with real content instead of
         // a placeholder once this is wired in.
-        const grammarRuleLookup = await buildGrammarRuleLookup({ baseUrl: config.stabburBaseUrl });
+        const grammarRuleLookup = await buildGrammarRuleLookup({ baseUrl: config.stabburBaseUrl, authToken: config.stabburAuthToken });
         const result = await runPublish(pool, { ...config, grammarRuleLookup });
         return sendJson(res, 200, result);
       }

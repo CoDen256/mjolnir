@@ -17,12 +17,12 @@ import crypto from "node:crypto";
 // into already-minted vs newly-eligible, group the latter by deck. Shared
 // verbatim between the forecast and a real run (D-P5): one implementation of
 // "which notes are eligible and where do they go," two call sites.
-async function pullAndAssign(pool, { stabburBaseUrl, sourceLang }) {
+async function pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLang }) {
   // `since` is deliberately never passed: every run does a full pull, since
   // regenerating every already-minted card's content (not just new ones)
   // needs each note's current state anyway, and note counts are small
   // enough that this is cheap (task 4.1's finding).
-  const notes = await pullNotes({ baseUrl: stabburBaseUrl, sourceLang });
+  const notes = await pullNotes({ baseUrl: stabburBaseUrl, authToken: stabburAuthToken, sourceLang });
   const eligible = filterAudioEligible(notes);
 
   const { rows } = await pool.query("SELECT note_id FROM minted_notes WHERE note_id = ANY($1)", [
@@ -77,8 +77,8 @@ async function drainThenQueue(pool, deck, deckCode, newACount, toQueue) {
 // D91: there's no floor to report crossing/not-crossing any more — just
 // eligible-note counts plus each deck's current `pending_occurrences` depth
 // (an operator signal: "C20 has 40 E's queued, oldest one has 3 to go").
-export async function runForecast(pool, { stabburBaseUrl, sourceLang = "no" } = {}) {
-  const { newlyEligibleByDeck } = await pullAndAssign(pool, { stabburBaseUrl, sourceLang });
+export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sourceLang = "no" } = {}) {
+  const { newlyEligibleByDeck } = await pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLang });
   const queueDepths = await pendingQueueDepths(pool);
   const decks = [...newlyEligibleByDeck.entries()].map(([deckCode, notes]) => {
     const queue = queueDepths.get(deckCode);
@@ -97,10 +97,11 @@ export async function runForecast(pool, { stabburBaseUrl, sourceLang = "no" } = 
 // one thing both call.
 export async function runPublish(
   pool,
-  { stabburBaseUrl, sourceLang = "no", bundlePath, dataDir, publicBase, grammarRuleLookup } = {}
+  { stabburBaseUrl, stabburAuthToken, sourceLang = "no", bundlePath, dataDir, publicBase, grammarRuleLookup } = {}
 ) {
   const { eligibleNotesById, alreadyMinted, newlyEligibleByDeck } = await pullAndAssign(pool, {
     stabburBaseUrl,
+    stabburAuthToken,
     sourceLang,
   });
   const decksToMint = [...newlyEligibleByDeck.entries()];

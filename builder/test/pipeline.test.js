@@ -73,7 +73,14 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
   const fake = startFakeStabbur();
   const stabburBaseUrl = await fake.listen();
 
-  const config = { stabburBaseUrl, sourceLang: "no", bundlePath, dataDir, publicBase: "https://tun.example.test" };
+  const config = {
+    stabburBaseUrl,
+    stabburAuthToken: fake.authToken,
+    sourceLang: "no",
+    bundlePath,
+    dataDir,
+    publicBase: "https://tun.example.test",
+  };
 
   async function pendingRows(deckCode) {
     const { rows } = await pool.query(
@@ -367,7 +374,7 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
 
     // Exactly what server.js/clock.js now do: fetch the lookup once, pass it
     // into runPublish.
-    const grammarRuleLookup = await buildGrammarRuleLookup({ baseUrl: stabburBaseUrl });
+    const grammarRuleLookup = await buildGrammarRuleLookup({ baseUrl: stabburBaseUrl, authToken: fake.authToken });
     const result = await runPublish(pool, { ...config, grammarRuleLookup });
     assert.equal(result.published, true);
     assert.deepEqual(result.decksMinted, [{ deckCode: "C29", count: 1 }]);

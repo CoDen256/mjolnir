@@ -2,11 +2,24 @@
 // re-derive it slightly differently.
 export function loadConfig() {
   const stabburBaseUrl = process.env.STABBUR_BASE_URL;
+  const stabburAuthToken = process.env.STABBUR_AUTH_TOKEN;
   const bundlePath = process.env.BUNDLE_PATH;
   const dataDir = process.env.DATA_DIR || "../data";
   const publicBase = process.env.TUN_PUBLIC_BASE;
   if (!stabburBaseUrl) throw new Error("STABBUR_BASE_URL is required");
+  // D85: stabbur's /api/notes and /api/grammar_rules require a bearer token
+  // on every path except /ui and /blob/ (same shared-token middleware as
+  // smia, D-N1) — this was missing entirely until found cross-checking a
+  // real pull against stabbur's actual auth.py.
+  if (!stabburAuthToken) throw new Error("STABBUR_AUTH_TOKEN is required (stabbur's shared bearer token)");
   if (!bundlePath) throw new Error("BUNDLE_PATH is required (path to the bundle builder reads/writes)");
   if (!publicBase) throw new Error("TUN_PUBLIC_BASE is required (passed through to the publish module)");
-  return { stabburBaseUrl, bundlePath, dataDir, publicBase, sourceLang: process.env.SOURCE_LANG || "no" };
+  return {
+    stabburBaseUrl,
+    stabburAuthToken,
+    bundlePath,
+    dataDir,
+    publicBase,
+    sourceLang: process.env.SOURCE_LANG || "no",
+  };
 }

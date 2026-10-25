@@ -260,7 +260,7 @@ irreversible the way P2 was — normal review and iteration applies.
       failed.** The claim this task exists to prove is now actually proven:
       nothing in the Caddy routes or publish guards regressed from the
       D75/D84 move, only which repo they live in.
-- [ ] 5.4 Once `stabbur`'s `p4-notes` change has actually shipped a real
+- [x] 5.4 Once `stabbur`'s `p4-notes` change has actually shipped a real
       `GET /api/notes` endpoint, swap the fixture for the real service and
       re-run 5.1–5.2 against it. **Blocked**: `stabbur/openspec/changes/
       p4-notes` is still only proposed (proposal/design/specs exist, no
@@ -269,6 +269,47 @@ irreversible the way P2 was — normal review and iteration applies.
       field against that change's documented D-N4 contract specifically so
       this swap is mechanical once it ships: point `STABBUR_BASE_URL` at the
       real service, nothing in `builder`'s own code should need to change.
+      **Done (2026-10-25).** `p4-notes` had since shipped (23/24 of its own
+      tasks). Its own task 5.3 had already found, cross-checking against the
+      real implementation, that the swap was *not* in fact mechanical: the
+      one real bug was **D85** — `stabburClient.js` sent no `Authorization`
+      header at all, and stabbur's `/api/notes`/`/api/grammar_rules` require
+      a bearer token on every path except `/ui`/`/blob/`. Fixed:
+      `config.js` gained `STABBUR_AUTH_TOKEN` (required, alongside
+      `STABBUR_BASE_URL`); `stabburClient.js`'s `pullNotes`/
+      `pullGrammarRules` now send `Authorization: Bearer <token>`;
+      `pipeline.js`/`server.js`/`clock.js` thread it through. The local
+      stabbur instance's 10-note fixture from its own task 5.1 had been
+      wiped (container restart) — re-ran `scripts/seed_p4_notes.py` plus
+      hand-added one `type=grammar` note (that type wasn't in the original
+      10) to exercise D89's real lookup end-to-end, not just the fixture's.
+
+      Confirmed, against the real service, not the fixture:
+      - `GET /api/notes`/`GET /api/grammar_rules` shapes match
+        `test/fixtures/stabburNotes.js` field-for-field (no drift) — now a
+        standing, opt-in test (`builder/test/liveStabbur.test.js`, runs only
+        when `STABBUR_LIVE_URL`/`STABBUR_LIVE_TOKEN` are set) so this stays
+        re-checkable instead of a one-time manual confirmation.
+      - A real `runForecast`/`runPublish` run against the live service and
+        the **actual, full-size production `index.android.bundle`** (2207
+        modules — not the test fixture's handful) correctly assigned all 11
+        seeded notes to their decks, minted every one, and placed a real
+        `grammar_rule`'s title/html into the grammar card's `X` field (D89,
+        now proven against the real endpoint, not just a fixture mock).
+      - Every one of the other 2205 modules in that real bundle came out
+        byte-identical after the publish — the strongest check yet of the
+        `deck-card-save` guarantee, against the real app, not a 3-module
+        test fixture.
+      - A second run: edited an already-minted note's text, added one
+        genuinely new note, confirmed the edit reached its existing card
+        (id/position unchanged) while the new note minted into a fresh card
+        in the same run, `data_rev`/`buildId` both incremented correctly.
+      - D85's own guard holds against the real service too: a wrong/missing
+        token correctly 401s.
+
+      No other drift found. Also fixed in `stabbur`, during this same
+      session: nothing — this task's blocker was entirely `mjolnir`-side,
+      per `p4-notes` tasks.md 5.3's own finding.
 - [x] 5.5 Record any decision made during implementation that contradicts or
       refines this design as an ADR amendment in `tun/docs/07-decisions.md`
       — never a silent deviation. This project's established practice (D65,

@@ -10,7 +10,7 @@ export function startNightlyClock(pool, config, { intervalMs = ONE_DAY_MS } = {}
   const tick = async () => {
     try {
       // D89: fetch stabbur's grammar rules once per run, not once per note.
-      const grammarRuleLookup = await buildGrammarRuleLookup({ baseUrl: config.stabburBaseUrl });
+      const grammarRuleLookup = await buildGrammarRuleLookup({ baseUrl: config.stabburBaseUrl, authToken: config.stabburAuthToken });
       const result = await runPublish(pool, { ...config, grammarRuleLookup });
       if (result.published) {
         console.log(`nightly run published ${result.buildId}: ${JSON.stringify(result.decksMinted)}`);
