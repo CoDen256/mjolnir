@@ -23,22 +23,37 @@ mapping to the `expression` deck (C26), regardless of its `type`.
 - **THEN** it is assigned to the expression deck (C26) rather than left
   unassigned
 
-### Requirement: A deck publishes only once it has at least 6 newly-eligible notes
-The system SHALL NOT mint card_slots or publish any new cards for a deck
-whose count of newly-eligible (unminted) notes is below 6, and SHALL
-reconsider that deck's held notes on every subsequent run without losing
-them.
+### Requirement: Every deck with at least one newly-eligible note mints and publishes that run
+The system SHALL NOT withhold minting or publishing a newly-eligible note
+based on how many other notes are newly-eligible in the same deck —
+**superseded by D91** (operator decision, 2026-10-25): the original 6-note
+floor is removed entirely. A card's first occurrence (`A`, or a
+single-occurrence type's own letter) ships the run it is minted; any
+remaining occurrence for a multi-occurrence type is queued in a persisted,
+cross-batch table and drained once 11 other occurrences have landed in that
+deck, across however many subsequent publishes that takes (see
+`tun/docs/03-data-model.md`'s "Appending new cards to an existing deck").
 
-#### Scenario: A deck with 4 newly-eligible notes
-- **WHEN** a run finds 4 unminted, eligible notes assigned to a deck
-- **THEN** none of them are minted this run, and all 4 remain eligible for
-  the next run
+#### Scenario: A deck with 1 newly-eligible note
+- **WHEN** a run finds exactly 1 unminted, eligible note assigned to a deck
+- **THEN** it is minted and its first occurrence is published this run, with
+  no minimum batch size required
 
-#### Scenario: A deck crosses the floor
-- **WHEN** a deck accumulates a 6th newly-eligible note since its last
-  publish
-- **THEN** all currently-held eligible notes for that deck (6 or more) are
-  minted and published together in one run
+#### Scenario: A multi-occurrence card's second occurrence is queued, not dropped
+- **WHEN** a word/expression note is minted and its card's occurrence set is
+  `{A, E}`
+- **THEN** `A` is appended to the deck's `Cards[]` this run, and `E` is
+  queued at `remaining = 11` rather than appended immediately
+
+#### Scenario: A queued occurrence drains once enough new occurrences land
+- **WHEN** a deck's cumulative count of newly-appended occurrences since a
+  pending row was queued reaches 11
+- **THEN** that row's occurrence is appended to the deck's `Cards[]` and the
+  row is removed
+
+#### Scenario: A deck with no new cards in a run leaves its queue untouched
+- **WHEN** a run mints no new cards for a given deck
+- **THEN** that deck's pending occurrence rows are not decremented this run
 
 ### Requirement: Every publish regenerates all existing minted cards' content
 The system SHALL regenerate the `N`/`E`/`X`/`A` content of every
@@ -66,22 +81,23 @@ every run rather than reading a stored projection.
 ### Requirement: Publishing triggers on a schedule and on demand
 The system SHALL run the full pipeline automatically on a recurring schedule,
 and SHALL additionally run it immediately on an explicit operator request,
-with both paths subject to the same 6-note floor and eligibility rules.
+with both paths subject to the same eligibility rules (no floor — D91).
 
-#### Scenario: Scheduled run with no eligible decks
-- **WHEN** the scheduled run executes and no deck has crossed its floor
+#### Scenario: Scheduled run with no eligible notes anywhere
+- **WHEN** the scheduled run executes and no deck has any newly-eligible note
 - **THEN** no build_jobs row is created and no publish occurs
 
 #### Scenario: Operator requests an immediate publish
 - **WHEN** the operator triggers a publish from the UI
-- **THEN** the pipeline runs immediately, independent of the schedule, and is
-  still subject to the 6-note floor
+- **THEN** the pipeline runs immediately, independent of the schedule
 
 ### Requirement: The forecast reflects the same logic as a real run, without minting
 The system SHALL expose a dry-run view that executes the same pull,
 eligibility, and deck-assignment logic as a real publish, reporting per-deck
-counts toward the floor, while performing no writes to `card_slots`, `decks`,
-`Cards[]`, or any card content.
+newly-eligible counts and each deck's current pending-occurrence queue depth
+(no floor to report crossing/not-crossing — D91), while performing no writes
+to `card_slots`, `decks`, `Cards[]`, `pending_occurrences`, or any card
+content.
 
 #### Scenario: Forecast after a real publish
 - **WHEN** the operator views the forecast immediately after a run that
