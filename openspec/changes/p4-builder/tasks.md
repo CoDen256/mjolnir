@@ -284,3 +284,68 @@ irreversible the way P2 was — normal review and iteration applies.
       D-P3's "does build_jobs need locking" open question — are recorded
       inline in this file at tasks 4.5/4.10/4.12 rather than as separate
       top-level ADRs, matching the scale of each.)
+
+## 6. Findings from an independent architectural review (2026-10-25)
+
+Four real, unaddressed gaps found reading the shipped implementation
+end-to-end against the spec and `tun/docs`, after section 5 was closed out.
+Recorded as **D86–D90** in `tun/docs/07-decisions.md` — read those for full
+context before starting any of these; this section is the task-list
+distillation, not the reasoning.
+
+Two things raised by the same review were considered and explicitly
+**declined** by the operator (D90): locking between concurrent publish runs,
+and authentication on the operator-facing endpoints. Do not re-add these as
+tasks — if you find yourself wanting to, re-read D90 first; the preconditions
+it names (single operator, endpoints not yet wired into Caddy) are what would
+need to change first.
+
+- [ ] 6.1 **(D86 — fix the unbounded blast radius of a mid-run failure.)**
+      `mintCardSlots` commits per-deck, independently of the bundle
+      save/publish that happens once, after the whole loop in `runPublish`.
+      A throw anywhere after an early deck's commit leaves `card_slots`/
+      `minted_notes` naming a card that was never written into any bundle —
+      and the next run's regeneration step throws on that id forever, with
+      no self-recovery. Fix: either make the whole mint→save→publish
+      sequence one transaction (requires `mintCardSlots` to accept a shared
+      client instead of opening `BEGIN`/`COMMIT` itself), or make the
+      regeneration path in `runPublish`'s `alreadyMinted` loop tolerant of
+      "minted but missing from this bundle" by re-running `createCard`
+      instead of `upsertCardContent` for that one id. Write a test that
+      deliberately throws partway through a multi-deck publish and asserts
+      the *next* run still succeeds.
+- [ ] 6.2 **(D87 — exempt single-occurrence decks from the 6-note floor.)**
+      `eligibility.js`'s `MINT_FLOOR` applies to every deck; `03-data-model.md`
+      marks listening/pronunciation/grammar (one occurrence each, per
+      `projector.js`) as needing no floor at all ("n/a — no intra-card lag
+      needed"). Change `decksCrossingFloor` to take each deck's occurrence
+      count into account (via `projector.js`'s per-type `occurrences` length)
+      and treat any single-occurrence deck's floor as 1, not 6. Add a test
+      asserting a single new eligible `listening` note publishes immediately.
+- [ ] 6.3 **(D88 — resolve the lag-11-at-6-cards open question before
+      touching the code.)** This one needs a decision, not a unilateral fix
+      — bring D88 to the operator: does the project accept that same-batch
+      interleaving caps the achievable lag at the batch size (meaning
+      `03-data-model.md`'s "6 cards achieves lag 11" claim gets corrected,
+      not the code), or does `interleaveOccurrences` need to become
+      cross-batch (scheduling an occurrence into a *future* publish's
+      block, which needs a persisted "pending occurrence" queue per deck —
+      a materially bigger change)? Do not implement either without that
+      decision being recorded first.
+- [ ] 6.4 **(D89 — wire `grammarRuleLookup` to the endpoint that already
+      exists.)** `stabbur`'s `GET /api/grammar_rules` has existed since
+      `p4-notes`'s first implementation commit; nothing in `builder` calls
+      it. Add a small client function alongside `stabburClient.js` (fetch
+      the list once per run, build an `id → {title, html}` map), pass it as
+      `grammarRuleLookup` from `server.js`/`clock.js`'s call sites into
+      `runPublish`/`runForecast`. Confirm with a real `type=grammar` note
+      (fixture or real) that the placeholder text never appears once this
+      lands.
+- [ ] 6.5 Minor, lower priority — pick up opportunistically, not blocking
+      anything above: link `builder`'s forecast page and `hub`'s history
+      page to each other (no shared nav today, despite `02-services.md`'s
+      stated plan for one); show a one-line summary of what's about to
+      publish in the "publish now" confirmation flow, not just a disabled
+      button during the request; wire `pullNotes`'s unused `since` parameter
+      or explicitly document why it's intentionally unused (full pull every
+      run, relying on `minted_notes` rather than incremental fetch).
