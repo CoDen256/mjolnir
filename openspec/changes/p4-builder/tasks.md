@@ -303,7 +303,7 @@ tasks — if you find yourself wanting to, re-read D90 first; the preconditions
 it names (single operator, endpoints not yet wired into Caddy) are what would
 need to change first.
 
-- [ ] 6.1 **(D86 — fix the unbounded blast radius of a mid-run failure.)**
+- [x] 6.1 **(D86 — fix the unbounded blast radius of a mid-run failure.)**
       `mintCardSlots` commits per-deck, independently of the bundle
       save/publish that happens once, after the whole loop in `runPublish`.
       A throw anywhere after an early deck's commit leaves `card_slots`/
@@ -316,8 +316,30 @@ need to change first.
       "minted but missing from this bundle" by re-running `createCard`
       instead of `upsertCardContent` for that one id. Write a test that
       deliberately throws partway through a multi-deck publish and asserts
-      the *next* run still succeeds.
-- [ ] 6.2 **(D91 — resolves D87+D88 together. Remove the mint floor entirely;
+      the *next* run still succeeds. **Took the second option, not the
+      first**: a shared DB transaction was tried first, but it doesn't
+      actually close the gap — `saveDeckCardModel`'s file write is outside
+      Postgres's control regardless of transaction boundaries, so a throw
+      between the save and the final `COMMIT` would roll the DB back while
+      the file still has the new cards, producing a *worse* failure (a
+      duplicate-id collision on the next mint, since the id counter resets
+      but the bundle doesn't) than the one being fixed. Implemented instead:
+      `cardIdsForNotes` (`mint.js`) now returns each already-minted note's
+      deck code alongside its card id; `runPublish`'s `alreadyMinted` loop
+      checks `model.cards` directly, and when the card is missing it
+      re-runs `createCard` plus occurrence placement for it exactly as if it
+      were newly minted this run, instead of `upsertCardContent` throwing on
+      the missing match. (Task 6.2/D91 below later folded this recovery
+      path into the same `appendImmediateOccurrences`/`drainThenQueue`
+      helpers the normal mint path uses, once occurrence placement itself
+      changed shape — see that entry.) No new schema, no transaction
+      restructuring. Test: `builder/test/pipeline.test.js`'s D86 case plants
+      a colliding card id to force a throw after two decks' mints have
+      already committed but before the bundle is ever saved, confirms both
+      decks' ledger rows are stranded and the bundle has neither, then
+      confirms a later run recreates both decks' cards (content and
+      occurrence count) and succeeds.
+- [x] 6.2 **(D91 — resolves D87+D88 together. Remove the mint floor entirely;
       replace same-batch interleaving with a cross-batch persisted queue.)**
       Supersedes 6.2/6.3 as originally written — read `tun/docs/
       03-data-model.md`'s "Appending new cards to an existing deck" section
@@ -367,7 +389,41 @@ need to change first.
          eligible-note counts per deck plus each deck's current
          `pending_occurrences` depth (useful operator signal: "C20 has 40
          E's queued, oldest one has 3 to go").
-- [ ] 6.4 **(D89 — wire `grammarRuleLookup` to the endpoint that already
+
+      **Implemented as specified, with one ordering correction found while
+      writing the tests**: the data model's own worked example ("Publish 2:
+      A3 → queue: E1→10, E2→10, E3→11") requires decrementing a deck's
+      *existing* queue rows by this run's `newACount` *before* inserting
+      this run's own new `E` rows — otherwise a card's just-queued `E` would
+      be decremented by the very same-run batch of `A`'s that created it,
+      which the design doc explicitly rules out. `pipeline.js`'s
+      `drainThenQueue` enforces that ordering (drain existing rows, then
+      queue new ones); getting the order backwards was the one bug the new
+      test suite caught by hand-verifying the worked example's exact numbers
+      (`builder/test/pipeline.test.js`'s four "C24:" tests).
+
+      `interleaveOccurrences` (`src/injectDeck.js`) was kept, unchanged — it
+      has its own generic, already-tested unit/e2e coverage
+      (`test/unit/injectDeck.test.js`, `test/e2e/injectDeck.test.js`) as a
+      reusable "space a card's own occurrences across a batch" primitive,
+      independent of `builder`. `pipeline.js` simply stopped calling it: a
+      freshly-minted card now contributes at most one immediate occurrence
+      (`A`, or a single-occurrence type's own letter) per run, so there's
+      nothing to interleave at the call site any more — each new card's
+      occurrence is appended in straightforward processing order.
+
+      New: `hub/migrations/003_pending_occurrences.sql`;
+      `builder/src/pendingOccurrences.js` (`queuePendingOccurrence`,
+      `hasPendingOccurrence`, `drainPendingOccurrences`,
+      `pendingQueueDepths`). Changed: `eligibility.js` (floor removed),
+      `projector.js` (word/expression occurrences), `pipeline.js` (mint +
+      recovery paths rewritten around `splitOccurrences` /
+      `appendImmediateOccurrences` / `drainThenQueue`), `server.js` forecast
+      page (floor language replaced with eligible counts + queue depth),
+      `clock.js` comments. Tests updated throughout
+      (`eligibility.test.js`, `projector.test.js`, `pipeline.test.js`) for
+      the new occurrence counts and the floor's removal.
+- [x] 6.4 **(D89 — wire `grammarRuleLookup` to the endpoint that already
       exists.)** `stabbur`'s `GET /api/grammar_rules` has existed since
       `p4-notes`'s first implementation commit; nothing in `builder` calls
       it. Add a small client function alongside `stabburClient.js` (fetch
@@ -375,12 +431,32 @@ need to change first.
       `grammarRuleLookup` from `server.js`/`clock.js`'s call sites into
       `runPublish`/`runForecast`. Confirm with a real `type=grammar` note
       (fixture or real) that the placeholder text never appears once this
-      lands.
-- [ ] 6.5 Minor, lower priority — pick up opportunistically, not blocking
+      lands. **Done**: `stabburClient.js`'s `pullGrammarRules` +
+      `buildGrammarRuleLookup`; wired into `server.js`'s `POST
+      /builder/api/publish` handler and `clock.js`'s nightly tick, both
+      building a fresh lookup right before calling `runPublish`.
+      `runForecast` doesn't need one — it stops before `project()` is ever
+      called. Not wired into any `grammarRuleLookup` call for `runForecast`
+      for that reason. Tests: `builder/test/stabburClient.test.js` (unit),
+      `builder/test/pipeline.test.js`'s D89 case (end-to-end: a real lookup
+      makes one grammar note's placeholder disappear while an unmatched
+      rule id on another note correctly keeps showing it).
+- [x] 6.5 Minor, lower priority — pick up opportunistically, not blocking
       anything above: link `builder`'s forecast page and `hub`'s history
       page to each other (no shared nav today, despite `02-services.md`'s
       stated plan for one); show a one-line summary of what's about to
       publish in the "publish now" confirmation flow, not just a disabled
       button during the request; wire `pullNotes`'s unused `since` parameter
       or explicitly document why it's intentionally unused (full pull every
-      run, relying on `minted_notes` rather than incremental fetch).
+      run, relying on `minted_notes` rather than incremental fetch). **Done**:
+      `builder/src/server.js`'s forecast page and `hub/src/server.js`'s
+      history page now link to each other (`<nav>`, plain relative paths —
+      both are mounted on the same host once Caddy's commented-out
+      `reverse_proxy` blocks are enabled). The forecast page shows a
+      `summarizeForecast` line ("would mint 5 notes across 2 decks: C20 (4),
+      C22 (1)") above the publish-now button, computed from the same
+      forecast already being rendered — not a second query. `since` left
+      intentionally unwired; the comment explaining why (full pull every
+      run, needed for content regeneration regardless) now lives at the
+      `pullNotes` call site in `pipeline.js`, not just in task 4.1's note
+      here.

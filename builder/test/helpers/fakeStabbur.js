@@ -4,8 +4,9 @@ import crypto from "node:crypto";
 // A minimal stand-in for stabbur's p4-notes API (D-N4) — enough of
 // `GET /api/notes` and `GET /blob/<sha256>` for builder's pipeline tests to
 // run against something real-ish rather than mocking `fetch` module-wide.
-export function startFakeStabbur({ notes = [], blobs = {} } = {}) {
+export function startFakeStabbur({ notes = [], blobs = {}, grammarRules = [] } = {}) {
   let currentNotes = notes;
+  let currentGrammarRules = grammarRules;
   const blobBytes = new Map();
   for (const [sha, text] of Object.entries(blobs)) {
     blobBytes.set(sha, Buffer.from(text));
@@ -18,6 +19,10 @@ export function startFakeStabbur({ notes = [], blobs = {} } = {}) {
       const body = JSON.stringify(currentNotes.filter((n) => n.status === status));
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(body);
+    }
+    if (req.method === "GET" && url.pathname === "/api/grammar_rules") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(currentGrammarRules));
     }
     if (req.method === "GET" && url.pathname.startsWith("/blob/")) {
       const sha = url.pathname.slice("/blob/".length);
@@ -37,6 +42,9 @@ export function startFakeStabbur({ notes = [], blobs = {} } = {}) {
     server,
     setNotes(next) {
       currentNotes = next;
+    },
+    setGrammarRules(next) {
+      currentGrammarRules = next;
     },
     addBlob(sha, text) {
       blobBytes.set(sha, Buffer.from(text));

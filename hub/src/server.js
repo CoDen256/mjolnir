@@ -38,10 +38,12 @@ function renderHistoryPage(publications) {
   th, td { text-align: left; padding: 6px 12px; border-bottom: 1px solid #ddd; font-size: 14px; }
   th { color: #555; font-weight: 600; }
   code { font-size: 12px; }
+  nav { font-size: 14px; margin-bottom: 1rem; }
 </style>
 </head>
 <body>
 <h1>Publish history</h1>
+<nav><a href="/builder">builder's forecast &amp; publish-now →</a></nav>
 <table>
   <thead><tr><th>build_id</th><th>base_version</th><th>patch_rev</th><th>data_rev</th><th>bundle_sha</th><th>created_at</th></tr></thead>
   <tbody>${rows || `<tr><td colspan="6">no publications yet</td></tr>`}</tbody>

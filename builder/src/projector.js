@@ -27,19 +27,22 @@ function grammarRuleHtml(note, grammarRuleLookup) {
 }
 
 const PROJECTORS = {
+  // D91: word/expression's occurrence set drops `N` — the word is never
+  // quizzed text-first, it only ever appears on reveal. The `N` *content*
+  // field is unchanged; only the occurrence/quiz list shrinks.
   word: (note) => ({
     N: `<div class="center">${note.text}<br>${note.transcription || ""}${inflectionsHtml(note)}</div>`,
     E: translationsHtml(note),
     X: note.context_text ? `<div class="center">${note.context_text}</div>` : "",
     A: "N",
-    occurrences: ["A", "E", "N"],
+    occurrences: ["A", "E"],
   }),
   expression: (note) => ({
     N: `<div class="center">${note.text}</div>`,
     E: translationsHtml(note),
     X: note.context_text ? `<div class="center">${note.context_text}</div>` : "",
     A: "N",
-    occurrences: ["A", "E", "N"],
+    occurrences: ["A", "E"],
   }),
   listening: (note) => ({
     N: `<div class="center">${note.text}</div>`,

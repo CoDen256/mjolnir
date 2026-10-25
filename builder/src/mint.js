@@ -38,12 +38,18 @@ export async function mintCardSlots(pool, deckCode, notes) {
   }
 }
 
-// Maps every already-minted note id (hub's ledger) to its permanent card id,
-// for the regenerate-on-every-publish step (03-data-model.md).
+// Maps every already-minted note id (hub's ledger) to its permanent card id
+// and deck code, for the regenerate-on-every-publish step (03-data-model.md).
+// The deck code rides along so `pipeline.js`'s D86 recovery path can
+// recreate a card that's in this ledger but missing from the bundle without
+// a second query.
 export async function cardIdsForNotes(pool, noteIds) {
   if (noteIds.length === 0) return new Map();
-  const { rows } = await pool.query("SELECT note_id, card_slot_id FROM minted_notes WHERE note_id = ANY($1)", [noteIds]);
-  return new Map(rows.map((r) => [r.note_id, r.card_slot_id]));
+  const { rows } = await pool.query(
+    "SELECT mn.note_id, mn.card_slot_id, cs.deck_code FROM minted_notes mn JOIN card_slots cs ON cs.id = mn.card_slot_id WHERE mn.note_id = ANY($1)",
+    [noteIds]
+  );
+  return new Map(rows.map((r) => [r.note_id, { cardId: r.card_slot_id, deckCode: r.deck_code }]));
 }
 
 // A still-present note's audio can change (a re-recorded clip); refresh the

@@ -20,3 +20,24 @@ export async function pullNotes({ baseUrl, sourceLang = "no", since } = {}) {
 export function filterAudioEligible(notes) {
   return notes.filter((n) => !!n.audio_blob);
 }
+
+// D89: `GET /api/grammar_rules` has existed in stabbur since p4-notes'
+// first implementation commit — nothing in `builder` called it until now.
+export async function pullGrammarRules({ baseUrl } = {}) {
+  if (!baseUrl) throw new Error("pullGrammarRules requires baseUrl");
+  const res = await fetch(new URL("/api/grammar_rules", baseUrl));
+  if (!res.ok) {
+    throw new Error(`stabbur grammar_rules pull failed: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+// Fetches the list once and returns a synchronous `id -> {title, html}`
+// lookup — `projector.js`'s `grammarRuleLookup` param is plain and
+// synchronous, so the fetch has to happen up front, once per run, not per
+// note.
+export async function buildGrammarRuleLookup({ baseUrl } = {}) {
+  const rules = await pullGrammarRules({ baseUrl });
+  const byId = new Map(rules.map((r) => [r.id, { title: r.title, html: r.html }]));
+  return (id) => byId.get(id);
+}

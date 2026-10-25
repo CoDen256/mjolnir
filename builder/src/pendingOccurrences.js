@@ -1,0 +1,57 @@
+// D91 (supersedes D87/D88): word/expression's `E` occurrence isn't appended
+// the run its card is minted — it's queued here until 11 other occurrences
+// have landed in the same deck, across however many subsequent publishes
+// that takes. Single-occurrence note types never touch this table.
+
+export async function queuePendingOccurrence(pool, { deckCode, cardId, letter, remaining }) {
+  await pool.query(
+    "INSERT INTO pending_occurrences (deck_code, card_id, letter, remaining) VALUES ($1, $2, $3, $4)",
+    [deckCode, cardId, letter, remaining]
+  );
+}
+
+// True if this card already has a queued row for `letter` — guards against
+// double-queuing when the D86 recovery path recreates a card whose queue row
+// may have already been written durably before an earlier run crashed.
+export async function hasPendingOccurrence(pool, cardId, letter) {
+  const { rows } = await pool.query("SELECT 1 FROM pending_occurrences WHERE card_id = $1 AND letter = $2", [
+    cardId,
+    letter,
+  ]);
+  return rows.length > 0;
+}
+
+// Decrements every pending row in `deckCode` by `newACount` — the number of
+// brand-new `A` occurrences just appended to that deck this run — then
+// returns and deletes every row that reached `remaining <= 0`. A deck with
+// `newACount` of 0 touches nothing (03-data-model.md: "a deck that gets zero
+// new cards in a given publish leaves its queue untouched").
+export async function drainPendingOccurrences(pool, deckCode, newACount) {
+  if (newACount <= 0) return [];
+  await pool.query("UPDATE pending_occurrences SET remaining = remaining - $2 WHERE deck_code = $1", [
+    deckCode,
+    newACount,
+  ]);
+  const { rows } = await pool.query(
+    "SELECT id, card_id, letter FROM pending_occurrences WHERE deck_code = $1 AND remaining <= 0",
+    [deckCode]
+  );
+  if (rows.length > 0) {
+    await pool.query(
+      "DELETE FROM pending_occurrences WHERE id = ANY($1)",
+      [rows.map((r) => r.id)]
+    );
+  }
+  return rows.map((r) => ({ cardId: r.card_id, letter: r.letter }));
+}
+
+// Forecast UI (task 6.2.8): per-deck queue depth and the oldest row's
+// `remaining` count — "C20 has 40 E's queued, oldest one has 3 to go".
+export async function pendingQueueDepths(pool) {
+  const { rows } = await pool.query(
+    "SELECT deck_code, count(*) AS depth, min(remaining) AS oldest_remaining FROM pending_occurrences GROUP BY deck_code"
+  );
+  return new Map(
+    rows.map((r) => [r.deck_code, { depth: Number(r.depth), oldestRemaining: Number(r.oldest_remaining) }])
+  );
+}

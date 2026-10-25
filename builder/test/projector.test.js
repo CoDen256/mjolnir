@@ -4,9 +4,11 @@ import { project, NOTE_TYPES } from "../src/projector.js";
 import { fixtureNote } from "./fixtures/stabburNotes.js";
 
 test("projects all five note types without throwing, each with occurrence set + A matching 03-data-model.md's table", () => {
+  // D91: word/expression drop "N" from their occurrence set (never
+  // quizzed text-first); the N *content* field is unaffected.
   const expected = {
-    word: { A: "N", occurrences: ["A", "E", "N"] },
-    expression: { A: "N", occurrences: ["A", "E", "N"] },
+    word: { A: "N", occurrences: ["A", "E"] },
+    expression: { A: "N", occurrences: ["A", "E"] },
     listening: { A: "N", occurrences: ["A"] },
     pronunciation: { A: "E", occurrences: ["N"] },
     grammar: { A: "E", occurrences: ["N"] },

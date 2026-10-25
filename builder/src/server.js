@@ -1,6 +1,7 @@
 import http from "node:http";
 import { runForecast, runPublish } from "./pipeline.js";
 import { recentBuildJobs } from "./buildJobs.js";
+import { buildGrammarRuleLookup } from "./stabburClient.js";
 
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
@@ -33,17 +34,29 @@ function renderBuildJobsTable(jobs) {
 </table>`;
 }
 
+// Task 6.5: "C20 (4), C22 (1)" — what "publish now" is actually about to do,
+// shown before the request fires, not just a disabled button while it's in
+// flight.
+function summarizeForecast(forecast) {
+  const minting = forecast.decks.filter((d) => d.newlyEligibleCount > 0);
+  if (minting.length === 0) return "nothing eligible right now — publish now would be a no-op";
+  const total = minting.reduce((sum, d) => sum + d.newlyEligibleCount, 0);
+  const perDeck = minting.map((d) => `${d.deckCode} (${d.newlyEligibleCount})`).join(", ");
+  return `would mint ${total} note${total === 1 ? "" : "s"} across ${minting.length} deck${minting.length === 1 ? "" : "s"}: ${perDeck}`;
+}
+
 function renderForecastPage(forecast, jobs) {
   const rows = forecast.decks
     .map(
       (d) => `<tr>
         <td>${escapeHtml(d.deckCode)}</td>
         <td>${d.newlyEligibleCount}</td>
-        <td>${d.floor}</td>
-        <td>${d.crossed ? "yes — will publish next run" : "waiting"}</td>
+        <td>${d.pendingQueueDepth}</td>
+        <td>${d.pendingOldestRemaining === null ? "" : d.pendingOldestRemaining}</td>
       </tr>`
     )
     .join("\n");
+  const summary = summarizeForecast(forecast);
 
   return `<!doctype html>
 <html>
@@ -57,15 +70,18 @@ function renderForecastPage(forecast, jobs) {
   th { color: #555; font-weight: 600; }
   button { font-size: 14px; padding: 8px 16px; cursor: pointer; }
   #result { margin-top: 1rem; font-size: 14px; }
+  nav { font-size: 14px; margin-bottom: 1rem; }
 </style>
 </head>
 <body>
 <h1>Forecast</h1>
-<p>Live dry run — which decks are close to the 6-note floor, computed the same way a real run would.</p>
+<nav><a href="/mjolnir">hub's publish history →</a></nav>
+<p>Live dry run — notes eligible to mint per deck right now, and each deck's pending-E queue (D91: no floor, every eligible note mints and publishes this run).</p>
 <table>
-  <thead><tr><th>deck</th><th>newly eligible</th><th>floor</th><th>status</th></tr></thead>
+  <thead><tr><th>deck</th><th>newly eligible</th><th>E's queued</th><th>oldest E's countdown</th></tr></thead>
   <tbody>${rows || `<tr><td colspan="4">no eligible notes pulled</td></tr>`}</tbody>
 </table>
+<p id="summary">${escapeHtml(summary)}</p>
 <button id="publish-now">Publish now</button>
 <div id="result"></div>
 ${renderBuildJobsTable(jobs)}
@@ -73,8 +89,9 @@ ${renderBuildJobsTable(jobs)}
 document.getElementById('publish-now').addEventListener('click', async () => {
   const btn = document.getElementById('publish-now');
   const result = document.getElementById('result');
+  const summary = document.getElementById('summary').textContent;
   btn.disabled = true;
-  result.textContent = 'publishing…';
+  result.textContent = summary + ' — publishing…';
   try {
     const res = await fetch('/builder/api/publish', { method: 'POST' });
     const body = await res.json();
@@ -104,9 +121,13 @@ export function createServer(pool, config) {
         return res.end(renderForecastPage(forecast, jobs));
       }
       // Task 4.15: triggers 4.2-4.12 immediately, independent of the
-      // schedule, still subject to the floor (runPublish enforces it).
+      // schedule — a no-op if nothing is newly eligible (runPublish handles it).
       if (req.method === "POST" && url.pathname === "/builder/api/publish") {
-        const result = await runPublish(pool, config);
+        // D89: fetch stabbur's grammar rules once for this run, not once per
+        // note — `type=grammar` notes project with real content instead of
+        // a placeholder once this is wired in.
+        const grammarRuleLookup = await buildGrammarRuleLookup({ baseUrl: config.stabburBaseUrl });
+        const result = await runPublish(pool, { ...config, grammarRuleLookup });
         return sendJson(res, 200, result);
       }
 

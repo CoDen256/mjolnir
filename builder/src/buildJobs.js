@@ -1,6 +1,6 @@
 // The CI-job pattern (02-services.md): builder writes a row, picks it up,
 // writes status back; builder's UI polls (task 4.12). No row at all is
-// written for a no-op run (no deck crossed the floor) — "no build_jobs row
+// written for a no-op run (no newly-eligible notes anywhere, D91) — "no build_jobs row
 // and no publish" is the spec's own wording for that case.
 export async function createBuildJob(pool) {
   const { rows } = await pool.query(
