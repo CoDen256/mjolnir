@@ -11,6 +11,7 @@ import { runDiff } from "../src/commands/diff.js";
 import { runPatchback } from "../src/commands/patchback.js";
 import { runCompanion } from "../src/commands/companion.js";
 import { runUi } from "../src/commands/ui.js";
+import { publish } from "../tool/src/otaPublish.js";
 
 const program = new Command();
 
@@ -101,5 +102,20 @@ program
   .action((opts) =>
     runUi({ port: Number(opts.port), patchesDir: opts.patchesDir, editorCmd: opts.editorCmd })
   );
+
+program
+  .command("ota-publish <bundle> <buildId> [label]")
+  .description(
+    "Publish a bundle as an OTA build: writes data/ota/bundle/<buildId>.js and repoints data/ota/current.json"
+  )
+  .option("--data-dir <dir>", "directory containing ota/ and blob/", "data")
+  .action((bundle, buildId, label, opts) => {
+    const result = publish(bundle, buildId, label, { dataDir: opts.dataDir });
+    console.log(`published ${result.buildId}`);
+    console.log(`  size   ${result.size}`);
+    console.log(`  sha256 ${result.sha256}`);
+    console.log(`  url    ${result.url}`);
+    if (result.reused) console.log("  (bundle already present and identical — republished current.json only)");
+  });
 
 program.parseAsync(process.argv);

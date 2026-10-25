@@ -21,3 +21,7 @@ diff-output/
 
 # --- Build outputs ---
 /build/
+
+# --- Deploy (D84): secrets and served data, mirrors tun's old pattern ---
+.env
+data/
