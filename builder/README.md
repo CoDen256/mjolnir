@@ -1,12 +1,12 @@
 # builder
 
-Background worker, no web interface, **written in Node — the same runtime as
-`bundle-tool`** (D76), specifically so it can import `inject-deck` and the OTA
-publish guards as in-process library calls, not a subprocess and not an HTTP
-hop. Polls `build_jobs` (in `hub`'s database — builder has no schema of its
-own), pulls `ready` notes with audio from `stabbur`, projects them into
-Mjølnir's deck/card format, assembles a bundle plus an audio manifest, and
-writes status back.
+Background worker with a small operator UI (D80), **written in Node — the
+same runtime as `bundle-tool`** (D76), specifically so it can import
+`inject-deck` and the OTA publish guards as in-process library calls, not a
+subprocess and not an HTTP hop. Polls `build_jobs` (in `hub`'s database —
+builder has no schema of its own), pulls `ready` notes with audio from
+`stabbur`, projects them into Mjølnir's deck/card format, assembles a bundle
+plus an audio manifest, and writes status back.
 
 **`hub` owns the schema** (`card_slots`, `decks`, `publications`, `build_jobs`,
 and its own ledger of which note ids are already minted — never pushed back to
@@ -68,6 +68,17 @@ separate deployed processes, one database.
     (D76) — the buildId regex, the no-reuse-with-different-bytes guard, and
     the magic-prefix check live in exactly one place, in-process for builder,
     shelled out to for the manual path. Write `build_jobs` status.
+
+## When a run happens (D78)
+
+A nightly clock checks every deck against its 6-note floor and runs the
+pipeline above automatically for any deck that's crossed it. The operator UI
+exposes the same check live — which decks are close, how many notes each
+still needs, computed the same way as the real run but **without minting
+anything** (a dry run of steps 1–3 only) — plus a "publish now" button to run
+immediately instead of waiting for the clock. `hub`'s own UI shows the
+resulting history once a publish has actually happened — see
+`../hub/README.md`.
 
 ## Hard rules — violating these corrupts device progress
 
