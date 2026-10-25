@@ -237,29 +237,29 @@ irreversible the way P2 was — normal review and iteration applies.
       `Cards[]` position stay fixed. (Same file, "editing an already-minted
       note's content..." — also confirms the deck's occurrence count doesn't
       grow from a content-only regen.)
-- [ ] 5.3 Confirm `bin/ota-verify.sh` still passes 16/16 after the D75/D84
+- [x] 5.3 Confirm `bin/ota-verify.sh` still passes 16/16 after the D75/D84
       move — this is the regression test that matters most, since it's the
       one thing that would silently break OTA for the already-installed app.
-      **Blocked on operator action, current status:**
-      - This environment has no network path to the live VPS — `ota-verify.sh`
-        needs a real host with DNS + TLS already issued (`tun/DEPLOY.md`'s
-        prior "deployed and verified, 2026-10-20" state, now superseded in
-        layout by D84). Nothing to run it against from here.
-      - What *is* verified here instead: `tool/src/otaPublish.js` reproduces
-        `ota-publish.sh`'s exact guards byte-for-byte in behavior (unit tests,
-        task 1 — buildId regex, magic prefix, no-reuse-with-different-bytes,
-        https-only, companion-id match), and the moved
-        `bin/ota-publish.sh`/`bin/ota-verify.sh` run end-to-end against a
-        local fixture bundle + fixture data dir (task 1.4's smoke test, and
-        `builder/test/pipeline.test.js`'s full publish flow).
-      - **What the operator still needs to do**: deploy `mjolnir`'s new
-        `compose.yaml`/`caddy/Caddyfile` (D84 — `tun`'s old stack must be
-        torn down first if it's still running, since both would otherwise
-        fight over ports 80/443 on the same box) and re-run
-        `bin/ota-verify.sh` against the live host. Expected to still print
-        16/16 — nothing in the Caddy routes or publish guards changed
-        behaviorally, only which repo they live in — but this is the one
-        claim in this whole change that only a live run can actually prove.
+      **Done (2026-10-25).** The operator redeployed `mjolnir`'s own
+      `compose.yaml`/`caddy/Caddyfile` (D84) on the live VPS. First
+      `ota-verify.sh` run came back 4 passed/6 failed — not a Caddy
+      regression, but a genuinely empty deploy: no bundle had been published
+      yet, so `current.json` didn't exist (even the correct-token check 404s
+      without it). Root cause of the awkward bootstrap: `bin/ota-publish.sh`
+      shells out to `node bin/bundle-tool.js` (D-P4), and the operator
+      doesn't run node on bare metal — a gap task 5.3 didn't originally
+      anticipate. Fixed with a new `Dockerfile` + compose.yaml `node`
+      profile (`mjolnir-node`): bind-mounts the checkout into a
+      `node:22-alpine` container (bash/curl added) so the existing scripts
+      run completely unmodified via `docker compose exec`, no new publish
+      code path. Verified locally (built the image, ran `ota-publish.sh`
+      through it against the real stock bundle, correct `current.json` out)
+      before handing back to the operator. With that, the operator published
+      the stock bundle as `b000001` and re-ran `bin/ota-verify.sh` directly
+      on the host (bash + curl only, no container needed) — **16 passed, 0
+      failed.** The claim this task exists to prove is now actually proven:
+      nothing in the Caddy routes or publish guards regressed from the
+      D75/D84 move, only which repo they live in.
 - [ ] 5.4 Once `stabbur`'s `p4-notes` change has actually shipped a real
       `GET /api/notes` endpoint, swap the fixture for the real service and
       re-run 5.1–5.2 against it. **Blocked**: `stabbur/openspec/changes/

@@ -1,10 +1,10 @@
 # Deploying mjolnir
 
-> **Status: owed a re-verification after D84.** Before D84, `bin/ota-verify.sh`
-> printed 16 passed, 0 failed against the live host (2026-10-20), under the
-> old `tun`-owned compose/Caddy layout. D84 moved the entire deployable stack
-> here — re-run `bin/ota-verify.sh` after deploying this layout for the first
-> time (see "Publish build #1" below).
+> **Status: re-verified 2026-10-25, 16 passed / 0 failed**, on `mjolnir`'s own
+> `compose.yaml`/`caddy/Caddyfile` layout (D84 — moved the entire deployable
+> stack here from `tun`; previously verified 2026-10-20 under the old
+> `tun`-owned layout). Re-run `bin/ota-verify.sh` after any future Caddy
+> change.
 >
 > **The DNS record must stay grey-clouded (DNS only), never proxied (D57).**
 > A CDN in the body path re-encodes responses and breaks D49's sha256
