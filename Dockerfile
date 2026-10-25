@@ -6,7 +6,9 @@
 # restart picks up source changes without a rebuild; only `npm ci` — the
 # expensive, rarely-changing part — happens at build time.
 FROM node:22-alpine
-RUN apk add --no-cache bash curl
+# ffmpeg: builder's audio-trim step (D-F1, small-fixes-audio-trim-drain-order)
+# shells out to it to cut a card's audio to its audio_sel_ms selection.
+RUN apk add --no-cache bash curl ffmpeg
 WORKDIR /app
 
 COPY package.json package-lock.json ./

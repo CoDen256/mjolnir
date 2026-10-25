@@ -127,10 +127,12 @@ export async function runPublish(
       if (!deckTitleCache.has(deckCode)) deckTitleCache.set(deckCode, await deckTitle(pool, deckCode));
       return ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
     }
+    const selMsByCardId = {};
     for (const note of alreadyMinted) {
       const entry = cardIdByNoteId.get(note.id);
       if (!entry) continue;
       const { cardId, deckCode } = entry;
+      if (note.audio_sel_ms) selMsByCardId[cardId] = note.audio_sel_ms;
       const content = project(note, { grammarRuleLookup });
       if (model.cards.some((c) => c.ID === cardId)) {
         upsertCardContent(model.cards, cardId, { N: content.N, E: content.E, X: content.X, A: content.A });
@@ -158,6 +160,7 @@ export async function runPublish(
       let newACount = 0;
       const toQueue = [];
       for (const { note, cardId } of minted) {
+        if (note.audio_sel_ms) selMsByCardId[cardId] = note.audio_sel_ms;
         const content = project(note, { grammarRuleLookup });
         createCard(model.cards, { id: cardId, deckId: deckCode, N: content.N, E: content.E, D: title, X: content.X, A: content.A });
         const result = appendImmediateOccurrences(deck, cardId, content.occurrences);
@@ -171,11 +174,11 @@ export async function runPublish(
     saveDeckCardModel(bundlePath, model);
 
     const cardAudio = await allCardAudio(pool);
-    await ensureBlobsPresent(cardAudio, { stabburBaseUrl, dataDir });
+    const finalCardAudio = await ensureBlobsPresent(cardAudio, { stabburBaseUrl, dataDir, selMsByCardId });
 
     const { baseVersion, patchRev, dataRev } = await previousVersions(pool);
     const buildId = await nextBuildId(pool);
-    writeAudioManifest(cardAudio, { dataDir, buildId });
+    writeAudioManifest(finalCardAudio, { dataDir, buildId });
 
     const bundleBytes = fs.readFileSync(bundlePath);
     const bundleSha = crypto.createHash("sha256").update(bundleBytes).digest("hex");

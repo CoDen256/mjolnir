@@ -12,6 +12,7 @@ import { createCard } from "../../src/injectDeck.js";
 import { runExplode } from "../../src/commands/explode.js";
 import { buildFixtureBundleSource } from "../../test/fixtures/deckCardFixture.js";
 import { readModuleSource } from "../../src/parseBundle.js";
+import { execFileSync } from "node:child_process";
 import { startFakeStabbur, shaOf } from "./helpers/fakeStabbur.js";
 import { buildGrammarRuleLookup } from "../src/stabburClient.js";
 
@@ -41,7 +42,10 @@ function wordNote(id, overrides = {}) {
     inflections: {},
     context_text: "",
     audio_blob: shaOf(audioText),
-    audio_sel_ms: [0, 100],
+    // null by default: this suite's fixture "audio" is plain text, not real
+    // decodable audio, so it can't go through D-F1's real-ffmpeg trim path —
+    // see the dedicated "D-F1" test below for that, which uses a real clip.
+    audio_sel_ms: null,
     grammar_rule_id: null,
     status: "ready",
     _audioText: audioText,
@@ -391,6 +395,68 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
     // blanket "always succeeds" stub.
     const g1Card = model.cards.find((c) => c.DECK_ID === "C29" && c.N.includes("word-g1"));
     assert.match(g1Card.X, /not yet available/);
+  });
+
+  await t.test("D-F1: a real publish trims a note's audio to its audio_sel_ms, end to end", async () => {
+    // expression -> C26, untouched by every earlier test in this file. Real,
+    // ffmpeg-decodable bytes this time (not this suite's usual plain-text
+    // "audio for <id>" fixture) — unit-level trim behavior is already
+    // covered by `audioSnapshot.test.js`; this proves it reaches the final
+    // audio.json manifest through the whole real pipeline.
+    const clipPath = path.join(tmpDir, "e1-source.mp3");
+    execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", clipPath]);
+    const clipBytes = fs.readFileSync(clipPath);
+    const clipSha = shaOf(clipBytes);
+    fake.addBlob(clipSha, clipBytes);
+
+    const e1 = wordNote("e1", {
+      type: "expression",
+      pos: undefined,
+      text: "god morgen",
+      audio_blob: clipSha,
+      audio_sel_ms: [500, 1500],
+    });
+    fake.setNotes([
+      wordNote("n1", { text: "EDITED" }),
+      wordNote("n2"),
+      wordNote("n3"),
+      wordNote("n4"),
+      wordNote("v1", { pos: "verb" }),
+      wordNote("p1", { pos: "preposisjon" }),
+      wordNote("p2", { pos: "preposisjon" }),
+      wordNote("p3", { pos: "preposisjon" }),
+      ...Array.from({ length: 10 }, (_, i) => wordNote(`p${4 + i}`, { pos: "preposisjon" })),
+      wordNote("g1", { type: "grammar", pos: undefined, grammar_rule_id: "rule-1" }),
+      wordNote("g2", { type: "grammar", pos: undefined, grammar_rule_id: "rule-2" }),
+      e1,
+    ]);
+
+    const result = await runPublish(pool, config);
+    assert.equal(result.published, true);
+    assert.deepEqual(result.decksMinted, [{ deckCode: "C26", count: 1 }]);
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(dataDir, "ota", result.buildId, "audio.json"), "utf8"));
+    const model = loadDeckCardModel(bundlePath);
+    const e1Card = model.cards.find((c) => c.DECK_ID === "C26" && c.N.includes("god morgen"));
+    assert.ok(e1Card, "e1's card should have been minted into C26");
+
+    const manifestSha = manifest[e1Card.ID];
+    assert.ok(manifestSha, "e1's card must have a manifest entry");
+    assert.notEqual(manifestSha, clipSha, "the manifest must point at the trimmed derivative, not the original upload");
+
+    const trimmedPath = path.join(dataDir, "blob", manifestSha);
+    assert.ok(fs.existsSync(trimmedPath));
+    const durationOut = execFileSync(
+      "ffprobe",
+      ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", trimmedPath],
+      { encoding: "utf8" }
+    );
+    const durationMs = Math.round(parseFloat(durationOut.trim()) * 1000);
+    assert.ok(Math.abs(durationMs - 1000) < 150, `expected ~1000ms (500-1500 selection), got ${durationMs}ms`);
+
+    const originalPath = path.join(dataDir, "blob", clipSha);
+    assert.ok(fs.existsSync(originalPath), "the original upload must still be fetched into hub's blob cache");
+    assert.deepEqual(fs.readFileSync(originalPath), clipBytes, "the original must stay byte-identical — D45");
   });
 
   t.after(async () => {

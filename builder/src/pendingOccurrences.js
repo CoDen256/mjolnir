@@ -32,8 +32,13 @@ export async function drainPendingOccurrences(pool, deckCode, newACount) {
     deckCode,
     newACount,
   ]);
+  // D-F2: ORDER BY id ASC (insertion order) — without it, when more than one
+  // row crosses zero in the same run, the order they're appended to
+  // `Cards[]` is whatever Postgres's physical storage happens to return, not
+  // reproducible and not necessarily oldest-first. The row queued longest
+  // ago must always drain first.
   const { rows } = await pool.query(
-    "SELECT id, card_id, letter FROM pending_occurrences WHERE deck_code = $1 AND remaining <= 0",
+    "SELECT id, card_id, letter FROM pending_occurrences WHERE deck_code = $1 AND remaining <= 0 ORDER BY id ASC",
     [deckCode]
   );
   if (rows.length > 0) {
