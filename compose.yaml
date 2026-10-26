@@ -1,5 +1,9 @@
-# mjolnir — one stack, one VPS (D84: the operator deploys this repo alone;
-# `tun` ships no deployable artifacts).
+# mjolnir — one stack, one VPS. This file still stands alone (`cd mjolnir
+# && docker compose up` works unchanged) — D94 additionally lets
+# `tun/compose.yaml` `include:` it alongside `stabbur`'s own compose file
+# for a combined "one git pull + one docker compose up" across both repos,
+# superseding D84's "mjolnir deploys alone" framing now that stabbur needs
+# deploying too.
 #
 # The full stack now exists (hub-builder-operator-console shipped), so this
 # is one profile-free `docker compose up -d`: caddy, postgres, hub, builder.
@@ -21,6 +25,34 @@ services:
       # Site address: a hostname in production (auto-HTTPS), ":8080" locally.
       TUN_SITE_ADDRESS: ${TUN_SITE_ADDRESS:?set TUN_SITE_ADDRESS in .env}
       OTA_TOKEN: ${OTA_TOKEN:?set OTA_TOKEN in .env}
+      # Where stabbur actually is — see caddy/Caddyfile's own comment on
+      # this var for the full set of cases. No default: an unset
+      # STABBUR_UPSTREAM must fail loudly, not silently serve a broken
+      # /stabbur/* route.
+      #
+      # Recommended, verified working: STABBUR_UPSTREAM=backend:5056, with
+      # this caddy service (below) and stabbur's own `backend` service both
+      # joined to the external `tun-shared` network — one `docker network
+      # create tun-shared` before bringing either stack up, for the first
+      # time only. This is what "two independent `docker compose up`s,
+      # configure .env of both" actually resolves to: the two stacks stay
+      # fully independent, this one shared network is the only coupling.
+      STABBUR_UPSTREAM: ${STABBUR_UPSTREAM:?set STABBUR_UPSTREAM in .env}
+    networks:
+      - default
+      - tun-shared
+    extra_hosts:
+      # Fallback only — load-bearing solely if STABBUR_UPSTREAM is instead
+      # set to host.docker.internal:<published-port> (stabbur run
+      # independently, no shared network, reached via its host-published
+      # port). Docker Desktop defines this name on its own; plain Linux
+      # Docker (this project's actual VPS target) does not, without this
+      # entry. Note this path depends on the host's NAT/hairpin routing
+      # actually reaching a published port from inside a bridge network,
+      # which is not reliable in every environment (confirmed to fail
+      # inside at least one nested-Docker sandbox) — prefer tun-shared
+      # above unless there's a specific reason not to share a network.
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./data:/srv:ro                   # served read-only; publishing writes from the host
@@ -93,10 +125,33 @@ services:
       - .:/app
       - /app/node_modules
       - /app/builder/node_modules
+    networks:
+      # tun-shared: so STABBUR_BASE_URL can be a plain service name
+      # ("backend:5056") instead of a URL that has to work from inside this
+      # specific container — this is builder's own outbound fetch to
+      # stabbur's API (pullNotes/pullGrammarRules), not a browser-facing
+      # link (that's STABBUR_UI_BASE, which stays a public URL through
+      # Caddy — see .env.example). Not needed if deployed via tun's
+      # `include:` instead (D94), same reasoning as the caddy service above.
+      - default
+      - tun-shared
 
-  # stabbur/smia/phonexa deploy separately for now (tun/docs/02-services.md
-  # — whether they ever join this compose file is an open question, not
-  # decided).
+  # stabbur joins via tun/compose.yaml's `include:` (D94) when both are
+  # deployed together that way, or via the `tun-shared` external network
+  # above when run as two fully independent stacks — its own compose.yaml
+  # stays independent either way. smia/phonexa joining is still an open
+  # question (tun/docs/02-services.md).
+
+networks:
+  default: {}
+  tun-shared:
+    # One-time setup, before bringing either stack up for the first time:
+    #   docker network create tun-shared
+    # Not needed at all if this stack is deployed via tun/compose.yaml's
+    # `include:` (D94) instead — that path already shares one network across
+    # both projects. Only required for the "two separate docker compose up
+    # stacks" path.
+    external: true
 
 volumes:
   caddy_data:

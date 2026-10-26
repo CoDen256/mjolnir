@@ -65,9 +65,77 @@
 	# around. Both services 401/redirect-to-/login on their own for any
 	# request without a valid token or cookie; Caddy adds nothing auth-wise
 	# here, it only routes.
-	reverse_proxy /mjolnir/* mjolnir-hub:8000
-	reverse_proxy /builder/* mjolnir-builder:8001
-	# reverse_proxy /stabbur/* stabbur:8000
+	#
+	# MUST be `handle` blocks, not bare `reverse_proxy` directives. Every
+	# other route in this file (/ota, /blob, /stabbur, the final catch-all)
+	# is a `handle` block, and Caddy sequences all `handle` blocks together,
+	# first-match-wins, in the order written. A bare directive mixed into a
+	# file that otherwise uses `handle` throughout does NOT slot into that
+	# same sequence — Caddy's global default directive ordering places
+	# `reverse_proxy` after the `handle` group regardless of where it's
+	# written in the file, so it silently never runs: the unconditional
+	# `handle {}` catch-all at the end matches every request first and the
+	# bare `reverse_proxy` lines are unreachable. Confirmed via
+	# `caddy adapt --adapter caddyfile`: a bare `reverse_proxy /mjolnir/*`
+	# compiled to route index 6, two full positions after the catch-all's
+	# index 4 — every request to /mjolnir/* or /builder/* 404'd before this
+	# fix, regardless of path (bare, trailing-slash, or deep).
+	#
+	# Two path patterns per block, not one: Caddy's `/mjolnir/*` matcher
+	# requires the literal "/" before the wildcard, so it does NOT match the
+	# bare path a person actually types (`/mjolnir`, no trailing slash) —
+	# only `/mjolnir/` and anything deeper. hub's own route handler already
+	# treats both forms as equivalent (`url.pathname === "/mjolnir" ||
+	# url.pathname === "/mjolnir/"`); without the bare pattern here, that
+	# branch of hub's code is simply unreachable from outside the container.
+	@mjolnir path /mjolnir /mjolnir/*
+	handle @mjolnir {
+		reverse_proxy mjolnir-hub:8000
+	}
+	@builder path /builder /builder/*
+	handle @builder {
+		reverse_proxy mjolnir-builder:8001
+	}
+
+	# stabbur serves its own routes (/ui, /api/*, /blob/*, /blobs) unprefixed
+	# — handle_path strips /stabbur before forwarding, so stabbur's own code
+	# never needs to know the prefix exists. X-Forwarded-Prefix tells
+	# stabbur's /ui page what prefix the browser is actually using, so it
+	# can template its own asset/API URLs to match (app.py's ui_index()).
+	#
+	# The upstream is configurable, not hardcoded, because this repo's own
+	# compose.yaml is deployable more than one way (D94), and a bare Docker
+	# service name only resolves when both stacks share a network. Set
+	# STABBUR_UPSTREAM in .env to whichever applies — in order of preference:
+	#   - "backend:5056"  — RECOMMENDED, verified working. Two fully
+	#     independent `docker compose up` stacks, joined by one shared
+	#     external network (`tun-shared` in compose.yaml, both this
+	#     service and stabbur's `backend` service attached to it — one
+	#     `docker network create tun-shared` the first time, nothing else
+	#     changes about either stack). This is what "run two docker
+	#     compose, configure .env of both" actually resolves to.
+	#   - "backend:5056"  — also correct, no extra setup, when deployed via
+	#     tun's `include:` instead (D94) — that path already merges both
+	#     projects onto one network, same value, different mechanism.
+	#   - "host.docker.internal:5056" — stabbur's own stack, no shared
+	#     network, reached via its host-published port instead (needs the
+	#     caddy service's extra_hosts entry below). Depends on the host's
+	#     NAT/hairpin routing actually reaching a published port from a
+	#     bridge network, which is not reliable in every environment —
+	#     confirmed to fail inside at least one nested-Docker sandbox.
+	#     Fall back to this only if joining a shared network isn't an option.
+	#   - a real hostname/IP — stabbur deployed elsewhere entirely.
+	# `handle_path` needs a single literal prefix to strip, so it can't take
+	# the two-pattern form `handle`/`@matcher` above use for the bare-path
+	# case — there's nothing meaningful to strip from a bare `/stabbur`
+	# anyway. Redirect it to the trailing-slash form instead, which
+	# `handle_path /stabbur/*` already matches correctly.
+	redir /stabbur /stabbur/ 308
+	handle_path /stabbur/* {
+		reverse_proxy {$STABBUR_UPSTREAM} {
+			header_up X-Forwarded-Prefix /stabbur
+		}
+	}
 	# reverse_proxy /smia/*    smia:8000
 	# reverse_proxy /phonexa/* phonexa:8000
 
