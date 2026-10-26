@@ -145,12 +145,14 @@ services:
 networks:
   default: {}
   tun-shared:
-    # One-time setup, before bringing either stack up for the first time:
+    # One-time setup, before bringing EITHER this stack or tun/compose.yaml's
+    # unified stack up for the first time:
     #   docker network create tun-shared
-    # Not needed at all if this stack is deployed via tun/compose.yaml's
-    # `include:` (D94) instead — that path already shares one network across
-    # both projects. Only required for the "two separate docker compose up
-    # stacks" path.
+    # Required regardless of deployment mode — confirmed 2026-10-26 that
+    # `include:` (D94) cannot clear `external: true` back off from an
+    # included file, so tun/compose.yaml needs this exact same one-time step
+    # too, not a free pass. (An earlier version of this comment claimed
+    # otherwise; it was never actually verified and was wrong.)
     external: true
 
 volumes:
