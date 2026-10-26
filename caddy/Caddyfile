@@ -114,9 +114,11 @@
 	#     `docker network create tun-shared` the first time, nothing else
 	#     changes about either stack). This is what "run two docker
 	#     compose, configure .env of both" actually resolves to.
-	#   - "backend:5056"  — also correct, no extra setup, when deployed via
-	#     tun's `include:` instead (D94) — that path already merges both
-	#     projects onto one network, same value, different mechanism.
+	#   - "backend:5056"  — same value when deployed via tun's `include:`
+	#     instead (D94), but NOT "no extra setup": `include:` cannot clear
+	#     an included file's `external: true` network declaration back off
+	#     (confirmed, D104), so the one-time `docker network create
+	#     tun-shared` is still required under this mode too.
 	#   - "host.docker.internal:5056" — stabbur's own stack, no shared
 	#     network, reached via its host-published port instead (needs the
 	#     caddy service's extra_hosts entry below). Depends on the host's
