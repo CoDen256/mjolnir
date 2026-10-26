@@ -131,7 +131,10 @@ export function renderShell({ title, activeHref, body }) {
 <body>
 <div class="top-bar">
   <strong>mjølnir · hub</strong>
-  <nav><a href="/builder">builder's forecast &amp; publish-now →</a></nav>
+  <nav>
+    <a href="/builder/ui">builder's forecast &amp; publish-now →</a>
+    <a href="/stabbur/ui">stabbur: notes &amp; grammar →</a>
+  </nav>
 </div>
 <div class="shell">
   <div class="rail">${renderRail(activeHref)}</div>

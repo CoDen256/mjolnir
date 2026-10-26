@@ -144,7 +144,10 @@ export function renderShell({ title, activeHref, body }) {
 <body>
 <div class="top-bar">
   <strong>mjølnir · builder</strong>
-  <nav><a href="/mjolnir">hub's Cards &amp; publish history →</a></nav>
+  <nav>
+    <a href="/mjolnir/ui">hub's Cards &amp; publish history →</a>
+    <a href="/stabbur/ui">stabbur: notes &amp; grammar →</a>
+  </nav>
 </div>
 <div class="shell">
   <div class="rail">${renderRail(activeHref)}</div>

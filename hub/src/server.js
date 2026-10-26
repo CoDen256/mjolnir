@@ -125,11 +125,11 @@ function renderCardsPage(cards, { search, deckCode, statusFilter }, stabburUiBas
       const rows = deckCards
         .map((c) => {
           const noteLink = stabburUiBase
-            ? `<a href="${escapeHtml(stabburUiBase)}/ui#/notes/${escapeHtml(c.noteId)}" target="_blank" rel="noopener">${escapeHtml(stripHtml(c.N) || c.id)} ↗</a>`
+            ? `<a href="${escapeHtml(stabburUiBase)}#/notes/${escapeHtml(c.noteId)}" target="_blank" rel="noopener">${escapeHtml(stripHtml(c.N) || c.id)} ↗</a>`
             : escapeHtml(stripHtml(c.N) || c.id);
           const ruleLink =
             hasGrammar && c.grammarRuleId
-              ? `<td>${stabburUiBase ? `<a href="${escapeHtml(stabburUiBase)}/ui#/grammar/${escapeHtml(c.grammarRuleId)}" target="_blank" rel="noopener">rule ↗</a>` : escapeHtml(c.grammarRuleId)}</td>`
+              ? `<td>${stabburUiBase ? `<a href="${escapeHtml(stabburUiBase)}#/grammar/${escapeHtml(c.grammarRuleId)}" target="_blank" rel="noopener">rule ↗</a>` : escapeHtml(c.grammarRuleId)}</td>`
               : hasGrammar
                 ? "<td></td>"
                 : "";
@@ -306,7 +306,15 @@ export function createServer(pool, config) {
       if (req.method === "GET" && url.pathname === "/mjolnir/api/publications") {
         return sendJson(res, 200, await listPublications());
       }
-      if (req.method === "GET" && (url.pathname === "/mjolnir" || url.pathname === "/mjolnir/")) {
+      // /mjolnir/ui is the canonical entry point, matching stabbur's own
+      // /stabbur/ui and builder's /builder/ui (D46: one convention across
+      // services). The bare path is kept working too — existing bookmarks,
+      // the Caddyfile's own bare-path handling, and every internal link
+      // built before this alias existed all still resolve.
+      if (
+        req.method === "GET" &&
+        (url.pathname === "/mjolnir" || url.pathname === "/mjolnir/" || url.pathname === "/mjolnir/ui")
+      ) {
         const [publications, current] = [await listPublications(), readCurrent(config.dataDir)];
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         return res.end(renderHistoryPage(publications, current));

@@ -5,6 +5,7 @@ import generatorPkg from "@babel/generator";
 import traversePkg from "@babel/traverse";
 import { canonicalize, hashNode, countNodes } from "../canonicalize.js";
 import { rules } from "../rules/index.js";
+import { runExplode } from "./explode.js";
 
 const generate = generatorPkg.default ?? generatorPkg;
 const traverse = traversePkg.default ?? traversePkg;
@@ -13,12 +14,18 @@ export function explodedDirFor(bundlePath) {
   return path.join(path.dirname(bundlePath), path.basename(bundlePath) + ".exploded");
 }
 
+// Exploding is a pure, idempotent derivation of the bundle's own current
+// bytes (runExplode wipes and regenerates the whole directory every time —
+// see explode.js) — there is no scenario where "no manifest yet" means
+// anything other than "never exploded", so the first load auto-explodes
+// instead of requiring a manual CLI step. Found live: a freshly deployed
+// builder/hub stack has no .exploded sidecar for its bundle at all until
+// someone runs `bundle-tool explode` by hand — nothing in the deploy path
+// did this, so the very first publish attempt failed outright.
 export function loadManifest(bundlePath) {
   const manifestPath = path.join(explodedDirFor(bundlePath), "manifest.json");
   if (!fs.existsSync(manifestPath)) {
-    throw new Error(
-      `No manifest at ${manifestPath}. Run "bundle-tool explode <bundle>" first.`
-    );
+    runExplode(bundlePath);
   }
   return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 }

@@ -271,7 +271,13 @@ export function createServer(pool, config) {
       if (req.method === "GET" && url.pathname === "/builder/api/forecast") {
         return sendJson(res, 200, await runForecast(pool, config));
       }
-      if (req.method === "GET" && (url.pathname === "/builder" || url.pathname === "/builder/")) {
+      // /builder/ui is the canonical entry point, matching stabbur's own
+      // /stabbur/ui and hub's /mjolnir/ui (D46: one convention across
+      // services). The bare path keeps working too.
+      if (
+        req.method === "GET" &&
+        (url.pathname === "/builder" || url.pathname === "/builder/" || url.pathname === "/builder/ui")
+      ) {
         const [forecast, jobs, batches] = await Promise.all([
           runForecast(pool, config),
           recentBuildJobs(pool),
