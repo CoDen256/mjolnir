@@ -15,6 +15,7 @@ diff-output/
 # --- Superseded working bundles (source of truth is base/) ---
 /index.android.bundle
 /index.android.bundle.new
+/index.android.bundle.bak
 
 # --- Local Claude settings ---
 .claude/settings.local.json

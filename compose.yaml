@@ -154,6 +154,19 @@ networks:
     external: true
 
 volumes:
+  # Explicit `name:` (not left to default to "<project>_<key>") so the
+  # actual Docker volume is the SAME one regardless of which project
+  # references it. Without this, running via `cd mjolnir && docker compose
+  # up` creates `mjolnir_postgres_data`, while running the identical file
+  # through `tun/compose.yaml`'s `include:` creates a *different* volume,
+  # `tun_postgres_data` — confirmed live: every card_slots/decks/
+  # publications row silently "disappeared" switching between the two
+  # entry points, because they were never in the same volume at all. Same
+  # Docker-level cause as D98's networks needing an explicit shared name;
+  # unnamed volumes have the identical per-project-prefix problem.
   caddy_data:
+    name: mjolnir_caddy_data
   caddy_config:
+    name: mjolnir_caddy_config
   postgres_data:
+    name: mjolnir_postgres_data

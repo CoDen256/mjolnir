@@ -175,11 +175,25 @@ export async function runPublish(
   });
   const decksToMint = [...newlyEligibleByDeck.entries()];
 
-  if (decksToMint.length === 0) {
-    // "no build_jobs row is created and no publish occurs" — spec, scenario
-    // "Scheduled run with no eligible decks". Nothing to log either — there
-    // is no build job for a line to attach to, and nothing a job-detail view
-    // could ever show for a run that didn't happen.
+  // Skip only when there is truly nothing to do: no newly-eligible decks
+  // AND nothing has ever been minted. The original condition skipped
+  // whenever there was nothing *new*, even if already-minted content was
+  // sitting unpublished — which silently defeats "every publish
+  // regenerates all existing minted cards' content" the moment a mint
+  // succeeds but a later step (the OTA publish itself) fails: the next run
+  // would see zero newly-eligible notes and bail before ever reaching the
+  // regenerate+publish step again, with no way to make forward progress.
+  // Found live, 2026-10-26: a mint committed successfully, the bundle was
+  // saved with the new cards, but the publish() call failed (a stale
+  // same-buildId collision) — every subsequent run returned
+  // `{published:false}` and never retried publishing the already-minted,
+  // already-saved content, because "nothing new" was mistaken for
+  // "nothing to do".
+  if (decksToMint.length === 0 && alreadyMinted.length === 0) {
+    // Nothing minted anywhere, nothing new either — genuinely a no-op.
+    // Nothing to log either — there is no build job for a line to attach
+    // to, and nothing a job-detail view could ever show for a run that
+    // didn't happen.
     return { published: false, decksMinted: [] };
   }
 

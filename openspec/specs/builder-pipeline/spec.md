@@ -92,9 +92,18 @@ The system SHALL run the full pipeline automatically on a recurring schedule,
 and SHALL additionally run it immediately on an explicit operator request,
 with both paths subject to the same eligibility rules (no floor — D91).
 
-#### Scenario: Scheduled run with no eligible notes anywhere
-- **WHEN** the scheduled run executes and no deck has any newly-eligible note
+#### Scenario: Scheduled run with no eligible notes anywhere and nothing ever minted
+- **WHEN** the scheduled run executes, no deck has any newly-eligible note,
+  and no note has ever been minted
 - **THEN** no build_jobs row is created and no publish occurs
+
+#### Scenario: Scheduled run with nothing new but something already minted (D103)
+- **WHEN** the scheduled run executes, no deck has any newly-eligible note,
+  but at least one note has been minted previously
+- **THEN** a build job still runs: already-minted content is regenerated and
+  a publish is still attempted — "nothing new" is not treated as "nothing
+  to do," since an earlier run's mint may have succeeded while its publish
+  step failed, and no later run may otherwise ever retry completing it
 
 #### Scenario: Operator requests an immediate publish
 - **WHEN** the operator triggers a publish from the UI
