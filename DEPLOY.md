@@ -58,15 +58,29 @@ POSTGRES_PASSWORD=<a password for the mjolnir postgres user>
 # services' operator UIs are reachable by anyone who finds the hostname.
 OPERATOR_AUTH_TOKEN=<a long random token — this is what you type in at /mjolnir/login and /builder/login>
 
-# builder pulls notes from stabbur (D85: stabbur requires its own bearer
-# token on every /api/* path)
-STABBUR_BASE_URL=https://tun.example.net/stabbur   # or wherever stabbur is reachable from this box
+# builder's OWN outbound fetch to stabbur's API (pullNotes/pullGrammarRules)
+# — must resolve from INSIDE the builder container, never a browser-facing
+# URL (D100: these were found conflated in a live deploy — STABBUR_BASE_URL
+# set to a public https:// URL caused every scheduled run to fail). Use
+# STABBUR_UPSTREAM's value below, not TUN_PUBLIC_BASE's.
+STABBUR_BASE_URL=http://backend:5056
 STABBUR_AUTH_TOKEN=<stabbur's shared bearer token — same value stabbur's own .env uses>
+
+# Caddy's /stabbur/* proxy target (D98/D99) — see .env.example and
+# caddy/Caddyfile for the full reasoning. RECOMMENDED when stabbur is a
+# second, independent `docker compose up` stack (the normal case): join a
+# shared external network once —
+#     docker network create tun-shared
+# — both this repo's compose.yaml (caddy, mjolnir-builder) and stabbur's own
+# compose.yaml (backend) already declare themselves as members of it.
+STABBUR_UPSTREAM=backend:5056
 ```
 
-`hub`'s `STABBUR_UI_BASE` (used only to build the Cards page's "open note"
-link) is optional — unset just means that one link can't be built; the list
-itself still renders.
+`hub`'s `STABBUR_UI_BASE` is different from both of the above: it's the one
+browser-facing value here, used only to build the Cards page's "open note"
+link a human clicks — it MUST be the public URL through Caddy
+(`https://<your-domain>/stabbur/ui`), never a Docker service name. Optional:
+unset just means that one link can't be built; the list itself still renders.
 
 **Point DNS at the box before starting Caddy** — an A record (and AAAA if you
 have v6) for that hostname. Caddy obtains the certificate on first start by
