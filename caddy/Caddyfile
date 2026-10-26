@@ -60,8 +60,13 @@
 	}
 
 	# ---- service UIs, mounted as each is written (D46) ------------------
-	# reverse_proxy /mjolnir/* mjolnir-hub:8000
-	# reverse_proxy /builder/* mjolnir-builder:8001
+	# D-H6: uncommented only after the shared-bearer-token auth check on
+	# both services was verified working (task 7.3) — never the other way
+	# around. Both services 401/redirect-to-/login on their own for any
+	# request without a valid token or cookie; Caddy adds nothing auth-wise
+	# here, it only routes.
+	reverse_proxy /mjolnir/* mjolnir-hub:8000
+	reverse_proxy /builder/* mjolnir-builder:8001
 	# reverse_proxy /stabbur/* stabbur:8000
 	# reverse_proxy /smia/*    smia:8000
 	# reverse_proxy /phonexa/* phonexa:8000

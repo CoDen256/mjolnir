@@ -7,15 +7,20 @@
 # exists.
 #
 #   docker compose up -d                       # P1: caddy alone
-#   docker compose --profile db up -d          # P4 onward: + postgres
 #   docker compose --profile node up -d        # + a node runtime (no node needed on the VPS itself, D-5.3)
+#   docker compose --profile db --profile app up -d   # + postgres + hub/builder's real services
 #
 # The `node` profile's `mjolnir-node` container has no long-running server of
-# its own yet (that's P4's real `builder`/`hub` services, still blocked on
-# stabbur's p4-notes, tasks.md 5.4) — it exists so `bin/ota-publish.sh`
-# (D76/D-P2's CLI, which shells out to `node bin/bundle-tool.js`) can run
-# without installing node on bare metal. The scripts run unmodified inside
-# it — see DEPLOY.md's "Publish build #1" for the exact command.
+# its own — it exists so `bin/ota-publish.sh` (D76/D-P2's CLI, which shells
+# out to `node bin/bundle-tool.js`) can run without installing node on bare
+# metal. The scripts run unmodified inside it — see DEPLOY.md's "Publish
+# build #1" for the exact command.
+#
+# `db` + `app` together bring up the real operator console (hub-builder-
+# operator-console): postgres, plus hub's and builder's own HTTP servers.
+# D-H6: set OPERATOR_AUTH_TOKEN in .env before bringing these up for real —
+# the Caddy routes below stay commented out until that's verified working
+# (task 7.4's ordering constraint).
 services:
   caddy:
     image: caddy:2-alpine
@@ -71,14 +76,58 @@ services:
       - /app/builder/node_modules
       - /app/hub/node_modules
 
-  # Added as each is written (D42). Separate logical DB per service, no
-  # cross-service FKs. Both will run `mjolnir-node`'s same image —
-  # `command: node bin/server.js` (builder) / `command: node bin/server.js`
-  # (hub) — once there's a config to run them against.
-  #
-  # mjolnir-hub:      device-facing /mjolnir/userdata + heartbeat   (P5)
-  # mjolnir-builder:  worker, polls build_jobs                      (P4, blocked on tasks.md 5.4)
-  #
+  # hub-builder-operator-console: hub owns the schema (`card_slots`,
+  # `decks`, `publications`, `build_jobs`, `occurrence_shipments`,
+  # `pending_occurrences`, `builder_config`, `job_logs`); builder is the
+  # only other writer — both point at the same logical database (02-
+  # services.md's "separate logical DB per service" is per *ecosystem*
+  # service, not split further between these two, which already share
+  # everything by design, D-P3). Bind-mounted the same way `mjolnir-node`
+  # is (own `Dockerfile`s install deps at build time; source comes from the
+  # checkout, not a layer, so `git pull` + restart is enough).
+  mjolnir-hub:
+    build:
+      context: .
+      dockerfile: hub/Dockerfile
+    container_name: mjolnir-hub
+    profiles: ["app"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # `.env` passes through most config as-is (STABBUR_UI_BASE,
+    # OPERATOR_AUTH_TOKEN, TUN_PUBLIC_BASE, ALLOW_HTTP, …) — only the
+    # container-specific, computed values are overridden below.
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://mjolnir:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/postgres
+      BUNDLE_PATH: /app/index.android.bundle
+      DATA_DIR: /app/data
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/hub/node_modules
+
+  mjolnir-builder:
+    build:
+      context: .
+      dockerfile: builder/Dockerfile
+    container_name: mjolnir-builder
+    profiles: ["app"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://mjolnir:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/postgres
+      BUNDLE_PATH: /app/index.android.bundle
+      DATA_DIR: /app/data
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/builder/node_modules
+
   # stabbur/smia/phonexa deploy separately for now (tun/docs/02-services.md
   # — whether they ever join this compose file is an open question, not
   # decided).

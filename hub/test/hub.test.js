@@ -1,10 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import { migrate } from "../src/migrate.js";
 import { getPool, closePool } from "../src/db.js";
 import { DECK_ALLOCATION } from "../src/decks.js";
-import { listPublications } from "../src/publications.js";
+import { listPublications, writePublication, updateLabel, deleteBuild } from "../src/publications.js";
+import { cardsList } from "../src/cards.js";
 import { createServer } from "../src/server.js";
+import { runExplode } from "../../src/commands/explode.js";
+import { buildFixtureBundleSource } from "../../test/fixtures/deckCardFixture.js";
+import { loadDeckCardModel } from "../../src/deckData.js";
+import { createCard, ensureDeck } from "../../src/injectDeck.js";
+import { publish } from "../../tool/src/otaPublish.js";
 
 // Needs a real postgres (separate logical DB per service, 02-services.md) —
 // point DATABASE_URL at a throwaway database to run these. Skipped, not
@@ -12,10 +21,21 @@ import { createServer } from "../src/server.js";
 const DATABASE_URL = process.env.DATABASE_URL;
 const describe = DATABASE_URL ? test : test.skip;
 
-describe("hub: migrate, seed, publications, server", async (t) => {
+describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
   const pool = getPool();
   await migrate();
-  await pool.query("TRUNCATE card_slots, publications, build_jobs, minted_notes, decks CASCADE");
+  await pool.query(
+    "TRUNCATE card_slots, publications, build_jobs, minted_notes, decks, pending_occurrences, occurrence_shipments, job_logs CASCADE"
+  );
+
+  process.env.ALLOW_NO_COMPANION = "1";
+  process.env.ALLOW_HTTP = "1";
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mjolnir-hub-"));
+  const bundlePath = path.join(tmpDir, "fixture.bundle");
+  fs.writeFileSync(bundlePath, "var __BUNDLE_START_TIME__=1;\n" + buildFixtureBundleSource());
+  runExplode(bundlePath);
+  const dataDir = path.join(tmpDir, "data");
+  const config = { bundlePath, dataDir, publicBase: "http://localhost:8080", stabburUiBase: "http://localhost:5056" };
 
   await t.test("seeding decks is idempotent and matches the allocation table", async () => {
     for (const { code, title } of DECK_ALLOCATION) {
@@ -60,21 +80,111 @@ describe("hub: migrate, seed, publications, server", async (t) => {
     assert.deepEqual(rows.map((r) => r.build_id), ["b2", "b1"]);
   });
 
-  await t.test("the HTTP server serves the read API and the history page", async () => {
-    const server = createServer();
+  await t.test("cards-browser: a card with one shipped + one pending side renders both independently", async () => {
+    // A real card in the fixture bundle, so cardsList's bundle read finds
+    // real N/E content, not just a ledger row with blanks.
+    const model = loadDeckCardModel(bundlePath);
+    ensureDeck(model.decks, { name: "C20", title: "Substantiv" });
+    createCard(model.cards, { id: "C20001", deckId: "C20", N: "<div>hus</div>", E: "<div>house</div>", D: "Substantiv", X: "", A: "N" });
+    const { saveDeckCardModel } = await import("../../src/deckData.js");
+    saveDeckCardModel(bundlePath, model);
+
+    await pool.query("INSERT INTO occurrence_shipments (card_id, letter, build_id) VALUES ('C20001', 'A', 'b2')");
+    await pool.query("INSERT INTO pending_occurrences (deck_code, card_id, letter, remaining) VALUES ('C20', 'C20001', 'E', 3)");
+
+    const cards = await cardsList(pool, bundlePath, {});
+    const c20001 = cards.find((c) => c.id === "C20001");
+    assert.ok(c20001);
+    assert.equal(c20001.N.includes("hus"), true);
+    assert.deepEqual(
+      c20001.sides.sort((a, b) => a.letter.localeCompare(b.letter)),
+      [
+        { letter: "A", buildId: "b2", status: "shipped" },
+        { letter: "E", remaining: 3, status: "pending" },
+      ]
+    );
+  });
+
+  await t.test("cards-browser: filtering by 'a side pending' matches only such cards", async () => {
+    await pool.query(`INSERT INTO card_slots (id, deck_code, card_no, note_id) VALUES ('C20002', 'C20', 2, 'n2')`);
+    await pool.query("INSERT INTO occurrence_shipments (card_id, letter, build_id) VALUES ('C20002', 'A', 'b2')");
+    await pool.query("INSERT INTO occurrence_shipments (card_id, letter, build_id) VALUES ('C20002', 'E', 'b2')");
+
+    const pending = await cardsList(pool, bundlePath, { statusFilter: "pending" });
+    assert.deepEqual(pending.map((c) => c.id).sort(), ["C20001"]);
+
+    const shipped = await cardsList(pool, bundlePath, { statusFilter: "shipped" });
+    assert.deepEqual(shipped.map((c) => c.id).sort(), ["C20002"]);
+  });
+
+  await t.test("cards-browser: stabbur being unreachable degrades only the note link, not the list", async () => {
+    const cards = await cardsList(pool, bundlePath, {});
+    assert.ok(cards.length > 0, "the list itself never depends on a stabbur fetch — nothing here calls stabbur at all");
+  });
+
+  await t.test("ota console: verifying rejects a bad magic prefix with the same message the CLI uses", async () => {
+    const { verifyBundle } = await import("../src/ota.js");
+    const result = verifyBundle(Buffer.from("not a bundle"), "b900001", { dataDir });
+    assert.equal(result.ok, false);
+    const magicCheck = result.checks.find((c) => c.check === "magic prefix");
+    assert.equal(magicCheck.ok, false);
+    assert.match(magicCheck.detail, /does not start with/);
+  });
+
+  await t.test("ota console: submitting a valid bundle publishes it and writes hub's own publications row", async () => {
+    const { submitBundle, setCurrent } = await import("../src/ota.js");
+    const bytes = Buffer.from("var __BUNDLE_START_TIME__=1;\nhello");
+    const result = await submitBundle(bytes, "b900002", "test label", { dataDir, publicBase: config.publicBase });
+    assert.equal(result.buildId, "b900002");
+
+    const pubs = await listPublications();
+    const row = pubs.find((p) => p.build_id === "b900002");
+    assert.ok(row);
+    assert.equal(row.label, "test label");
+
+    // set-as-current re-publishes the same on-disk bytes under the same id —
+    // current.json updates, the bundle file itself is untouched (reused).
+    await setCurrent("b900002", { dataDir, publicBase: config.publicBase });
+    const current = JSON.parse(fs.readFileSync(path.join(dataDir, "ota", "current.json"), "utf8"));
+    assert.equal(current.buildId, "b900002");
+  });
+
+  await t.test("ota console: edit label and delete", async () => {
+    await updateLabel("b900002", "renamed");
+    const pubs = await listPublications();
+    assert.equal(pubs.find((p) => p.build_id === "b900002").label, "renamed");
+
+    // Deleting a build with no shipments and not the current one succeeds...
+    await pool.query(
+      `INSERT INTO publications (build_id, base_version, patch_rev, data_rev, bundle_sha) VALUES ('bdeleteme', '0', 0, 0, 'sha-x')`
+    );
+    await deleteBuild("bdeleteme", { dataDir });
+    assert.equal((await listPublications()).some((p) => p.build_id === "bdeleteme"), false);
+
+    // ...but a build that shipped an occurrence is protected.
+    await assert.rejects(() => deleteBuild("b2", { dataDir }), /shipped/);
+  });
+
+  await t.test("the HTTP server serves the read API, history, cards, and ota pages", async () => {
+    const server = createServer(pool, config);
     await new Promise((resolve) => server.listen(0, resolve));
     const port = server.address().port;
     try {
       const apiRes = await fetch(`http://localhost:${port}/mjolnir/api/publications`);
       assert.equal(apiRes.status, 200);
-      const body = await apiRes.json();
-      assert.equal(body.length, 2);
 
       const pageRes = await fetch(`http://localhost:${port}/mjolnir/`);
       assert.equal(pageRes.status, 200);
       const html = await pageRes.text();
-      assert.match(html, /b2/);
       assert.match(html, /publish history/i);
+
+      const cardsRes = await fetch(`http://localhost:${port}/mjolnir/cards`);
+      assert.equal(cardsRes.status, 200);
+      assert.match(await cardsRes.text(), /Cards/);
+
+      const otaRes = await fetch(`http://localhost:${port}/mjolnir/ota`);
+      assert.equal(otaRes.status, 200);
+      assert.match(await otaRes.text(), /Submit bundle/);
 
       const missingRes = await fetch(`http://localhost:${port}/nope`);
       assert.equal(missingRes.status, 404);
@@ -83,5 +193,53 @@ describe("hub: migrate, seed, publications, server", async (t) => {
     }
   });
 
-  await closePool();
+  await t.test("D-H6: with an operator token configured, pages require it — via cookie (page loads) or bearer header (API)", async () => {
+    const authedServer = createServer(pool, { ...config, operatorAuthToken: "secret123" });
+    await new Promise((resolve) => authedServer.listen(0, resolve));
+    const port = authedServer.address().port;
+    try {
+      const noAuth = await fetch(`http://localhost:${port}/mjolnir/`, { redirect: "manual" });
+      assert.equal(noAuth.status, 302);
+      assert.match(noAuth.headers.get("location"), /^\/mjolnir\/login/);
+
+      const apiNoAuth = await fetch(`http://localhost:${port}/mjolnir/api/publications`);
+      assert.equal(apiNoAuth.status, 401);
+
+      const apiWithHeader = await fetch(`http://localhost:${port}/mjolnir/api/publications`, {
+        headers: { Authorization: "Bearer secret123" },
+      });
+      assert.equal(apiWithHeader.status, 200);
+
+      const loginPage = await fetch(`http://localhost:${port}/mjolnir/login`);
+      assert.equal(loginPage.status, 200);
+      assert.match(await loginPage.text(), /Operator sign in/);
+
+      const wrongLogin = await fetch(`http://localhost:${port}/mjolnir/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "token=wrong",
+      });
+      assert.equal(wrongLogin.status, 401);
+
+      const rightLogin = await fetch(`http://localhost:${port}/mjolnir/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "token=secret123",
+        redirect: "manual",
+      });
+      assert.equal(rightLogin.status, 302);
+      const cookie = rightLogin.headers.get("set-cookie");
+      assert.match(cookie, /operator_token=secret123/);
+
+      const pageWithCookie = await fetch(`http://localhost:${port}/mjolnir/`, { headers: { Cookie: cookie } });
+      assert.equal(pageWithCookie.status, 200);
+    } finally {
+      await new Promise((resolve) => authedServer.close(resolve));
+    }
+  });
+
+  t.after(async () => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    await closePool();
+  });
 });

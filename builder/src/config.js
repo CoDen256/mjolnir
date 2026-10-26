@@ -14,12 +14,18 @@ export function loadConfig() {
   if (!stabburAuthToken) throw new Error("STABBUR_AUTH_TOKEN is required (stabbur's shared bearer token)");
   if (!bundlePath) throw new Error("BUNDLE_PATH is required (path to the bundle builder reads/writes)");
   if (!publicBase) throw new Error("TUN_PUBLIC_BASE is required (passed through to the publish module)");
+  // D-H6: not required — unset disables the operator-auth gate entirely
+  // (local/dev ergonomics). Task 7.4's ordering constraint is the real
+  // guard: the Caddy routes must never be uncommented for a deploy that
+  // left this unset.
+  const operatorAuthToken = process.env.OPERATOR_AUTH_TOKEN;
   return {
     stabburBaseUrl,
     stabburAuthToken,
     bundlePath,
     dataDir,
     publicBase,
+    operatorAuthToken,
     sourceLang: process.env.SOURCE_LANG || "no",
   };
 }

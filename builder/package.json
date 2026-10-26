@@ -8,7 +8,7 @@
     "start": "node bin/server.js",
     "clock": "node bin/clock.js",
     "publish-now": "node bin/run-pipeline.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {
     "pg": "^8.23.1"

@@ -6,6 +6,7 @@ import { partitionByDeck } from "./eligibility.js";
 import { project } from "./projector.js";
 import { mintCardSlots, cardIdsForNotes, updateAudioSha256, allCardAudio, deckTitle } from "./mint.js";
 import { queuePendingOccurrence, hasPendingOccurrence, drainPendingOccurrences, pendingQueueDepths } from "./pendingOccurrences.js";
+import { recordShipments } from "./occurrenceShipments.js";
 import { previousVersions, writePublication } from "./publications.js";
 import { createBuildJob, markSucceeded, markFailed } from "./buildJobs.js";
 import { nextBuildId } from "./buildId.js";
@@ -45,11 +46,13 @@ function splitOccurrences(occurrences) {
 
 // Appends `occurrences`' immediate letters to `deck` now and returns the
 // list of `{letter}` entries still to be queued, plus how many brand-new
-// `A`'s were just appended (the drain step's decrement count).
+// `A`'s were just appended (the drain step's decrement count) and which
+// letters were just shipped immediately (D93 — the caller buffers these into
+// the run's shipment log, written only once `publish()` succeeds).
 function appendImmediateOccurrences(deck, cardId, occurrences) {
   const { immediate, queued } = splitOccurrences(occurrences);
   for (const letter of immediate) addOccurrence(deck, cardId, letter);
-  return { queued, newACount: immediate.filter((l) => l === "A").length };
+  return { immediate, queued, newACount: immediate.filter((l) => l === "A").length };
 }
 
 // Drains `deckCode`'s *existing* queue by `newACount`, appending every row
@@ -59,11 +62,16 @@ function appendImmediateOccurrences(deck, cardId, occurrences) {
 // (03-data-model.md's worked example: "a queued E draining in the same run
 // does not count toward another queued E's countdown"). `hasPendingOccurrence`
 // guards the D86 recovery path against double-queuing a row a prior, crashed
-// run may already have written durably before failing.
-async function drainThenQueue(pool, deck, deckCode, newACount, toQueue) {
+// run may already have written durably before failing. Every drained letter
+// is also pushed onto `shipments` (D93) — it just shipped, in this run's
+// build, even though its card may have been minted long ago.
+async function drainThenQueue(pool, deck, deckCode, newACount, toQueue, shipments) {
   if (newACount > 0) {
     const drained = await drainPendingOccurrences(pool, deckCode, newACount);
-    for (const { cardId, letter } of drained) addOccurrence(deck, cardId, letter);
+    for (const { cardId, letter } of drained) {
+      addOccurrence(deck, cardId, letter);
+      shipments.push({ cardId, letter });
+    }
   }
   for (const { cardId, letter } of toQueue) {
     if (!(await hasPendingOccurrence(pool, cardId, letter))) {
@@ -72,24 +80,71 @@ async function drainThenQueue(pool, deck, deckCode, newACount, toQueue) {
   }
 }
 
-// Task 4.14: dry run of steps 1-4 only — reports per-deck counts, mints and
-// writes nothing. Calls the exact same `pullAndAssign` the real run uses.
-// D91: there's no floor to report crossing/not-crossing any more — just
-// eligible-note counts plus each deck's current `pending_occurrences` depth
-// (an operator signal: "C20 has 40 E's queued, oldest one has 3 to go").
+// Task 4.14/3.2 (modified builder-pipeline spec): dry run of steps 1-4 only —
+// mints and writes nothing, but now reports the actual `(card, side, note)`
+// occurrences that would ship and the ones that would be newly queued,
+// instead of a per-deck count (D-H2: a card's two sides routinely belong to
+// different batches, so a count can't represent the real unit). Predicted
+// card ids use the exact same `deck_code||card_no` scheme `mintCardSlots`
+// uses, read-only (no row inserted) — D-P5's "one implementation, two call
+// sites" extends to card-id prediction too, not just eligibility.
 export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sourceLang = "no" } = {}) {
   const { newlyEligibleByDeck } = await pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLang });
   const queueDepths = await pendingQueueDepths(pool);
-  const decks = [...newlyEligibleByDeck.entries()].map(([deckCode, notes]) => {
+
+  const wouldShip = [];
+  const wouldQueue = [];
+  const byDeck = [];
+
+  for (const [deckCode, notes] of newlyEligibleByDeck) {
+    const { rows } = await pool.query("SELECT COALESCE(MAX(card_no), 0) AS max_no FROM card_slots WHERE deck_code = $1", [
+      deckCode,
+    ]);
+    let nextNo = Number(rows[0].max_no) + 1;
+    let newACount = 0;
+
+    for (const note of notes) {
+      const cardId = `${deckCode}${String(nextNo).padStart(3, "0")}`;
+      nextNo += 1;
+      const { immediate, queued } = splitOccurrences(project(note, {}).occurrences);
+      for (const letter of immediate) {
+        wouldShip.push({ cardId, letter, deckCode, noteId: note.id, noteText: note.text, reason: "new card" });
+        if (letter === "A") newACount += 1;
+      }
+      for (const letter of queued) {
+        wouldQueue.push({ cardId, letter, deckCode, noteId: note.id, noteText: note.text, remaining: 11 });
+      }
+    }
+
+    if (newACount > 0) {
+      const { rows: pending } = await pool.query(
+        "SELECT card_id, letter, remaining FROM pending_occurrences WHERE deck_code = $1",
+        [deckCode]
+      );
+      for (const p of pending) {
+        if (p.remaining - newACount <= 0) {
+          wouldShip.push({
+            cardId: p.card_id,
+            letter: p.letter,
+            deckCode,
+            noteId: null,
+            noteText: null,
+            reason: "queue drained",
+          });
+        }
+      }
+    }
+
     const queue = queueDepths.get(deckCode);
-    return {
+    byDeck.push({
       deckCode,
       newlyEligibleCount: notes.length,
       pendingQueueDepth: queue ? queue.depth : 0,
       pendingOldestRemaining: queue ? queue.oldestRemaining : null,
-    };
-  });
-  return { decks };
+    });
+  }
+
+  return { wouldShip, wouldQueue, byDeck };
 }
 
 // The real run: tasks 4.2-4.12. No floor (D91) — triggered by either the
@@ -97,7 +152,21 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
 // one thing both call.
 export async function runPublish(
   pool,
-  { stabburBaseUrl, stabburAuthToken, sourceLang = "no", bundlePath, dataDir, publicBase, grammarRuleLookup } = {}
+  {
+    stabburBaseUrl,
+    stabburAuthToken,
+    sourceLang = "no",
+    bundlePath,
+    dataDir,
+    publicBase,
+    grammarRuleLookup,
+    // D-H4: `(buildJobId, line) => {}` — called at each narration checkpoint
+    // once a build job exists. `buildJobId` is passed to every call since
+    // the caller can't know it in advance (it's created inside this
+    // function); `server.js` passes one that inserts a `job_logs` row, a
+    // scheduled-run caller can layer stdout printing on top of the same call.
+    log = () => {},
+  } = {}
 ) {
   const { eligibleNotesById, alreadyMinted, newlyEligibleByDeck } = await pullAndAssign(pool, {
     stabburBaseUrl,
@@ -108,12 +177,31 @@ export async function runPublish(
 
   if (decksToMint.length === 0) {
     // "no build_jobs row is created and no publish occurs" — spec, scenario
-    // "Scheduled run with no eligible decks".
+    // "Scheduled run with no eligible decks". Nothing to log either — there
+    // is no build job for a line to attach to, and nothing a job-detail view
+    // could ever show for a run that didn't happen.
     return { published: false, decksMinted: [] };
   }
 
   const buildJobId = await createBuildJob(pool);
   try {
+    // D-H4: these two checkpoints only make sense once a build_jobs row
+    // exists to attach them to (pull/assign for a no-op run are never
+    // logged, matching the no-op run having no job at all, above).
+    await log(buildJobId, `pulled ${eligibleNotesById.size} eligible notes from stabbur (source_lang=${sourceLang})`);
+    await log(
+      buildJobId,
+      `assign: ${decksToMint.reduce((n, [, notes]) => n + notes.length, 0)} newly-eligible across ${decksToMint.length} deck(s): ${decksToMint.map(([d, notes]) => `${d}×${notes.length}`).join(", ")}`
+    );
+
+    // D-H1: computed up front (not after mint/drain, as before this change)
+    // so every occurrence shipped this run — whether newly minted or
+    // drained from an old queue — can be recorded against the id of the
+    // build it's actually shipping in. Reassigning `publications`' max+1
+    // this early is safe: nothing reads or writes `publications` for this
+    // run until `writePublication` at the very end, same as before.
+    const buildId = await nextBuildId(pool);
+    const shipments = [];
     const model = loadDeckCardModel(bundlePath);
 
     // Regenerate every already-minted card's content fresh (not just new
@@ -145,11 +233,13 @@ export async function runPublish(
         const deck = await ensureDeckByCode(deckCode);
         const title = deckTitleCache.get(deckCode);
         createCard(model.cards, { id: cardId, deckId: deckCode, N: content.N, E: content.E, D: title, X: content.X, A: content.A });
-        const { queued, newACount } = appendImmediateOccurrences(deck, cardId, content.occurrences);
-        await drainThenQueue(pool, deck, deckCode, newACount, queued.map((letter) => ({ cardId, letter })));
+        const { immediate, queued, newACount } = appendImmediateOccurrences(deck, cardId, content.occurrences);
+        for (const letter of immediate) shipments.push({ cardId, letter });
+        await drainThenQueue(pool, deck, deckCode, newACount, queued.map((letter) => ({ cardId, letter })), shipments);
       }
-      await updateAudioSha256(pool, cardId, note.audio_blob);
+      await updateAudioSha256(pool, cardId, note.audio_blob, note.grammar_rule_id ?? null);
     }
+    await log(buildJobId, `regenerate: refreshed content for ${alreadyMinted.length} existing card(s)`);
 
     const decksMinted = [];
     for (const [deckCode, notes] of decksToMint) {
@@ -157,6 +247,7 @@ export async function runPublish(
       const deck = ensureDeck(model.decks, { name: deckCode, title });
 
       const minted = await mintCardSlots(pool, deckCode, notes);
+      await log(buildJobId, `mint: ${deckCode} — card_slots ${minted.map((m) => m.cardId).join(", ")}`);
       let newACount = 0;
       const toQueue = [];
       for (const { note, cardId } of minted) {
@@ -165,9 +256,15 @@ export async function runPublish(
         createCard(model.cards, { id: cardId, deckId: deckCode, N: content.N, E: content.E, D: title, X: content.X, A: content.A });
         const result = appendImmediateOccurrences(deck, cardId, content.occurrences);
         newACount += result.newACount;
+        for (const letter of result.immediate) shipments.push({ cardId, letter });
         for (const letter of result.queued) toQueue.push({ cardId, letter });
       }
-      await drainThenQueue(pool, deck, deckCode, newACount, toQueue);
+      const shipmentsBeforeDrain = shipments.length;
+      await drainThenQueue(pool, deck, deckCode, newACount, toQueue, shipments);
+      // `drainThenQueue` only ever pushes onto `shipments` for rows that just
+      // drained (queued rows go through `queuePendingOccurrence` instead) —
+      // the length delta across the call is exactly the drained count.
+      await log(buildJobId, `drain: ${deckCode} — ${shipments.length - shipmentsBeforeDrain} row(s) reached remaining<=0`);
       decksMinted.push({ deckCode, count: minted.length });
     }
 
@@ -175,9 +272,9 @@ export async function runPublish(
 
     const cardAudio = await allCardAudio(pool);
     const finalCardAudio = await ensureBlobsPresent(cardAudio, { stabburBaseUrl, dataDir, selMsByCardId });
+    await log(buildJobId, `snapshot: audio manifest covers ${Object.keys(finalCardAudio).length} card(s)`);
 
     const { baseVersion, patchRev, dataRev } = await previousVersions(pool);
-    const buildId = await nextBuildId(pool);
     writeAudioManifest(finalCardAudio, { dataDir, buildId });
 
     const bundleBytes = fs.readFileSync(bundlePath);
@@ -186,9 +283,15 @@ export async function runPublish(
       dataDir,
       publicBase,
     });
+    await log(buildJobId, `published ${buildId} — sha256 ${result.sha256}`);
 
     await writePublication(pool, { buildId, baseVersion, patchRev, dataRev: dataRev + 1, bundleSha: result.sha256 });
-    await markSucceeded(pool, buildJobId);
+    // D-H1: only after `publish()` *and* `writePublication` have succeeded —
+    // never speculatively, and never before the `publications` row exists
+    // (occurrence_shipments.build_id has an FK to it). A run that fails
+    // anywhere above this line leaves zero shipment rows.
+    await recordShipments(pool, shipments, buildId);
+    await markSucceeded(pool, buildJobId, buildId);
 
     return { published: true, buildId, decksMinted, eligibleCount: eligibleNotesById.size };
   } catch (err) {

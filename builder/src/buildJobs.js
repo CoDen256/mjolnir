@@ -9,17 +9,31 @@ export async function createBuildJob(pool) {
   return rows[0].id;
 }
 
-export async function markSucceeded(pool, id) {
-  await pool.query("UPDATE build_jobs SET status = 'succeeded', finished_at = now() WHERE id = $1", [id]);
+// `buildId` links this job to the batch it actually published (Run log UI —
+// "Published b000012"); omitted only by the forecast/dry-run path, which
+// never calls this at all.
+export async function markSucceeded(pool, id, buildId) {
+  await pool.query("UPDATE build_jobs SET status = 'succeeded', finished_at = now(), build_id = $2 WHERE id = $1", [
+    id,
+    buildId,
+  ]);
 }
 
 // Surfaced in builder's UI (task 4.12) — most recent jobs first.
 export async function recentBuildJobs(pool, limit = 10) {
   const { rows } = await pool.query(
-    "SELECT id, status, requested_at, started_at, finished_at, error FROM build_jobs ORDER BY requested_at DESC LIMIT $1",
+    "SELECT id, status, requested_at, started_at, finished_at, error, build_id FROM build_jobs ORDER BY requested_at DESC LIMIT $1",
     [limit]
   );
   return rows;
+}
+
+export async function getBuildJob(pool, id) {
+  const { rows } = await pool.query(
+    "SELECT id, status, requested_at, started_at, finished_at, error, build_id FROM build_jobs WHERE id = $1",
+    [id]
+  );
+  return rows[0] || null;
 }
 
 export async function markFailed(pool, id, error) {

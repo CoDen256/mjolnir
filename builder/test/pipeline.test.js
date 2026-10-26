@@ -15,6 +15,7 @@ import { readModuleSource } from "../../src/parseBundle.js";
 import { execFileSync } from "node:child_process";
 import { startFakeStabbur, shaOf } from "./helpers/fakeStabbur.js";
 import { buildGrammarRuleLookup } from "../src/stabburClient.js";
+import { occurrencesForBuild } from "../src/batchHistory.js";
 
 // An unrelated module alongside the deck/card pair, so task 5.1's
 // byte-identical guarantee has something real to check against — not just
@@ -56,7 +57,9 @@ function wordNote(id, overrides = {}) {
 describe("builder pipeline: forecast + publish against a fixture stabbur and fixture bundle", async (t) => {
   const pool = getPool();
   await migrate();
-  await pool.query("TRUNCATE card_slots, publications, build_jobs, minted_notes, decks, pending_occurrences CASCADE");
+  await pool.query(
+    "TRUNCATE card_slots, publications, build_jobs, minted_notes, decks, pending_occurrences, occurrence_shipments, job_logs CASCADE"
+  );
   for (const { code, title } of DECK_ALLOCATION) {
     await pool.query("INSERT INTO decks (code, title, category) VALUES ($1, $2, $3)", [code, title, code[0]]);
   }
@@ -102,17 +105,28 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
     assert.equal(Number(rows[0].count), 0);
   });
 
-  await t.test("forecast reports per-deck eligible counts and pending-queue depth, without minting (D91: no floor language)", async () => {
+  await t.test("forecast reports occurrence-level would-ship/would-queue, without minting (D-H2)", async () => {
     fake.setNotes([wordNote("n1"), wordNote("n2"), wordNote("n3"), wordNote("n4")]);
     for (const id of ["n1", "n2", "n3", "n4"]) fake.addBlob(shaOf(`audio for ${id}`), `audio for ${id}`);
     const forecast = await runForecast(pool, config);
-    const c20 = forecast.decks.find((d) => d.deckCode === "C20");
+
+    const c20 = forecast.byDeck.find((d) => d.deckCode === "C20");
     assert.equal(c20.newlyEligibleCount, 4);
     assert.equal(c20.pendingQueueDepth, 0);
+
+    // word -> occurrences ["A", "E"]: the A's would ship this run, the E's
+    // would only be newly queued (D91 — not both in the same list).
+    const shipIds = forecast.wouldShip.filter((o) => o.deckCode === "C20").map((o) => o.cardId);
+    assert.deepEqual(shipIds.sort(), ["C20001", "C20002", "C20003", "C20004"]);
+    assert.ok(forecast.wouldShip.filter((o) => o.deckCode === "C20").every((o) => o.letter === "A"));
+    const queueIds = forecast.wouldQueue.filter((o) => o.deckCode === "C20").map((o) => o.cardId);
+    assert.deepEqual(queueIds.sort(), ["C20001", "C20002", "C20003", "C20004"]);
+    assert.ok(forecast.wouldQueue.filter((o) => o.deckCode === "C20").every((o) => o.letter === "E" && o.remaining === 11));
 
     const { rows } = await pool.query("SELECT count(*) FROM card_slots");
     assert.equal(Number(rows[0].count), 0, "forecast must not mint anything");
   });
+
 
   let firstBuildId;
   await t.test("a single run with no floor to wait for ships every new card's A immediately and queues its E", async () => {
@@ -150,6 +164,11 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
     // be byte-identical to the pre-publish bundle.
     const otherModuleAfter = readModuleSource(bundlePath, model.manifest[OTHER_MODULE_ID]);
     assert.equal(otherModuleAfter, otherModuleBefore, "an unrelated module must be byte-identical after a builder publish");
+  });
+
+  await t.test("forecast after a real publish shows nothing in would-ship, matching the run's outcome", async () => {
+    const forecast = await runForecast(pool, config);
+    assert.deepEqual(forecast.wouldShip, [], "everything currently eligible was just published — nothing left to ship");
   });
 
   await t.test("editing an already-minted note's content reaches the device on the next publish, id/position unchanged", async () => {
@@ -219,6 +238,15 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
     const { rows: jobs } = await pool.query("SELECT status FROM build_jobs ORDER BY requested_at DESC LIMIT 1");
     assert.equal(jobs[0].status, "failed");
 
+    // D-H1: a run that fails after minting (and after this run's occurrences
+    // were appended in-memory) but before publish() ever succeeds must leave
+    // zero shipment rows — occurrence_shipments never names a build that was
+    // never actually published.
+    const { rows: shipmentsAfterFailure } = await pool.query(
+      "SELECT count(*) FROM occurrence_shipments WHERE card_id LIKE 'C23%' OR card_id LIKE 'C25%'"
+    );
+    assert.equal(Number(shipmentsAfterFailure[0].count), 0, "a failed run must record zero shipments");
+
     // Remove the planted obstruction and re-run with the same note set — no
     // floor to worry about this time (D91), so C23/C25's recovery and any
     // genuinely-new note all mint/regenerate in the same run.
@@ -240,11 +268,20 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
     assert.equal(model.decks.find((d) => d.Name === "C25").Cards.length, 6, "only C25's recovered A's shipped — E's stay queued");
     const { rows: jobsAfter } = await pool.query("SELECT status FROM build_jobs ORDER BY requested_at DESC LIMIT 1");
     assert.equal(jobsAfter[0].status, "succeeded");
+
+    // D93: the successful recovery run must have recorded exactly one
+    // shipment (the "A") per recovered card, all tagged to this run's build.
+    const { rows: recoveredShipments } = await pool.query(
+      "SELECT card_id, letter, build_id FROM occurrence_shipments WHERE card_id LIKE 'C23%' OR card_id LIKE 'C25%' ORDER BY card_id"
+    );
+    assert.equal(recoveredShipments.length, 12, "6 C23 cards + 6 C25 cards, one shipment each");
+    assert.ok(recoveredShipments.every((r) => r.letter === "A" && r.build_id === result.buildId));
   });
 
   // D91's cross-batch queue mechanics (task 6.2.7), isolated on their own
   // untouched deck (C24, preposisjon) so counts don't entangle with the
   // tests above.
+  let c24FirstBuildId;
   await t.test("C24: 2 new notes ship both A's immediately and queue both E's at remaining=11", async () => {
     const p1 = wordNote("p1", { pos: "preposisjon" });
     const p2 = wordNote("p2", { pos: "preposisjon" });
@@ -255,9 +292,23 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
     const result = await runPublish(pool, config);
     assert.equal(result.published, true);
     assert.deepEqual(result.decksMinted, [{ deckCode: "C24", count: 2 }]);
+    c24FirstBuildId = result.buildId;
 
     const model = loadDeckCardModel(bundlePath);
     assert.equal(model.decks.find((d) => d.Name === "C24").Cards.length, 2, "both A's ship, no E's yet");
+
+    // D93: each card's A ships now, tagged to this run's build; nothing
+    // for their E yet — it's queued, not shipped.
+    const { rows: shipped } = await pool.query(
+      "SELECT card_id, letter, build_id FROM occurrence_shipments WHERE card_id IN ('C24001', 'C24002') ORDER BY card_id"
+    );
+    assert.deepEqual(
+      shipped.map((r) => ({ cardId: r.card_id, letter: r.letter, buildId: r.build_id })),
+      [
+        { cardId: "C24001", letter: "A", buildId: c24FirstBuildId },
+        { cardId: "C24002", letter: "A", buildId: c24FirstBuildId },
+      ]
+    );
 
     const queued = await pendingRows("C24");
     assert.equal(queued.length, 2);
@@ -318,6 +369,34 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
     assert.equal(queued.length, 11, "p1/p2 drained and removed; p3 (now at 1) plus 10 freshly-queued remain");
     const byRemaining = queued.map((r) => r.remaining).sort((a, b) => a - b);
     assert.deepEqual(byRemaining, [1, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11]);
+
+    // D93: C24001/C24002 were minted (their A shipped) in an earlier build;
+    // their E only just drained, in *this* run's build — two shipment rows
+    // per card, naming two different builds, exactly what the shipment log
+    // exists to represent.
+    assert.notEqual(result.buildId, c24FirstBuildId, "sanity: this really is a later build");
+    const { rows: bothSides } = await pool.query(
+      "SELECT card_id, letter, build_id FROM occurrence_shipments WHERE card_id IN ('C24001', 'C24002') ORDER BY card_id, letter"
+    );
+    assert.deepEqual(
+      bothSides.map((r) => ({ cardId: r.card_id, letter: r.letter, buildId: r.build_id })),
+      [
+        { cardId: "C24001", letter: "A", buildId: c24FirstBuildId },
+        { cardId: "C24001", letter: "E", buildId: result.buildId },
+        { cardId: "C24002", letter: "A", buildId: c24FirstBuildId },
+        { cardId: "C24002", letter: "E", buildId: result.buildId },
+      ]
+    );
+
+    // D-H2: this build's own occurrencesForBuild must show both kinds of
+    // shipped occurrence together — the 10 freshly-minted A's and the 2
+    // drained E's from cards minted long before this run — correctly
+    // attributed to the build that actually shipped each one (this build).
+    const batchContents = await occurrencesForBuild(pool, result.buildId, bundlePath);
+    assert.equal(batchContents.length, 12, "10 new A's + 2 drained E's");
+    assert.equal(batchContents.filter((o) => o.letter === "A").length, 10);
+    assert.equal(batchContents.filter((o) => o.letter === "E").length, 2);
+    assert.ok(batchContents.every((o) => o.kind === "ship" && o.deckCode === "C24"));
   });
 
   await t.test("C24: a run with zero new cards in this deck leaves its queue numerically unchanged", async () => {
@@ -457,6 +536,60 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and fix
     const originalPath = path.join(dataDir, "blob", clipSha);
     assert.ok(fs.existsSync(originalPath), "the original upload must still be fetched into hub's blob cache");
     assert.deepEqual(fs.readFileSync(originalPath), clipBytes, "the original must stay byte-identical — D45");
+  });
+
+  await t.test("D-H4: a failed run's log shows every checkpoint reached before the failure, not just the terminal error", async () => {
+    // C27 (listening), untouched by every earlier test in this file. Plant a
+    // colliding card id so createCard throws partway through minting the
+    // one new note — after mint's own DB commit and this run's "mint" log
+    // line, but before "drain"/"snapshot"/"published" are ever reached.
+    const planted = loadDeckCardModel(bundlePath);
+    createCard(planted.cards, { id: "C27001", deckId: "C20", N: "", E: "", D: "", X: "", A: "N" });
+    saveDeckCardModel(bundlePath, planted);
+
+    const lines = [];
+    const log = async (buildJobId, line) => lines.push({ buildJobId, line });
+    const listeningNote = wordNote("l1", { type: "listening", pos: undefined });
+    fake.addBlob(shaOf("audio for l1"), "audio for l1");
+    fake.setNotes([
+      wordNote("n1", { text: "EDITED" }),
+      wordNote("n2"),
+      wordNote("n3"),
+      wordNote("n4"),
+      wordNote("v1", { pos: "verb" }),
+      wordNote("p1", { pos: "preposisjon" }),
+      wordNote("p2", { pos: "preposisjon" }),
+      wordNote("p3", { pos: "preposisjon" }),
+      ...Array.from({ length: 10 }, (_, i) => wordNote(`p${4 + i}`, { pos: "preposisjon" })),
+      wordNote("g1", { type: "grammar", pos: undefined, grammar_rule_id: "rule-1" }),
+      wordNote("g2", { type: "grammar", pos: undefined, grammar_rule_id: "rule-2" }),
+      wordNote("e1", { type: "expression", pos: undefined, text: "god morgen" }),
+      listeningNote,
+    ]);
+
+    await assert.rejects(() => runPublish(pool, { ...config, log }), /card id "C27001" already exists/);
+
+    assert.ok(lines.length > 0, "at least some checkpoints were logged before the failure");
+    const byBuildJob = new Map();
+    for (const { buildJobId, line } of lines) {
+      if (!byBuildJob.has(buildJobId)) byBuildJob.set(buildJobId, []);
+      byBuildJob.get(buildJobId).push(line);
+    }
+    assert.equal(byBuildJob.size, 1, "all lines belong to the one build job this run created");
+    const [thisRunLines] = [...byBuildJob.values()];
+    assert.ok(thisRunLines.some((l) => l.startsWith("pulled")));
+    assert.ok(thisRunLines.some((l) => l.startsWith("assign:")));
+    assert.ok(thisRunLines.some((l) => l.startsWith("regenerate:")));
+    assert.ok(thisRunLines.some((l) => l.includes("mint: C27")));
+    assert.ok(!thisRunLines.some((l) => l.startsWith("published")), "never reached — the run failed before publish()");
+
+    const { rows: jobs } = await pool.query("SELECT status FROM build_jobs ORDER BY requested_at DESC LIMIT 1");
+    assert.equal(jobs[0].status, "failed");
+
+    // Clean up the planted obstruction so it doesn't affect anything after.
+    const unplanted = loadDeckCardModel(bundlePath);
+    unplanted.cards = unplanted.cards.filter((c) => c.ID !== "C27001");
+    saveDeckCardModel(bundlePath, unplanted);
   });
 
   t.after(async () => {

@@ -20,8 +20,8 @@ export async function mintCardSlots(pool, deckCode, notes) {
     for (const note of notes) {
       const cardId = `${deckCode}${String(nextNo).padStart(3, "0")}`;
       await client.query(
-        "INSERT INTO card_slots (id, deck_code, card_no, note_id, audio_sha256) VALUES ($1, $2, $3, $4, $5)",
-        [cardId, deckCode, nextNo, note.id, note.audio_blob]
+        "INSERT INTO card_slots (id, deck_code, card_no, note_id, audio_sha256, grammar_rule_id) VALUES ($1, $2, $3, $4, $5, $6)",
+        [cardId, deckCode, nextNo, note.id, note.audio_blob, note.grammar_rule_id ?? null]
       );
       await client.query("INSERT INTO minted_notes (note_id, card_slot_id) VALUES ($1, $2)", [note.id, cardId]);
       minted.push({ note, cardId });
@@ -54,8 +54,14 @@ export async function cardIdsForNotes(pool, noteIds) {
 
 // A still-present note's audio can change (a re-recorded clip); refresh the
 // stored hash alongside its content on every run it's seen in the pull.
-export async function updateAudioSha256(pool, cardId, audioSha256) {
-  await pool.query("UPDATE card_slots SET audio_sha256 = $1 WHERE id = $2", [audioSha256, cardId]);
+// `grammarRuleId` is refreshed the same way — a grammar note's referenced
+// rule is as editable as any other field (cards-browser's grammar-rule link).
+export async function updateAudioSha256(pool, cardId, audioSha256, grammarRuleId = null) {
+  await pool.query("UPDATE card_slots SET audio_sha256 = $1, grammar_rule_id = $2 WHERE id = $3", [
+    audioSha256,
+    grammarRuleId,
+    cardId,
+  ]);
 }
 
 // `{cardId: sha256}` for every card ever minted — including ones whose
