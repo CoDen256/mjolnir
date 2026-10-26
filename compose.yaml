@@ -1,26 +1,13 @@
 # mjolnir — one stack, one VPS (D84: the operator deploys this repo alone;
 # `tun` ships no deployable artifacts).
 #
-# P1 ships only caddy: every device-facing path is a static file (D55). The
-# other services are declared here as they are written; until then they sit
-# behind compose profiles so `docker compose up -d` brings up exactly what
-# exists.
-#
-#   docker compose up -d                       # P1: caddy alone
-#   docker compose --profile node up -d        # + a node runtime (no node needed on the VPS itself, D-5.3)
-#   docker compose --profile db --profile app up -d   # + postgres + hub/builder's real services
-#
-# The `node` profile's `mjolnir-node` container has no long-running server of
-# its own — it exists so `bin/ota-publish.sh` (D76/D-P2's CLI, which shells
-# out to `node bin/bundle-tool.js`) can run without installing node on bare
-# metal. The scripts run unmodified inside it — see DEPLOY.md's "Publish
-# build #1" for the exact command.
-#
-# `db` + `app` together bring up the real operator console (hub-builder-
-# operator-console): postgres, plus hub's and builder's own HTTP servers.
-# D-H6: set OPERATOR_AUTH_TOKEN in .env before bringing these up for real —
-# the Caddy routes below stay commented out until that's verified working
-# (task 7.4's ordering constraint).
+# The full stack now exists (hub-builder-operator-console shipped), so this
+# is one profile-free `docker compose up -d`: caddy, postgres, hub, builder.
+# Set every required var in `.env` first — see .env.example and DEPLOY.md.
+# D-H6: OPERATOR_AUTH_TOKEN gates hub's/builder's own operator routes; it is
+# NOT optional for a real deploy (Caddy exposes both publicly at /mjolnir/*
+# and /builder/*) even though each service's own config loader treats it as
+# optional for local/dev ergonomics.
 services:
   caddy:
     image: caddy:2-alpine
@@ -43,7 +30,6 @@ services:
   postgres:
     image: postgres:17-alpine
     container_name: mjolnir-postgres
-    profiles: ["db"]                     # not started until P4 needs it
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -58,39 +44,20 @@ services:
       timeout: 5s
       retries: 5
 
-  # node + this checkout, nothing else — see the `node` profile note above.
-  # Repo is bind-mounted, not copied into the image, so `git pull` + a
-  # container restart picks up source changes without a rebuild; only
-  # `npm ci` happens at build time (Dockerfile). The two anonymous volumes
-  # keep each package's own `node_modules` (installed at build time) from
-  # being shadowed by the bind mount.
-  mjolnir-node:
-    build: .
-    container_name: mjolnir-node
-    profiles: ["node"]
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - .:/app
-      - /app/node_modules
-      - /app/builder/node_modules
-      - /app/hub/node_modules
-
   # hub-builder-operator-console: hub owns the schema (`card_slots`,
   # `decks`, `publications`, `build_jobs`, `occurrence_shipments`,
   # `pending_occurrences`, `builder_config`, `job_logs`); builder is the
   # only other writer — both point at the same logical database (02-
   # services.md's "separate logical DB per service" is per *ecosystem*
   # service, not split further between these two, which already share
-  # everything by design, D-P3). Bind-mounted the same way `mjolnir-node`
-  # is (own `Dockerfile`s install deps at build time; source comes from the
-  # checkout, not a layer, so `git pull` + restart is enough).
+  # everything by design, D-P3). Bind-mounted, not copied into the image —
+  # own `Dockerfile`s install deps at build time; source comes from the
+  # checkout, not a layer, so `git pull` + restart is enough.
   mjolnir-hub:
     build:
       context: .
       dockerfile: hub/Dockerfile
     container_name: mjolnir-hub
-    profiles: ["app"]
     restart: unless-stopped
     depends_on:
       postgres:
@@ -113,7 +80,6 @@ services:
       context: .
       dockerfile: builder/Dockerfile
     container_name: mjolnir-builder
-    profiles: ["app"]
     restart: unless-stopped
     depends_on:
       postgres:

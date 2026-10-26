@@ -15,16 +15,15 @@ One Contabo VPS, 8 GB / 100 GB (D35). Everything runs in one `docker compose`
 stack, **defined entirely in this repo (D84, superseding D75/D81)** — `tun`
 ships no deployable artifacts at all. The operator deploys `mjolnir` alone.
 
-**P1 ships only Caddy.** Every device-facing path is a static file (D55) —
-there is no application code yet, and none is needed to prove the OTA path.
-Postgres sits behind a compose profile until P4; the other services are listed
-in `compose.yaml` as comments and get added as they are written.
+**Every device-facing path is a static file (D55)**, served by Caddy
+directly off disk — `hub`/`builder` never sit in front of the bundle or
+audio blobs. `docker compose up -d` brings up the whole stack: Caddy,
+Postgres, and `hub`'s/`builder`'s own HTTP servers (the operator console,
+`hub-builder-operator-console`). No profiles — one command.
 
-**No node on the VPS itself.** `bin/ota-publish.sh` shells out to
-`node bin/bundle-tool.js` (D-P4) — the `node` compose profile supplies that
-runtime in a container instead, bind-mounting this checkout so the scripts
-run completely unmodified (see "Publish build #1" below). Only `docker` is
-required on the host.
+**No node on the VPS host itself.** `hub` and `builder` each ship their own
+`Dockerfile` (node:22-alpine), bind-mounting this checkout so `git pull` +
+a container restart picks up source changes without a rebuild.
 
 ---
 
@@ -52,7 +51,22 @@ $EDITOR .env                          # set TUN_SITE_ADDRESS + TUN_PUBLIC_BASE
 TUN_SITE_ADDRESS=tun.example.net      # bare hostname => automatic HTTPS
 TUN_PUBLIC_BASE=https://tun.example.net
 OTA_TOKEN=<the 64 hex chars you just generated>
+POSTGRES_PASSWORD=<a password for the mjolnir postgres user>
+
+# hub-builder-operator-console (D-H6) — required, not optional, once
+# Caddy's /mjolnir/* and /builder/* routes are live: without this, both
+# services' operator UIs are reachable by anyone who finds the hostname.
+OPERATOR_AUTH_TOKEN=<a long random token — this is what you type in at /mjolnir/login and /builder/login>
+
+# builder pulls notes from stabbur (D85: stabbur requires its own bearer
+# token on every /api/* path)
+STABBUR_BASE_URL=https://tun.example.net/stabbur   # or wherever stabbur is reachable from this box
+STABBUR_AUTH_TOKEN=<stabbur's shared bearer token — same value stabbur's own .env uses>
 ```
+
+`hub`'s `STABBUR_UI_BASE` (used only to build the Cards page's "open note"
+link) is optional — unset just means that one link can't be built; the list
+itself still renders.
 
 **Point DNS at the box before starting Caddy** — an A record (and AAAA if you
 have v6) for that hostname. Caddy obtains the certificate on first start by
@@ -70,14 +84,15 @@ docker compose logs -f caddy          # watch the certificate get issued
 # Copy the stock bundle over from the laptop first, e.g.
 #   scp ~/dev/mjolnir/index.android.bundle vps:~/mjolnir/
 
-# Bring up a node runtime in a container (no node needed on the VPS itself).
-docker compose --profile node up -d mjolnir-node
-
-docker compose exec -e ALLOW_NO_COMPANION=1 mjolnir-node \
+docker compose exec -e ALLOW_NO_COMPANION=1 mjolnir-hub \
   bin/ota-publish.sh index.android.bundle b000001 "base 6.0.3 · logic 0 · data 0 (stock)"
 
 bin/ota-verify.sh   # bash + curl only — runs fine directly on the host
 ```
+
+(`mjolnir-hub` bind-mounts the whole repo at `/app` and has node — no
+separate node-runtime container needed, unlike before `hub-builder-
+operator-console` shipped.)
 
 `ota-publish.sh` refuses a bundle with no boot-ok companion, and refuses one
 whose baked `BUILD_ID` differs from the id you publish under — both would be
@@ -92,18 +107,22 @@ it after any Caddy change.
 
 ## Publishing and rolling back
 
+The normal path is now the browser: `https://<host>/mjolnir/ota` — drag-drop
+a bundle, edit its label, submit. It calls the exact same guard functions
+(`tool/src/otaPublish.js`, D-H5) as the CLI below, nothing duplicated.
+
+The CLI stays available for scripting/CI or if the UI is unreachable:
+
 ```sh
-docker compose exec mjolnir-node bin/ota-publish.sh <bundle> <buildId> "<label>"   # publish
-docker compose exec mjolnir-node bin/ota-publish.sh <older-bundle> b000001 "..."   # roll back
+docker compose exec mjolnir-hub bin/ota-publish.sh <bundle> <buildId> "<label>"   # publish
+docker compose exec mjolnir-hub bin/ota-publish.sh <older-bundle> b000001 "..."   # roll back
 ```
 
-(`mjolnir-node` only needs to be started once — `docker compose exec` reaches
-an already-running container. `docker compose --profile node up -d mjolnir-node`
-again if it isn't running.)
-
 Rollback is just repointing `current.json` at a buildId whose bundle is still
-on disk. The device compares identity, never ordering (D26) — it fetches the
-older build without knowing or caring that it is older.
+on disk — the OTA console's Publish history page also has a one-click
+"set as current" action for this. The device compares identity, never
+ordering (D26) — it fetches the older build without knowing or caring that
+it is older.
 
 The publish script refuses to: reuse a buildId for different bytes (a device
 that already has that id would keep the stale bundle forever), accept a
@@ -118,7 +137,8 @@ CLI is a thin wrapper over the same module (D76/D-P2).
 mjolnir/
   .env                 secrets — gitignored, back this up separately
   compose.yaml
-  Dockerfile            node runtime for bin/bundle-tool.js + (from P4) builder/hub
+  hub/Dockerfile        hub's own HTTP server + the node runtime bin/ota-publish.sh runs in
+  builder/Dockerfile    builder's own HTTP server (publish scheduling, forecast)
   caddy/Caddyfile
   bin/ota-publish.sh
   bin/ota-verify.sh
@@ -143,20 +163,27 @@ The `caddy_data` volume holds the TLS certificates. Losing it is survivable
 (Caddy re-issues) but counts against Let's Encrypt rate limits, so avoid
 `docker compose down -v`.
 
-From P4, add `pg_dump` of the per-service databases.
+3. `pg_dump` of the `postgres` container's `postgres` database — this is
+   hub's and builder's entire ledger (decks, card_slots, publications,
+   build_jobs, pending_occurrences, occurrence_shipments, builder_config,
+   job_logs). Losing it without a backup means hub's bookkeeping no longer
+   agrees with what's actually on-device, with no way to reconcile.
 
 ## Operational notes
 
-- `docker compose up -d` after a `git pull` picks up Caddyfile changes; use
-  `docker compose restart caddy` if only `.env` changed.
+- **Caddy does not hot-reload its Caddyfile on its own.** A `git pull` that
+  changes `caddy/Caddyfile` needs either `docker compose exec caddy caddy
+  reload --config /etc/caddy/Caddyfile` or `docker compose restart caddy` —
+  otherwise the old config keeps running (requests silently fall through to
+  the catch-all 404 instead of reaching the new route).
 - Caddy serves `data/` **read-only**. Publishing writes from the host, so a
   compromised Caddy cannot alter what the device fetches.
 - Postgres is deliberately not published to the host; only sibling containers
-  reach it. Start it with `docker compose --profile db up -d` when P4 needs it.
-- `mjolnir-node` bind-mounts the repo rather than copying it in — a `git pull`
-  plus a container restart (`docker compose restart mjolnir-node`) picks up
-  source changes; only rebuild (`docker compose up -d --build mjolnir-node`)
-  when `package.json`/`package-lock.json` change.
+  (`hub`, `builder`) reach it.
+- `hub`/`builder` bind-mount the repo rather than copying it in — a
+  `git pull` plus `docker compose restart mjolnir-hub mjolnir-builder` picks
+  up source changes; only rebuild (`docker compose up -d --build`) when
+  either package's `package.json`/`package-lock.json` changes.
 - `TUN_SITE_ADDRESS=:8080` runs the same config over plain HTTP for local
   testing. `ALLOW_HTTP=1` lets the scripts work against it. Never set either on
   the VPS.
