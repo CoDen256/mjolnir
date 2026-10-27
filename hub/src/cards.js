@@ -1,11 +1,9 @@
-import { loadDeckCardModel } from "../../src/deckData.js";
-
 // D93/D-H2: every card ever minted, joined with its per-side shipment/queue
 // status. Search/filter/group happen in JS over this one already-joined
 // shape — the operator's filter vocabulary ("a side pending") maps directly
 // onto it, not onto a SQL WHERE clause that would need to re-derive
 // occurrence semantics itself.
-export async function cardsList(pool, bundlePath, { search = "", deckCode = "", statusFilter = "" } = {}) {
+export async function cardsList(pool, { search = "", deckCode = "", statusFilter = "" } = {}) {
   const { rows: slots } = await pool.query(
     `SELECT cs.id, cs.deck_code, cs.note_id, cs.grammar_rule_id, d.title AS deck_title
      FROM card_slots cs JOIN decks d ON d.code = cs.deck_code
@@ -22,6 +20,11 @@ export async function cardsList(pool, bundlePath, { search = "", deckCode = "", 
     "SELECT card_id, letter, remaining FROM pending_occurrences WHERE card_id = ANY($1)",
     [cardIds]
   );
+  // D-L3: content now lives in `card_content` — durable DB state, frozen
+  // once a note is tombstoned — not the (removed) persistent bundle file.
+  const { rows: contentRows } = await pool.query("SELECT card_id, n, e FROM card_content WHERE card_id = ANY($1)", [
+    cardIds,
+  ]);
 
   const shippedByCard = new Map();
   for (const row of shipped) {
@@ -34,30 +37,18 @@ export async function cardsList(pool, bundlePath, { search = "", deckCode = "", 
     pendingByCard.get(row.card_id).push({ letter: row.letter, remaining: row.remaining, status: "pending" });
   }
 
-  // The card's actual N/E/X/A text lives in the bundle, not hub's own DB —
-  // hub reads it (never writes: `builder` is the bundle's only writer,
-  // D-P3) purely to render this page. A missing/unreadable bundle degrades
-  // to blank content columns, not a failed page (cards-browser spec's
-  // "stabbur unreachable" tolerance extends to this too, by the same logic:
-  // the ledger is always the source of truth for *which* cards exist).
-  let content = new Map();
-  try {
-    const model = loadDeckCardModel(bundlePath);
-    content = new Map(model.cards.map((c) => [c.ID, c]));
-  } catch {
-    content = new Map();
-  }
+  const contentByCard = new Map(contentRows.map((r) => [r.card_id, r]));
 
   let cards = slots.map((s) => {
-    const card = content.get(s.id);
+    const content = contentByCard.get(s.id);
     return {
       id: s.id,
       deckCode: s.deck_code,
       deckTitle: s.deck_title,
       noteId: s.note_id,
       grammarRuleId: s.grammar_rule_id,
-      N: card?.N ?? "",
-      E: card?.E ?? "",
+      N: content?.n ?? "",
+      E: content?.e ?? "",
       sides: [...(shippedByCard.get(s.id) || []), ...(pendingByCard.get(s.id) || [])],
     };
   });

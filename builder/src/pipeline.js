@@ -11,7 +11,12 @@ import { previousVersions, writePublication } from "./publications.js";
 import { createBuildJob, markSucceeded, markFailed } from "./buildJobs.js";
 import { nextBuildId } from "./buildId.js";
 import { ensureBlobsPresent, writeAudioManifest } from "./audioSnapshot.js";
+import { loadActive } from "./logicBundle.js";
+import { replay } from "./replay.js";
+import { upsert as upsertCardContentRow } from "./cardContent.js";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import crypto from "node:crypto";
 
 // Steps 1-4 of builder/README.md's "what a run does" — pull, filter, split
@@ -156,7 +161,6 @@ export async function runPublish(
     stabburBaseUrl,
     stabburAuthToken,
     sourceLang = "no",
-    bundlePath,
     dataDir,
     publicBase,
     grammarRuleLookup,
@@ -198,6 +202,7 @@ export async function runPublish(
   }
 
   const buildJobId = await createBuildJob(pool);
+  let scratchPath = null;
   try {
     // D-H4: these two checkpoints only make sense once a build_jobs row
     // exists to attach them to (pull/assign for a no-op run are never
@@ -216,7 +221,19 @@ export async function runPublish(
     // run until `writePublication` at the very end, same as before.
     const buildId = await nextBuildId(pool);
     const shipments = [];
-    const model = loadDeckCardModel(bundlePath);
+
+    // D-L4: every run starts fresh from whichever `logic_bundles` row is
+    // active — the mutable, long-lived `BUNDLE_PATH` working file this
+    // replaced is gone entirely. The active bundle's own file is immutable
+    // (never mutated in place); this run's scratch copy is what
+    // `loadDeckCardModel`/`saveDeckCardModel` actually operate on, and it's
+    // discarded in the `finally` below regardless of outcome — every run
+    // fully reconstructs it, so nothing is lost by throwing it away.
+    const active = await loadActive(pool);
+    scratchPath = path.join(os.tmpdir(), `mjolnir-builder-scratch-${process.pid}-${buildId}.js`);
+    fs.writeFileSync(scratchPath, active.bytes);
+    const model = loadDeckCardModel(scratchPath);
+    await replay(pool, model);
 
     // Regenerate every already-minted card's content fresh (not just new
     // ones) — 03-data-model.md's central rule. Only touches cards whose
@@ -236,6 +253,7 @@ export async function runPublish(
       const { cardId, deckCode } = entry;
       if (note.audio_sel_ms) selMsByCardId[cardId] = note.audio_sel_ms;
       const content = project(note, { grammarRuleLookup });
+      await upsertCardContentRow(pool, cardId, { N: content.N, E: content.E, X: content.X, A: content.A });
       if (model.cards.some((c) => c.ID === cardId)) {
         upsertCardContent(model.cards, cardId, { N: content.N, E: content.E, X: content.X, A: content.A });
       } else {
@@ -267,6 +285,7 @@ export async function runPublish(
       for (const { note, cardId } of minted) {
         if (note.audio_sel_ms) selMsByCardId[cardId] = note.audio_sel_ms;
         const content = project(note, { grammarRuleLookup });
+        await upsertCardContentRow(pool, cardId, { N: content.N, E: content.E, X: content.X, A: content.A });
         createCard(model.cards, { id: cardId, deckId: deckCode, N: content.N, E: content.E, D: title, X: content.X, A: content.A });
         const result = appendImmediateOccurrences(deck, cardId, content.occurrences);
         newACount += result.newACount;
@@ -282,30 +301,43 @@ export async function runPublish(
       decksMinted.push({ deckCode, count: minted.length });
     }
 
-    saveDeckCardModel(bundlePath, model);
+    saveDeckCardModel(scratchPath, model);
 
-    // The working bundle's boot-ok companion bakes a BUILD_ID that never
+    // The scratch bundle's boot-ok companion bakes a BUILD_ID that never
     // moves on its own — re-stamp it to this run's buildId on every publish,
     // not just the first, or publish()'s own checkCompanionMatch refuses
     // every run after the one where it happened to already match.
-    restampCompanionBuildId(bundlePath, buildId);
+    // base_version/patch_rev need no restamp: they came from the active
+    // logic bundle this run started from and never change mid-run (D-L4).
+    restampCompanionBuildId(scratchPath, buildId);
 
     const cardAudio = await allCardAudio(pool);
     const finalCardAudio = await ensureBlobsPresent(cardAudio, { stabburBaseUrl, dataDir, selMsByCardId });
     await log(buildJobId, `snapshot: audio manifest covers ${Object.keys(finalCardAudio).length} card(s)`);
 
-    const { baseVersion, patchRev, dataRev } = await previousVersions(pool);
+    // D-L6: base_version/patch_rev now come from the logic bundle this run
+    // built onto, not copied forward from the previous publication —
+    // `previousVersions` exists only for `data_rev` now.
+    const { baseVersion, patchRev } = active;
+    const { dataRev } = await previousVersions(pool);
     writeAudioManifest(finalCardAudio, { dataDir, buildId });
 
-    const bundleBytes = fs.readFileSync(bundlePath);
+    const bundleBytes = fs.readFileSync(scratchPath);
     const bundleSha = crypto.createHash("sha256").update(bundleBytes).digest("hex");
-    const result = publish(bundlePath, buildId, `base ${baseVersion} · logic ${patchRev} · data ${dataRev + 1}`, {
+    const result = publish(scratchPath, buildId, `base ${baseVersion} · logic ${patchRev} · data ${dataRev + 1}`, {
       dataDir,
       publicBase,
     });
     await log(buildJobId, `published ${buildId} — sha256 ${result.sha256}`);
 
-    await writePublication(pool, { buildId, baseVersion, patchRev, dataRev: dataRev + 1, bundleSha: result.sha256 });
+    await writePublication(pool, {
+      buildId,
+      baseVersion,
+      patchRev,
+      dataRev: dataRev + 1,
+      bundleSha: result.sha256,
+      logicBundleId: active.id,
+    });
     // D-H1: only after `publish()` *and* `writePublication` have succeeded —
     // never speculatively, and never before the `publications` row exists
     // (occurrence_shipments.build_id has an FK to it). A run that fails
@@ -317,5 +349,10 @@ export async function runPublish(
   } catch (err) {
     await markFailed(pool, buildJobId, err);
     throw err;
+  } finally {
+    // Safe to discard unconditionally — every run fully reconstructs its
+    // own scratch copy from the active logic bundle + hub's ledger tables
+    // (D-L4); nothing is ever lost by deleting it here.
+    if (scratchPath) fs.rmSync(scratchPath, { force: true });
   }
 }

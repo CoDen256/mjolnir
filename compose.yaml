@@ -107,7 +107,6 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://mjolnir:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/postgres
-      BUNDLE_PATH: /app/index.android.bundle
       DATA_DIR: /app/data
     volumes:
       - .:/app
@@ -126,7 +125,6 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://mjolnir:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/postgres
-      BUNDLE_PATH: /app/index.android.bundle
       DATA_DIR: /app/data
     volumes:
       - .:/app

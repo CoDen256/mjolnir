@@ -107,7 +107,7 @@ const NAV = [
   {
     group: "OTA",
     items: [
-      { href: "/mjolnir/ota", label: "Submit bundle" },
+      { href: "/mjolnir/ota", label: "Logic bundles" },
       { href: "/mjolnir", label: "Publish history" },
     ],
   },

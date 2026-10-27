@@ -72,6 +72,45 @@ test("rejects a buildId outside the D48 charset", () => {
   );
 });
 
+test("substitutes baseVersion and patchRev placeholders alongside buildId with no interaction", () => {
+  const companion = "(function(){ var b='__MJOLNIR_BUILD_ID__'; var v='__MJOLNIR_BASE_VERSION__'; var p=__MJOLNIR_PATCH_REV__; })();";
+  const out = appendCompanion(bundleWithMap(), companion, {
+    buildId: "b000002",
+    baseVersion: "1.5.12",
+    patchRev: 3,
+    name: "boot-ok",
+  }).toString("utf8");
+  assert.ok(out.includes("b='b000002'"));
+  assert.ok(out.includes("v='1.5.12'"));
+  assert.ok(out.includes("p=3"));
+  assert.ok(!out.includes("__MJOLNIR_"));
+});
+
+test("requires baseVersion/patchRev only when their own placeholder is present", () => {
+  assert.throws(
+    () => appendCompanion(bundleWithMap(), "var v='__MJOLNIR_BASE_VERSION__';", { name: "boot-ok" }),
+    /no baseVersion was given/
+  );
+  assert.throws(
+    () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { name: "boot-ok" }),
+    /no patchRev was given/
+  );
+  // Neither placeholder present — neither option is required.
+  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { name: "debug" }).toString("utf8");
+  assert.ok(out.includes("/* no buildId */"));
+});
+
+test("rejects a patchRev that isn't a non-negative integer", () => {
+  assert.throws(
+    () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { patchRev: -1, name: "boot-ok" }),
+    /patchRev must be/
+  );
+  assert.throws(
+    () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { patchRev: 1.5, name: "boot-ok" }),
+    /patchRev must be/
+  );
+});
+
 test("refuses to append the same companion twice", () => {
   const once = appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, { buildId: "b000002", name: "boot-ok" });
   assert.throws(

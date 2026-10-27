@@ -211,6 +211,62 @@ body {
 }
 .patch-list li:hover { background: #f7f7ff; }
 
+/* --- Assemble (multi-patch selection, D-L7) ------------------------------*/
+
+.assemble-form-pane {
+  max-width: 900px;
+}
+.field-hint {
+  font-weight: 400;
+  color: #777;
+  font-size: 11px;
+  margin-left: 6px;
+}
+.assemble-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.assemble-picker-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #666;
+  margin-bottom: 4px;
+}
+.assemble-pick-list {
+  min-height: 60px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.assemble-pick-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: default;
+}
+.assemble-pick-list li .assemble-pick-name {
+  flex: 1;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assemble-pick-list li .assemble-pick-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.assemble-pick-list.empty::after {
+  content: "none";
+  color: #999;
+  font-style: italic;
+  padding: 8px;
+  display: block;
+}
+
 /* --- Diff rendering (Compare / Editor / Patches) ------------------------ */
 
 .diff-view {

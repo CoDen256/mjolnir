@@ -1,35 +1,27 @@
-import { loadDeckCardModel } from "../../src/deckData.js";
-
 function stripHtml(html) {
   return String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function safeLoadModel(bundlePath) {
-  try {
-    return loadDeckCardModel(bundlePath);
-  } catch {
-    return null;
-  }
-}
-
 // D-H2: the one function both the Forecast page's past-batches panel and a
 // batch's own expand-to-detail call — a past build's contents are a straight
-// read of what it actually shipped (D93), never a recomputation.
-export async function occurrencesForBuild(pool, buildId, bundlePath) {
+// read of what it actually shipped (D93), never a recomputation. Content now
+// comes from `card_content` (D-L3), not the removed persistent bundle file —
+// a card's content is durable DB state independent of any bundle bytes.
+export async function occurrencesForBuild(pool, buildId) {
   const { rows } = await pool.query(
-    `SELECT os.card_id, os.letter, cs.deck_code, cs.note_id
-     FROM occurrence_shipments os JOIN card_slots cs ON cs.id = os.card_id
+    `SELECT os.card_id, os.letter, cs.deck_code, cs.note_id, cc.n
+     FROM occurrence_shipments os
+     JOIN card_slots cs ON cs.id = os.card_id
+     LEFT JOIN card_content cc ON cc.card_id = os.card_id
      WHERE os.build_id = $1 ORDER BY os.id ASC`,
     [buildId]
   );
-  const model = safeLoadModel(bundlePath);
-  const content = model ? new Map(model.cards.map((c) => [c.ID, c])) : new Map();
   return rows.map((r) => ({
     cardId: r.card_id,
     letter: r.letter,
     deckCode: r.deck_code,
     noteId: r.note_id,
-    noteText: stripHtml(content.get(r.card_id)?.N),
+    noteText: stripHtml(r.n),
     kind: "ship",
   }));
 }

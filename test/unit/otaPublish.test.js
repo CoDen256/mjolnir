@@ -11,6 +11,8 @@ import {
   checkReuse,
   publish,
   restampCompanionBuildId,
+  findBakedBaseVersion,
+  findBakedPatchRev,
 } from "../../tool/src/otaPublish.js";
 
 const MAGIC = "var __BUNDLE_START_TIME__=";
@@ -82,6 +84,21 @@ test("checkCompanionMatch refuses a missing companion unless allowNoCompanion", 
   const bytes = bundleBytes({ withCompanion: false });
   assert.throws(() => checkCompanionMatch(bytes, "b1"));
   assert.equal(checkCompanionMatch(bytes, "b1", { allowNoCompanion: true }), null);
+});
+
+test("findBakedBaseVersion/findBakedPatchRev read both finders correctly when both constants are baked", () => {
+  const bytes = Buffer.from(
+    `${MAGIC}1;\nvar BUILD_ID = 'b1';\nvar BASE_VERSION = '1.5.12';\nvar PATCH_REV = 3;\n`,
+    "utf8"
+  );
+  assert.equal(findBakedBaseVersion(bytes), "1.5.12");
+  assert.equal(findBakedPatchRev(bytes), 3);
+});
+
+test("findBakedBaseVersion/findBakedPatchRev return null when neither constant is present (the prompt-the-operator case)", () => {
+  const bytes = bundleBytes({ withCompanion: false });
+  assert.equal(findBakedBaseVersion(bytes), null);
+  assert.equal(findBakedPatchRev(bytes), null);
 });
 
 test("checkReuse allows identical re-publish, refuses a buildId reused with different bytes", () => {

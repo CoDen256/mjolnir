@@ -14,11 +14,20 @@ import path from "node:path";
 const BUILD_ID_RE = /^[A-Za-z0-9._-]{1,64}$/; // D48 — same charset native validates
 const BUILD_ID_PLACEHOLDER = "__MJOLNIR_BUILD_ID__";
 
+// D-L1: base_version/patch_rev are baked in exactly the same way BUILD_ID
+// is — same placeholder-substitution pass, not a second mechanism. Order
+// matters only in that each is independent: a companion can bake any subset
+// of the three with no interaction between them (task 2.1).
+const BASE_VERSION_RE = /^[A-Za-z0-9._-]{1,64}$/; // same charset reasoning as buildId — it's baked the same way
+const BASE_VERSION_PLACEHOLDER = "__MJOLNIR_BASE_VERSION__";
+const PATCH_REV_PLACEHOLDER = "__MJOLNIR_PATCH_REV__";
+
 // Pure: returns a new Buffer with `companionSource` appended. `name` is used
 // for a sentinel comment that makes re-appending the same companion an error.
-// If the companion contains the buildId placeholder, `buildId` is required and
-// substituted; otherwise `buildId` is ignored.
-export function appendCompanion(bundleBuffer, companionSource, { buildId, name } = {}) {
+// If the companion contains a given placeholder, the matching option is
+// required and substituted; a placeholder absent from the source means its
+// option is simply ignored.
+export function appendCompanion(bundleBuffer, companionSource, { buildId, baseVersion, patchRev, name } = {}) {
   const sentinel = `/* mjolnir-companion: ${name || "unnamed"} */`;
   const original = bundleBuffer.toString("utf8");
 
@@ -35,6 +44,24 @@ export function appendCompanion(bundleBuffer, companionSource, { buildId, name }
       throw new Error(`buildId must match ${BUILD_ID_RE} (D48) — got '${buildId}'`);
     }
     source = source.split(BUILD_ID_PLACEHOLDER).join(buildId);
+  }
+  if (source.includes(BASE_VERSION_PLACEHOLDER)) {
+    if (!baseVersion) {
+      throw new Error(`companion '${name}' contains ${BASE_VERSION_PLACEHOLDER} but no baseVersion was given`);
+    }
+    if (!BASE_VERSION_RE.test(baseVersion)) {
+      throw new Error(`baseVersion must match ${BASE_VERSION_RE} — got '${baseVersion}'`);
+    }
+    source = source.split(BASE_VERSION_PLACEHOLDER).join(baseVersion);
+  }
+  if (source.includes(PATCH_REV_PLACEHOLDER)) {
+    if (patchRev === undefined || patchRev === null) {
+      throw new Error(`companion '${name}' contains ${PATCH_REV_PLACEHOLDER} but no patchRev was given`);
+    }
+    if (!Number.isInteger(patchRev) || patchRev < 0) {
+      throw new Error(`patchRev must be a non-negative integer — got '${patchRev}'`);
+    }
+    source = source.split(PATCH_REV_PLACEHOLDER).join(String(patchRev));
   }
 
   const block = `\n${sentinel}\n${source.trim()}\n`;
@@ -53,7 +80,7 @@ export function appendCompanion(bundleBuffer, companionSource, { buildId, name }
   return Buffer.from(result, "utf8");
 }
 
-export function runCompanion(bundlePath, outputPath, companionFile, buildId) {
+export function runCompanion(bundlePath, outputPath, companionFile, { buildId, baseVersion, patchRev } = {}) {
   // Create the output directory if needed — otherwise writeFileSync throws a
   // raw ENOENT stack at the end of the work, after the bundle is built.
   const outDir = path.dirname(outputPath);
@@ -65,7 +92,7 @@ export function runCompanion(bundlePath, outputPath, companionFile, buildId) {
   const companionSource = fs.readFileSync(companionFile, "utf8");
   const name = path.basename(companionFile).replace(/\.js$/, "");
 
-  const out = appendCompanion(bundle, companionSource, { buildId, name });
+  const out = appendCompanion(bundle, companionSource, { buildId, baseVersion, patchRev, name });
   fs.writeFileSync(outputPath, out);
 
   console.log(`appended companion '${name}' → ${outputPath}`);
@@ -73,5 +100,11 @@ export function runCompanion(bundlePath, outputPath, companionFile, buildId) {
     console.log(`  buildId  ${buildId}`);
     console.log(`  NOTE: pass the SAME buildId to tun/bin/ota-publish.sh so the`);
     console.log(`        boot-ok marker pairs with bundle-${buildId}.js (D52).`);
+  }
+  if (companionSource.includes(BASE_VERSION_PLACEHOLDER)) {
+    console.log(`  baseVersion  ${baseVersion}`);
+  }
+  if (companionSource.includes(PATCH_REV_PLACEHOLDER)) {
+    console.log(`  patchRev  ${patchRev}`);
   }
 }

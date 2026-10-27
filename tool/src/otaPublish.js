@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 
 const BUILD_ID_RE = /^[A-Za-z0-9._-]{1,64}$/; // D48 — same charset native validates
 const MAGIC_PREFIX = "var __BUNDLE_START_TIME__="; // checked by the device at every activation (D51)
-const MAX_BUNDLE_SIZE = 67108864; // 64 MiB — native rejects anything larger (D48)
+export const MAX_BUNDLE_SIZE = 67108864; // 64 MiB — native rejects anything larger (D48)
 
 export function validateBuildId(buildId) {
   if (!BUILD_ID_RE.test(buildId)) {
@@ -33,6 +33,22 @@ export function checkMagicPrefix(bytes) {
 function findBakedBuildId(bytes) {
   const match = bytes.toString("utf8").match(/BUILD_ID\s*=\s*'([A-Za-z0-9._-]{1,64})'/);
   return match ? match[1] : null;
+}
+
+// D-L1: siblings to `findBakedBuildId`, same regex-match-on-bundle-text
+// approach — base_version/patch_rev are baked into the companion the exact
+// same way (`src/commands/companion.js`'s placeholder substitution), so hub
+// reads them back out with the same technique rather than a second
+// mechanism. Both return null if the companion wasn't built with that
+// constant baked in (the "prompt the operator" case, D-L1).
+export function findBakedBaseVersion(bytes) {
+  const match = bytes.toString("utf8").match(/BASE_VERSION\s*=\s*'([A-Za-z0-9._-]{1,64})'/);
+  return match ? match[1] : null;
+}
+
+export function findBakedPatchRev(bytes) {
+  const match = bytes.toString("utf8").match(/PATCH_REV\s*=\s*(\d+)/);
+  return match ? Number(match[1]) : null;
 }
 
 export function checkCompanionMatch(bytes, buildId, { allowNoCompanion = false } = {}) {

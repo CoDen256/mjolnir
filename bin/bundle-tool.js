@@ -11,6 +11,7 @@ import { runDiff } from "../src/commands/diff.js";
 import { runPatchback } from "../src/commands/patchback.js";
 import { runCompanion } from "../src/commands/companion.js";
 import { runUi } from "../src/commands/ui.js";
+import { assembleBundle } from "../src/commands/assemble.js";
 import { publish } from "../tool/src/otaPublish.js";
 
 const program = new Command();
@@ -89,8 +90,14 @@ program
     "Append a redeployable JS companion (e.g. patches/js/boot-ok-companion.js) after the bundle entry; no module bytes change"
   )
   .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if the companion uses it)")
+  .option("--base-version <v>", "base_version to substitute for __MJOLNIR_BASE_VERSION__ (required if the companion uses it)")
+  .option("--patch-rev <n>", "patch_rev to substitute for __MJOLNIR_PATCH_REV__ (required if the companion uses it)")
   .action(async (bundle, outputBundle, companionFile, opts) => {
-    runCompanion(bundle, outputBundle, companionFile, opts.buildId);
+    runCompanion(bundle, outputBundle, companionFile, {
+      buildId: opts.buildId,
+      baseVersion: opts.baseVersion,
+      patchRev: opts.patchRev !== undefined ? Number(opts.patchRev) : undefined,
+    });
   });
 
 program
@@ -102,6 +109,33 @@ program
   .action((opts) =>
     runUi({ port: Number(opts.port), patchesDir: opts.patchesDir, editorCmd: opts.editorCmd })
   );
+
+program
+  .command("assemble <base-folder> <output-bundle>")
+  .description(
+    "Apply one or more stored patches (in order) against a base APK folder's own bundle, stamp base_version/patch_rev/buildId, write one output bundle. Never touches the base folder."
+  )
+  .option("--patches <names>", "comma-separated, ordered patch names to apply (src/patches.js store)", "")
+  .option("--patches-dir <dir>", "directory to read patch files from, relative to CWD", "patches")
+  .option("--companion <file>", "companion file to append (e.g. patches/js/boot-ok-companion.js)")
+  .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if the companion uses it)")
+  .option("--patch-rev <n>", "patch_rev to bake in — the operator's responsibility to supply (D-L2's global counter lives in hub's logic_bundles table)")
+  .action(async (baseFolder, outputBundle, opts) => {
+    const patchNames = opts.patches ? opts.patches.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    const result = await assembleBundle({
+      baseFolderPath: baseFolder,
+      patchNames,
+      patchesDir: opts.patchesDir,
+      outputPath: outputBundle,
+      companionFile: opts.companion,
+      buildId: opts.buildId,
+      patchRev: opts.patchRev !== undefined ? Number(opts.patchRev) : undefined,
+    });
+    console.log(`assembled ${outputBundle}`);
+    console.log(`  base_version  ${result.baseVersion}`);
+    console.log(`  patch_rev     ${result.patchRev ?? "(not baked — no --patch-rev given)"}`);
+    console.log(`  patches       ${result.appliedPatches.join(", ") || "(none)"}`);
+  });
 
 program
   .command("ota-publish <bundle> <buildId> [label]")

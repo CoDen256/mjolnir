@@ -7,14 +7,20 @@ import {
   checkCompanionMatch,
   checkReuse,
   publish,
+  findBakedBaseVersion,
+  findBakedPatchRev,
+  MAX_BUNDLE_SIZE,
 } from "../../tool/src/otaPublish.js";
 import { previousVersions, writePublication } from "./publications.js";
+import { create as createLogicBundle, activate } from "./logicBundles.js";
 import { query } from "./db.js";
 
 // D-H5/task 6.1: verification reuses exactly the guards `ota-publish.sh`/
 // `builder` already enforce — no second implementation. Returns a list of
 // `{check, ok, detail}` so the UI can show which of the "6 checks" passed,
-// matching the mockup's "✓ 6 checks passed" pill.
+// matching the mockup's "✓ 6 checks passed" pill. This is the FORCE-PUBLISH
+// path's verification — it has a real `buildId` identity, so every
+// `tool/src/otaPublish.js` guard applies.
 export function verifyBundle(bytes, buildId, { dataDir, allowNoCompanion = process.env.ALLOW_NO_COMPANION === "1" } = {}) {
   const checks = [];
   const run = (name, fn) => {
@@ -28,7 +34,7 @@ export function verifyBundle(bytes, buildId, { dataDir, allowNoCompanion = proce
 
   run("size", () => {
     if (bytes.length === 0) throw new Error("empty bundle");
-    if (bytes.length > 67108864) throw new Error("bundle > 64 MiB, native rejects it (D48)");
+    if (bytes.length > MAX_BUNDLE_SIZE) throw new Error("bundle > 64 MiB, native rejects it (D48)");
   });
   run("buildId format", () => validateBuildId(buildId));
   run("magic prefix", () => checkMagicPrefix(bytes));
@@ -39,29 +45,124 @@ export function verifyBundle(bytes, buildId, { dataDir, allowNoCompanion = proce
   return { ok: checks.every((c) => c.ok), checks };
 }
 
-// Task 6.1: the actual publish, after verification has already run. Writes
-// hub's own `publications` row (this didn't go through builder's pipeline,
-// which writes its own) with the operator-provided label.
-export async function submitBundle(bytes, buildId, label, { dataDir, publicBase, allowNoCompanion } = {}) {
+// D-L1/D-L5: the default submit flow's own, narrower verification — a
+// freshly-dropped logic bundle has no `buildId` identity yet (that's only
+// assigned once `builder` eventually publishes from it), so the
+// buildId/companion-match/reuse-by-buildId guards above don't apply here;
+// just the two checks that are meaningful for any bundle's raw bytes.
+export function verifyLogicBundleBytes(bytes) {
+  const checks = [];
+  const run = (name, fn) => {
+    try {
+      fn();
+      checks.push({ check: name, ok: true });
+    } catch (err) {
+      checks.push({ check: name, ok: false, detail: err.message });
+    }
+  };
+
+  run("size", () => {
+    if (bytes.length === 0) throw new Error("empty bundle");
+    if (bytes.length > MAX_BUNDLE_SIZE) throw new Error("bundle > 64 MiB, native rejects it (D48)");
+  });
+  run("magic prefix", () => checkMagicPrefix(bytes));
+
+  return { ok: checks.every((c) => c.ok), checks };
+}
+
+function writeLogicBundleFile(dataDir, logicBundleDir, bytes, bundleSha) {
+  const dir = logicBundleDir || path.join(dataDir, "logic");
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${bundleSha}.js`);
+  // Content-addressed, not identity-addressed the way a buildId's bundle
+  // file is (D-L1: "immutable once written") — identical bytes under the
+  // same sha is simply a no-op write, never an error.
+  if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, bytes);
+  return filePath;
+}
+
+// D-L1/D-L5/task 4.1: the OTA console's default submit action. Creates a
+// `logic_bundles` row — it does NOT touch `current.json` and does NOT run
+// `builder`. `baseVersion`/`patchRev` are read from the bundle's own baked
+// constants (the same mechanism `BUILD_ID` uses); the caller-supplied
+// `baseVersion`/`patchRev` are only used when a baked value is absent (the
+// UI's "prompt the operator" case, ota-console spec).
+export async function submitBundle(bytes, { label, baseVersion, patchRev, dataDir, logicBundleDir } = {}) {
+  const verify = verifyLogicBundleBytes(bytes);
+  if (!verify.ok) {
+    throw new Error(
+      `refusing: ${verify.checks
+        .filter((c) => !c.ok)
+        .map((c) => `${c.check}: ${c.detail}`)
+        .join("; ")}`
+    );
+  }
+
+  const resolvedBaseVersion = findBakedBaseVersion(bytes) || baseVersion;
+  if (!resolvedBaseVersion) {
+    throw new Error("refusing: this bundle has no baked base_version — enter one manually");
+  }
+  const bakedPatchRev = findBakedPatchRev(bytes);
+  const resolvedPatchRev = bakedPatchRev ?? (patchRev === undefined || patchRev === null ? null : Number(patchRev));
+  if (resolvedPatchRev === null || resolvedPatchRev === undefined) {
+    throw new Error("refusing: this bundle has no baked patch_rev — enter one manually");
+  }
+
+  const bundleSha = crypto.createHash("sha256").update(bytes).digest("hex");
+  const filePath = writeLogicBundleFile(dataDir, logicBundleDir, bytes, bundleSha);
+
+  return createLogicBundle({
+    baseVersion: resolvedBaseVersion,
+    patchRev: resolvedPatchRev,
+    filePath,
+    bundleSha,
+    label: label || null,
+  });
+}
+
+// Task 4.2: thin wrapper over `logicBundles.activate` — the UI's "activate"
+// button. Activating does not publish anything on its own; it only changes
+// what `builder`'s *next* run will build onto (ota-console spec's
+// "Activating a submitted bundle" scenario).
+export async function activateLogicBundle(id) {
+  await activate(id);
+}
+
+// D-L5/task 4.3: the emergency path, kept as a separate, explicitly-labeled
+// action — publishes a raw bundle straight to `current.json`, bypassing
+// `logic_bundles` activation and `builder` entirely. Per design.md's
+// resolved open question, still writes an inactive `logic_bundles` row for
+// provenance, so this path isn't a dead end for audit history even though
+// it's never what `builder` builds from next.
+export async function forcePublish(bytes, buildId, label, { dataDir, logicBundleDir, publicBase, allowNoCompanion } = {}) {
   const tmpPath = path.join(dataDir, `.ota-submit-${buildId}-${Date.now()}.tmp`);
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(tmpPath, bytes);
   try {
     const result = publish(tmpPath, buildId, label, { dataDir, publicBase, allowNoCompanion });
-    const { baseVersion, patchRev, dataRev } = await previousVersions();
+    const { dataRev } = await previousVersions();
+    const baseVersion = findBakedBaseVersion(bytes) || "0";
+    const patchRev = findBakedPatchRev(bytes) ?? 0;
     await writePublication({ buildId, baseVersion, patchRev, dataRev, bundleSha: result.sha256, label });
+
+    const filePath = writeLogicBundleFile(dataDir, logicBundleDir, bytes, result.sha256);
+    await createLogicBundle({
+      baseVersion,
+      patchRev,
+      filePath,
+      bundleSha: result.sha256,
+      label: `force-publish: ${label || buildId}`,
+    });
+
     return result;
   } finally {
     fs.rmSync(tmpPath, { force: true });
   }
 }
 
-// Task 6.2: "set as current" — repoints `current.json` at a build whose
-// bundle is already on disk, by calling the same `publish()` guards again
-// with that build's own id (checkReuse sees identical bytes and skips
-// rewriting the bundle file, only `current.json` changes). Not a new code
-// path — the guard that makes rollback safe (D26: the device compares
-// identity, never ordering) is the same one a fresh publish uses.
+// Task 6.2 (unchanged): "set as current" — repoints `current.json` at a
+// build whose bundle is already on disk, by calling the same `publish()`
+// guards again with that build's own id.
 export async function setCurrent(buildId, { dataDir, publicBase }) {
   const bundlePath = path.join(dataDir, "ota", "bundle", `${buildId}.js`);
   if (!fs.existsSync(bundlePath)) throw new Error(`no bundle on disk for "${buildId}"`);

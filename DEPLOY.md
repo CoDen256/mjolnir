@@ -119,6 +119,30 @@ test and it checks the things that are unfixable once the APK ships — above
 all that the sha256 is identical with and without transport gzip (D49). Re-run
 it after any Caddy change.
 
+## Logic bundles — the base+patch bundle `builder` builds onto
+
+`builder` has no config of its own naming a bundle file anymore (`BUNDLE_PATH`
+is gone — D-L4): every run reads whichever `logic_bundles` row is `active`
+and rebuilds the deck/card data onto it fresh. **A fresh deployment has zero
+logic bundles and zero active one** — `builder` refuses to publish until the
+operator has submitted and activated at least one, via
+`https://<host>/mjolnir/ota`:
+
+1. Drop an assembled base+patch bundle (e.g. produced by bundle-workbench's
+   "Assemble" action, or any bundle with the boot-ok companion appended —
+   see `bundle-tool companion`/`bundle-tool assemble`). If it has
+   `base_version`/`patch_rev` baked in (D-L1), they're read automatically;
+   otherwise you're prompted to type them.
+2. Click **activate** on the row you just created.
+3. `builder`'s next run (scheduled or "publish now") now builds onto it.
+
+This is a **one-time bootstrap step for a fresh deployment** — every
+subsequent base/patch change is the same two clicks (submit, activate),
+independent of any Docker restart.
+
+Logic bundle files live under `LOGIC_BUNDLE_DIR` (defaults to
+`<DATA_DIR>/logic`), content-addressed by sha256 — see `.env.example`.
+
 ## Publishing and rolling back
 
 The normal path is now the browser: `https://<host>/mjolnir/ota` — drag-drop
@@ -162,6 +186,7 @@ mjolnir/
     ota/bundle/<buildId>.js
     ota/<buildId>/audio.json
     blob/<sha256>
+    logic/<sha256>.js   operator-submitted base+patch bundles (D-L1) — one is "active"
 ```
 
 ## Backups (P24)
@@ -178,10 +203,12 @@ The `caddy_data` volume holds the TLS certificates. Losing it is survivable
 `docker compose down -v`.
 
 3. `pg_dump` of the `postgres` container's `postgres` database — this is
-   hub's and builder's entire ledger (decks, card_slots, publications,
-   build_jobs, pending_occurrences, occurrence_shipments, builder_config,
-   job_logs). Losing it without a backup means hub's bookkeeping no longer
-   agrees with what's actually on-device, with no way to reconcile.
+   hub's and builder's entire ledger (decks, card_slots, card_content,
+   publications, logic_bundles, build_jobs, pending_occurrences,
+   occurrence_shipments, builder_config, job_logs). Losing it without a
+   backup means hub's bookkeeping no longer agrees with what's actually
+   on-device, with no way to reconcile — and `builder` has no bundle to
+   build onto until a `logic_bundles` row is re-submitted (see above).
 
 ## Operational notes
 

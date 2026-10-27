@@ -16,6 +16,13 @@
 // `bundle-tool companion` and the SAME id to `tun/bin/ota-publish.sh`, so the
 // marker pairs with `bundle-<id>.js`.
 //
+// `__MJOLNIR_BASE_VERSION__`/`__MJOLNIR_PATCH_REV__` are baked the same way
+// (D-L1, builder-logic-bundle-store) — read back out of the assembled
+// bundle by `tool/src/otaPublish.js`'s `findBakedBaseVersion`/
+// `findBakedPatchRev` at ingest time. They don't drive any runtime behavior
+// here; baking them as plain top-level constants (not just a comment) is
+// what makes a submitted bundle self-describing without a sidecar file.
+//
 // It also exposes `globalThis.MJOLNIR_BUILD_ID` synchronously (task 10.1) —
 // this runs right after the entry call (`__r(0);`), long before any screen
 // the user navigates to (e.g. "My account", module 2176) can mount, so that
@@ -25,7 +32,13 @@
 // "no OTA active", not a bug.
 (function () {
   var BUILD_ID = '__MJOLNIR_BUILD_ID__';
-  if (typeof globalThis !== 'undefined') globalThis.MJOLNIR_BUILD_ID = BUILD_ID;
+  var BASE_VERSION = '__MJOLNIR_BASE_VERSION__';
+  var PATCH_REV = __MJOLNIR_PATCH_REV__;
+  if (typeof globalThis !== 'undefined') {
+    globalThis.MJOLNIR_BUILD_ID = BUILD_ID;
+    globalThis.MJOLNIR_BASE_VERSION = BASE_VERSION;
+    globalThis.MJOLNIR_PATCH_REV = PATCH_REV;
+  }
   var DELAY_MS = 3000; // D52: survive 3 s before declaring boot-ok
   var RETRY_MS = 2000; // expo modules may not be installed yet at T+3s
   var MAX_TRIES = 5; // bounded — a dead build must never retry forever

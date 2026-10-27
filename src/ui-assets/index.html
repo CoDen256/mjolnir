@@ -14,6 +14,7 @@
         <button type="button" class="tab" data-view="compare">Compare</button>
         <button type="button" class="tab" data-view="editor">Editor</button>
         <button type="button" class="tab" data-view="patches">Patches</button>
+        <button type="button" class="tab" data-view="assemble">Assemble</button>
         <button type="button" class="tab hidden" data-view="deckcard">Deck/Card</button>
       </nav>
     </header>
@@ -120,6 +121,52 @@
           <div id="patches-preview-diff" class="diff-view"></div>
           <button id="patches-apply-btn" type="button">Apply to active session</button>
           <div id="patches-apply-result" class="hidden"></div>
+        </div>
+      </section>
+
+      <!-- Assemble: multi-patch selection + "Assemble" action (D-L7) -->
+      <section id="view-assemble" class="view hidden">
+        <div class="assemble-layout">
+          <div class="assemble-form-pane">
+            <div class="field-grid">
+              <label class="full-width">
+                Base folder <span class="field-hint">decoded APK folder, e.g. base/smali.mjolnir.merged</span>
+                <input id="assemble-base-folder" type="text" placeholder="base/smali.mjolnir.merged" />
+              </label>
+              <label class="full-width">
+                Output bundle path
+                <input id="assemble-output-path" type="text" placeholder="out/assembled.bundle" />
+              </label>
+              <label>
+                Companion file <span class="field-hint">appends BUILD_ID/BASE_VERSION/PATCH_REV</span>
+                <input id="assemble-companion" type="text" value="patches/js/boot-ok-companion.js" />
+              </label>
+              <label>
+                Build id <span class="field-hint">cosmetic here — builder restamps it on every real publish</span>
+                <input id="assemble-build-id" type="text" placeholder="b000000" />
+              </label>
+              <label>
+                Patch rev <span class="field-hint">the operator's responsibility — read the current max off /mjolnir/ota's history</span>
+                <input id="assemble-patch-rev" type="number" min="0" step="1" />
+              </label>
+            </div>
+
+            <h3>Patches to apply, in order</h3>
+            <div class="assemble-picker">
+              <div class="assemble-picker-col">
+                <div class="assemble-picker-label">Available</div>
+                <ul id="assemble-available-list" class="patch-list assemble-pick-list"></ul>
+              </div>
+              <div class="assemble-picker-col">
+                <div class="assemble-picker-label">Selected (apply order)</div>
+                <ol id="assemble-selected-list" class="patch-list assemble-pick-list"></ol>
+              </div>
+            </div>
+
+            <button id="assemble-run-btn" type="button">Assemble</button>
+            <div id="assemble-error" class="error hidden"></div>
+            <div id="assemble-result" class="success hidden"></div>
+          </div>
         </div>
       </section>
 

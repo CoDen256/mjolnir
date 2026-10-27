@@ -9,11 +9,6 @@ import { DECK_ALLOCATION } from "../src/decks.js";
 import { listPublications, writePublication, updateLabel, deleteBuild } from "../src/publications.js";
 import { cardsList } from "../src/cards.js";
 import { createServer } from "../src/server.js";
-import { runExplode } from "../../src/commands/explode.js";
-import { buildFixtureBundleSource } from "../../test/fixtures/deckCardFixture.js";
-import { loadDeckCardModel } from "../../src/deckData.js";
-import { createCard, ensureDeck } from "../../src/injectDeck.js";
-import { publish } from "../../tool/src/otaPublish.js";
 
 // Needs a real postgres (separate logical DB per service, 02-services.md) —
 // point DATABASE_URL at a throwaway database to run these. Skipped, not
@@ -25,17 +20,14 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
   const pool = getPool();
   await migrate();
   await pool.query(
-    "TRUNCATE card_slots, publications, build_jobs, minted_notes, decks, pending_occurrences, occurrence_shipments, job_logs CASCADE"
+    "TRUNCATE card_slots, publications, build_jobs, minted_notes, decks, pending_occurrences, occurrence_shipments, job_logs, card_content, logic_bundles CASCADE"
   );
 
   process.env.ALLOW_NO_COMPANION = "1";
   process.env.ALLOW_HTTP = "1";
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mjolnir-hub-"));
-  const bundlePath = path.join(tmpDir, "fixture.bundle");
-  fs.writeFileSync(bundlePath, "var __BUNDLE_START_TIME__=1;\n" + buildFixtureBundleSource());
-  runExplode(bundlePath);
   const dataDir = path.join(tmpDir, "data");
-  const config = { bundlePath, dataDir, publicBase: "http://localhost:8080", stabburUiBase: "http://localhost:5056" };
+  const config = { dataDir, publicBase: "http://localhost:8080", stabburUiBase: "http://localhost:5056" };
 
   await t.test("seeding decks is idempotent and matches the allocation table", async () => {
     for (const { code, title } of DECK_ALLOCATION) {
@@ -81,18 +73,15 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
   });
 
   await t.test("cards-browser: a card with one shipped + one pending side renders both independently", async () => {
-    // A real card in the fixture bundle, so cardsList's bundle read finds
-    // real N/E content, not just a ledger row with blanks.
-    const model = loadDeckCardModel(bundlePath);
-    ensureDeck(model.decks, { name: "C20", title: "Substantiv" });
-    createCard(model.cards, { id: "C20001", deckId: "C20", N: "<div>hus</div>", E: "<div>house</div>", D: "Substantiv", X: "", A: "N" });
-    const { saveDeckCardModel } = await import("../../src/deckData.js");
-    saveDeckCardModel(bundlePath, model);
-
+    // D-L3: content now lives in `card_content` — durable DB state, not the
+    // (removed) persistent bundle file.
+    await pool.query(
+      "INSERT INTO card_content (card_id, n, e, x, a) VALUES ('C20001', '<div>hus</div>', '<div>house</div>', NULL, 'N')"
+    );
     await pool.query("INSERT INTO occurrence_shipments (card_id, letter, build_id) VALUES ('C20001', 'A', 'b2')");
     await pool.query("INSERT INTO pending_occurrences (deck_code, card_id, letter, remaining) VALUES ('C20', 'C20001', 'E', 3)");
 
-    const cards = await cardsList(pool, bundlePath, {});
+    const cards = await cardsList(pool, {});
     const c20001 = cards.find((c) => c.id === "C20001");
     assert.ok(c20001);
     assert.equal(c20001.N.includes("hus"), true);
@@ -110,19 +99,19 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
     await pool.query("INSERT INTO occurrence_shipments (card_id, letter, build_id) VALUES ('C20002', 'A', 'b2')");
     await pool.query("INSERT INTO occurrence_shipments (card_id, letter, build_id) VALUES ('C20002', 'E', 'b2')");
 
-    const pending = await cardsList(pool, bundlePath, { statusFilter: "pending" });
+    const pending = await cardsList(pool, { statusFilter: "pending" });
     assert.deepEqual(pending.map((c) => c.id).sort(), ["C20001"]);
 
-    const shipped = await cardsList(pool, bundlePath, { statusFilter: "shipped" });
+    const shipped = await cardsList(pool, { statusFilter: "shipped" });
     assert.deepEqual(shipped.map((c) => c.id).sort(), ["C20002"]);
   });
 
   await t.test("cards-browser: stabbur being unreachable degrades only the note link, not the list", async () => {
-    const cards = await cardsList(pool, bundlePath, {});
+    const cards = await cardsList(pool, {});
     assert.ok(cards.length > 0, "the list itself never depends on a stabbur fetch — nothing here calls stabbur at all");
   });
 
-  await t.test("ota console: verifying rejects a bad magic prefix with the same message the CLI uses", async () => {
+  await t.test("ota console: verifying (force-publish path) rejects a bad magic prefix with the same message the CLI uses", async () => {
     const { verifyBundle } = await import("../src/ota.js");
     const result = verifyBundle(Buffer.from("not a bundle"), "b900001", { dataDir });
     assert.equal(result.ok, false);
@@ -131,22 +120,77 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
     assert.match(magicCheck.detail, /does not start with/);
   });
 
-  await t.test("ota console: submitting a valid bundle publishes it and writes hub's own publications row", async () => {
-    const { submitBundle, setCurrent } = await import("../src/ota.js");
-    const bytes = Buffer.from("var __BUNDLE_START_TIME__=1;\nhello");
-    const result = await submitBundle(bytes, "b900002", "test label", { dataDir, publicBase: config.publicBase });
+  await t.test("ota console: verifying (default submit path) needs no buildId — just size and magic prefix", async () => {
+    const { verifyLogicBundleBytes } = await import("../src/ota.js");
+    const bad = verifyLogicBundleBytes(Buffer.from("not a bundle"));
+    assert.equal(bad.ok, false);
+    const good = verifyLogicBundleBytes(Buffer.from("var __BUNDLE_START_TIME__=1;\nhello"));
+    assert.equal(good.ok, true);
+  });
+
+  let firstLogicBundleId;
+  await t.test("ota console: submitting a bundle with baked constants creates a logic_bundles row and never touches current.json (D-L1/D-L5)", async () => {
+    const { submitBundle } = await import("../src/ota.js");
+    const bytes = Buffer.from(
+      "var __BUNDLE_START_TIME__=1;\nvar BASE_VERSION = '1.5.12';\nvar PATCH_REV = 1;\nhello"
+    );
+    const row = await submitBundle(bytes, { label: "test logic bundle", dataDir });
+    firstLogicBundleId = row.id;
+    assert.equal(row.base_version, "1.5.12");
+    assert.equal(row.patch_rev, 1);
+    assert.equal(row.active, false, "submitting alone never activates");
+
+    assert.equal(fs.existsSync(path.join(dataDir, "ota", "current.json")), false, "submit must not touch current.json");
+  });
+
+  await t.test("ota console: submitting a bundle with no baked constants requires a manual base_version/patch_rev", async () => {
+    const { submitBundle } = await import("../src/ota.js");
+    const bytes = Buffer.from("var __BUNDLE_START_TIME__=1;\nno baked constants here");
+    await assert.rejects(() => submitBundle(bytes, { dataDir }), /no baked base_version/);
+
+    const row = await submitBundle(bytes, { dataDir, baseVersion: "1.6.0", patchRev: 5 });
+    assert.equal(row.base_version, "1.6.0");
+    assert.equal(row.patch_rev, 5);
+  });
+
+  await t.test("ota console: activating a logic bundle does not publish anything on its own", async () => {
+    const { activateLogicBundle } = await import("../src/ota.js");
+    await activateLogicBundle(firstLogicBundleId);
+    const { rows } = await pool.query("SELECT active FROM logic_bundles WHERE id = $1", [firstLogicBundleId]);
+    assert.equal(rows[0].active, true);
+    assert.equal(fs.existsSync(path.join(dataDir, "ota", "current.json")), false, "activating must not publish");
+  });
+
+  await t.test("ota console: force-publish changes current.json without touching logic_bundles.active, and still records provenance", async () => {
+    const { forcePublish, setCurrent } = await import("../src/ota.js");
+    const bytes = Buffer.from("var __BUNDLE_START_TIME__=1;\nvar BASE_VERSION = '1.5.12';\nvar PATCH_REV = 9;\nforce-published");
+    const result = await forcePublish(bytes, "b900002", "test label", { dataDir, publicBase: config.publicBase });
     assert.equal(result.buildId, "b900002");
+
+    const current = JSON.parse(fs.readFileSync(path.join(dataDir, "ota", "current.json"), "utf8"));
+    assert.equal(current.buildId, "b900002");
 
     const pubs = await listPublications();
     const row = pubs.find((p) => p.build_id === "b900002");
     assert.ok(row);
     assert.equal(row.label, "test label");
 
+    // The force-published bundle left an auditable (inactive) logic_bundles
+    // row, but the previously-activated one is still the active one.
+    const { rows: activeRows } = await pool.query("SELECT id FROM logic_bundles WHERE active = TRUE");
+    assert.equal(activeRows.length, 1);
+    assert.equal(activeRows[0].id, firstLogicBundleId, "force-publish must not touch logic_bundles.active");
+    const { rows: forcedRow } = await pool.query("SELECT active, patch_rev FROM logic_bundles WHERE bundle_sha = $1", [
+      result.sha256,
+    ]);
+    assert.equal(forcedRow[0].active, false);
+    assert.equal(forcedRow[0].patch_rev, 9);
+
     // set-as-current re-publishes the same on-disk bytes under the same id —
     // current.json updates, the bundle file itself is untouched (reused).
     await setCurrent("b900002", { dataDir, publicBase: config.publicBase });
-    const current = JSON.parse(fs.readFileSync(path.join(dataDir, "ota", "current.json"), "utf8"));
-    assert.equal(current.buildId, "b900002");
+    const afterSetCurrent = JSON.parse(fs.readFileSync(path.join(dataDir, "ota", "current.json"), "utf8"));
+    assert.equal(afterSetCurrent.buildId, "b900002");
   });
 
   await t.test("ota console: edit label and delete", async () => {

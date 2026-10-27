@@ -284,7 +284,7 @@ export function createServer(pool, config) {
           recentBatches(pool, 5),
         ]);
         const batchDetails = new Map();
-        for (const b of batches) batchDetails.set(b.buildId, await occurrencesForBuild(pool, b.buildId, config.bundlePath));
+        for (const b of batches) batchDetails.set(b.buildId, await occurrencesForBuild(pool, b.buildId));
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         return res.end(renderForecastPage(forecast, jobs, batches, batchDetails));
       }

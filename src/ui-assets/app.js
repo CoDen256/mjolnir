@@ -29,7 +29,7 @@ function deckcardApi(method, sub, body) {
 
 // --- App shell: sessions + tabs --------------------------------------
 
-const VIEWS = ["explorer", "compare", "editor", "patches", "deckcard"];
+const VIEWS = ["explorer", "compare", "editor", "patches", "assemble", "deckcard"];
 
 const app = {
   sessions: [],
@@ -107,6 +107,7 @@ function refreshCurrentView() {
   if (app.currentView === "explorer") loadExplorerModules();
   else if (app.currentView === "editor") loadEditorModules();
   else if (app.currentView === "patches") loadPatchesList();
+  else if (app.currentView === "assemble") loadAssembleView();
   else if (app.currentView === "deckcard") loadDeckCardSidebar();
 }
 
@@ -485,6 +486,114 @@ async function applyPreviewedPatch() {
   const idx = app.sessions.findIndex((s) => s.id === updated.id);
   if (idx !== -1) app.sessions[idx] = updated;
   renderSessionBar();
+}
+
+// --- Assemble (multi-patch selection + "Assemble" action, D-L7) ----------
+//
+// Reuses `patches-list` data (`/api/patches`) and applies them, in the
+// operator's chosen order, against a chosen base folder's own bundle via
+// `POST /api/assemble` — `src/commands/assemble.js`'s one implementation of
+// "locate, apply, in sequence" (never a second one for the UI). Picking is
+// two lists rather than drag-and-drop: click an available patch to select
+// it (appended to the end of the order), click a selected one to remove it,
+// ▲/▼ to reorder — no native drag API needed for an ordered pick of
+// typically a handful of patches.
+
+let assembleSelected = [];
+
+async function loadAssembleView() {
+  patchesCache = await api("GET", "/api/patches");
+  assembleSelected = assembleSelected.filter((name) => patchesCache.some((p) => p.name === name));
+  renderAssemblePickers();
+}
+
+function renderAssemblePickers() {
+  const availableList = el("assemble-available-list");
+  const selectedList = el("assemble-selected-list");
+  availableList.innerHTML = "";
+  selectedList.innerHTML = "";
+
+  const available = patchesCache.filter((p) => !assembleSelected.includes(p.name));
+  availableList.classList.toggle("empty", available.length === 0);
+  for (const p of available) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="assemble-pick-name" title="${p.description || ""}">${p.name}</span>
+      <span class="assemble-pick-actions"><button type="button" class="small" data-add="${p.name}">add →</button></span>`;
+    availableList.appendChild(li);
+  }
+
+  selectedList.classList.toggle("empty", assembleSelected.length === 0);
+  assembleSelected.forEach((name, idx) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="assemble-pick-name">${idx + 1}. ${name}</span>
+      <span class="assemble-pick-actions">
+        <button type="button" class="small" data-up="${name}" ${idx === 0 ? "disabled" : ""}>▲</button>
+        <button type="button" class="small" data-down="${name}" ${idx === assembleSelected.length - 1 ? "disabled" : ""}>▼</button>
+        <button type="button" class="small" data-remove="${name}">remove</button>
+      </span>`;
+    selectedList.appendChild(li);
+  });
+
+  availableList.querySelectorAll("[data-add]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      assembleSelected.push(btn.dataset.add);
+      renderAssemblePickers();
+    })
+  );
+  selectedList.querySelectorAll("[data-remove]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      assembleSelected = assembleSelected.filter((n) => n !== btn.dataset.remove);
+      renderAssemblePickers();
+    })
+  );
+  selectedList.querySelectorAll("[data-up]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const i = assembleSelected.indexOf(btn.dataset.up);
+      if (i > 0) [assembleSelected[i - 1], assembleSelected[i]] = [assembleSelected[i], assembleSelected[i - 1]];
+      renderAssemblePickers();
+    })
+  );
+  selectedList.querySelectorAll("[data-down]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const i = assembleSelected.indexOf(btn.dataset.down);
+      if (i !== -1 && i < assembleSelected.length - 1) {
+        [assembleSelected[i + 1], assembleSelected[i]] = [assembleSelected[i], assembleSelected[i + 1]];
+      }
+      renderAssemblePickers();
+    })
+  );
+}
+
+async function runAssemble() {
+  const errorEl = el("assemble-error");
+  const resultEl = el("assemble-result");
+  errorEl.classList.add("hidden");
+  resultEl.classList.add("hidden");
+
+  const baseFolderPath = el("assemble-base-folder").value.trim();
+  const outputPath = el("assemble-output-path").value.trim();
+  if (!baseFolderPath || !outputPath) {
+    errorEl.textContent = "base folder and output bundle path are both required";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  const patchRevRaw = el("assemble-patch-rev").value.trim();
+
+  try {
+    const result = await api("POST", "/api/assemble", {
+      baseFolderPath,
+      patchNames: assembleSelected,
+      outputPath,
+      companionFile: el("assemble-companion").value.trim() || undefined,
+      buildId: el("assemble-build-id").value.trim() || undefined,
+      patchRev: patchRevRaw ? Number(patchRevRaw) : undefined,
+    });
+    resultEl.innerHTML = `Assembled <code>${result.outputPath}</code> — base_version <strong>${result.baseVersion}</strong>, patch_rev <strong>${result.patchRev ?? "(not baked)"}</strong>, ${result.appliedPatches.length} patch(es) applied.<br>Submit it to hub's OTA console (<code>/mjolnir/ota</code>) when ready, or drag-drop it there by hand.`;
+    resultEl.classList.remove("hidden");
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+  }
 }
 
 // --- Deck/Card editor (relocated, logic unchanged) ------------------------
@@ -1022,6 +1131,8 @@ function init() {
   el("editor-save-patch-btn").addEventListener("click", saveEditorPatch);
 
   el("patches-apply-btn").addEventListener("click", applyPreviewedPatch);
+
+  el("assemble-run-btn").addEventListener("click", runAssemble);
 
   wireLivePreview();
   wireDeckCardSearch();

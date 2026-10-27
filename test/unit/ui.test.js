@@ -795,3 +795,65 @@ test("the deck/card routes 404 for a bundle session without a deck/card module p
     });
   });
 });
+
+// --- Assemble (task 5) ------------------------------------------------
+
+test("POST /api/assemble applies an ordered patch list against a base folder and writes one output bundle", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir, bundlePath }) => {
+    const dir = path.dirname(bundlePath);
+    const baseFolder = path.join(dir, "base-folder");
+    fs.mkdirSync(path.join(baseFolder, "assets"), { recursive: true });
+    fs.copyFileSync(bundlePath, path.join(baseFolder, "assets", "index.android.bundle"));
+    fs.writeFileSync(
+      path.join(baseFolder, "apktool.yml"),
+      "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 1.5.12\n"
+    );
+
+    await api(baseUrl, "POST", "/api/patches", {
+      name: "p1",
+      locator: { contains: PATCH_MARKER },
+      baseline: patchModuleSource(""),
+      modified: patchModuleSource(", added: 3"),
+    });
+
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+    const { status, data } = await api(baseUrl, "POST", "/api/assemble", {
+      baseFolderPath: baseFolder,
+      patchNames: ["p1"],
+      outputPath,
+    });
+    assert.equal(status, 201);
+    assert.equal(data.baseVersion, "1.5.12");
+    assert.deepEqual(data.appliedPatches, ["p1"]);
+
+    const outSource = fs.readFileSync(outputPath, "utf8");
+    assert.match(outSource, /added:\s*3/);
+
+    // The base folder's own bundle must never be touched.
+    const baseSource = fs.readFileSync(path.join(baseFolder, "assets", "index.android.bundle"), "utf8");
+    assert.doesNotMatch(baseSource, /added:\s*3/);
+  });
+});
+
+test("POST /api/assemble rejects an unknown patch name with no output written", async () => {
+  await withPatchSession(async ({ baseUrl, bundlePath }) => {
+    const dir = path.dirname(bundlePath);
+    const baseFolder = path.join(dir, "base-folder-2");
+    fs.mkdirSync(path.join(baseFolder, "assets"), { recursive: true });
+    fs.copyFileSync(bundlePath, path.join(baseFolder, "assets", "index.android.bundle"));
+    fs.writeFileSync(
+      path.join(baseFolder, "apktool.yml"),
+      "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 1.5.12\n"
+    );
+
+    const outputPath = path.join(dir, "out2", "assembled.bundle");
+    const { status, data } = await api(baseUrl, "POST", "/api/assemble", {
+      baseFolderPath: baseFolder,
+      patchNames: ["nope"],
+      outputPath,
+    });
+    assert.equal(status, 400);
+    assert.match(data.error, /no such patch/);
+    assert.equal(fs.existsSync(outputPath), false);
+  });
+});

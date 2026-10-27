@@ -7,8 +7,6 @@ import { migrate } from "../../hub/src/migrate.js";
 import { getPool, closePool } from "../src/db.js";
 import { DECK_ALLOCATION } from "../../hub/src/decks.js";
 import { createServer } from "../src/server.js";
-import { runExplode } from "../../src/commands/explode.js";
-import { buildFixtureBundleSource } from "../../test/fixtures/deckCardFixture.js";
 import { startFakeStabbur } from "./helpers/fakeStabbur.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -18,7 +16,7 @@ describe("builder's HTTP server: forecast, schedule, and run-log pages all rende
   const pool = getPool();
   await migrate();
   await pool.query(
-    "TRUNCATE card_slots, publications, build_jobs, minted_notes, decks, pending_occurrences, occurrence_shipments, job_logs, builder_config CASCADE"
+    "TRUNCATE card_slots, publications, build_jobs, minted_notes, decks, pending_occurrences, occurrence_shipments, job_logs, builder_config, logic_bundles, card_content CASCADE"
   );
   for (const { code, title } of DECK_ALLOCATION) {
     await pool.query("INSERT INTO decks (code, title, category) VALUES ($1, $2, $3)", [code, title, code[0]]);
@@ -27,9 +25,6 @@ describe("builder's HTTP server: forecast, schedule, and run-log pages all rende
   process.env.ALLOW_NO_COMPANION = "1";
   process.env.ALLOW_HTTP = "1";
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mjolnir-builder-server-"));
-  const bundlePath = path.join(tmpDir, "fixture.bundle");
-  fs.writeFileSync(bundlePath, "var __BUNDLE_START_TIME__=1;\n" + buildFixtureBundleSource());
-  runExplode(bundlePath);
   const dataDir = path.join(tmpDir, "data");
 
   const fake = startFakeStabbur({ notes: [] });
@@ -38,7 +33,6 @@ describe("builder's HTTP server: forecast, schedule, and run-log pages all rende
     stabburBaseUrl,
     stabburAuthToken: fake.authToken,
     sourceLang: "no",
-    bundlePath,
     dataDir,
     publicBase: "http://localhost:8080",
   };

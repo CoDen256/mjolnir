@@ -25,6 +25,7 @@ import {
   previewPatch,
   applyPatch,
 } from "../patches.js";
+import { assembleBundle } from "./assemble.js";
 import {
   loadDeckCardModel,
   saveDeckCardModel,
@@ -786,6 +787,31 @@ function createRoutes(sessions, { patchesDir, editorCmd }) {
         const result = await applyPatch({ bundlePath: session.bundlePath, cache: session.cache, patch });
         invalidateSessionAfterWrite(session);
         return { status: 200, body: result };
+      },
+    },
+    // D-L7/task 5.2: the "Assemble" action — applies an ordered list of
+    // stored patches (this server's own `patchesDir`) against a chosen base
+    // APK folder's own bundle, stamps BUILD_ID/base_version/patch_rev via
+    // the companion mechanism, and writes one output bundle. Session-free:
+    // it reads the base folder directly rather than requiring it be opened
+    // as a session first, since it never mutates the base in place.
+    {
+      method: "POST",
+      pattern: /^\/api\/assemble$/,
+      handler: async (match, body) => {
+        const { baseFolderPath, patchNames, outputPath, companionFile, buildId, patchRev } = body || {};
+        if (!baseFolderPath) throw new Error("baseFolderPath is required");
+        if (!outputPath) throw new Error("outputPath is required");
+        const result = await assembleBundle({
+          baseFolderPath,
+          patchNames: patchNames || [],
+          patchesDir,
+          outputPath,
+          companionFile: companionFile || undefined,
+          buildId: buildId || undefined,
+          patchRev: patchRev === undefined || patchRev === null || patchRev === "" ? undefined : Number(patchRev),
+        });
+        return { status: 201, body: result };
       },
     },
   ];
