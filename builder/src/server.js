@@ -5,6 +5,7 @@ import { buildGrammarRuleLookup } from "./stabburClient.js";
 import { getSchedule, setSchedule } from "./schedulerConfig.js";
 import { jobLogLines, makeDbLogger } from "./jobLogs.js";
 import { recentBatches, occurrencesForBuild } from "./batchHistory.js";
+import { getActiveMeta } from "./logicBundle.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
 
@@ -43,7 +44,30 @@ function occurrenceRow(o, { withReason = false } = {}) {
   </tr>`;
 }
 
-function renderForecastPage(forecast, jobs, batches, batchDetails) {
+// D-L4: shows what `builder`'s next publish would actually build onto —
+// the single most important fact this page was missing once `BUNDLE_PATH`
+// stopped being a fixed, always-visible config value. `null` means no
+// `logic_bundles` row has ever been activated: a real publish attempt would
+// fail loudly (`logicBundle.js`'s `loadActive`), so this renders as an
+// explicit warning rather than silently omitting the banner.
+function renderActiveLogicBundleBanner(activeLogicBundle) {
+  if (!activeLogicBundle) {
+    return `<div class="panel panel-pad" style="border-color: var(--err); margin-bottom:16px;">
+      <strong style="color: var(--err);">⚠ No active logic bundle.</strong>
+      Publishing will fail until one is submitted and activated via <a href="/mjolnir/ota">hub's OTA console</a>.
+    </div>`;
+  }
+  return `<div class="panel panel-pad" style="margin-bottom:16px; display:flex; align-items:center; gap:14px;">
+    <span class="pill pill-ok">● publishing onto</span>
+    <span class="mono">base ${escapeHtml(activeLogicBundle.baseVersion)}</span>
+    <span class="mono">logic ${activeLogicBundle.patchRev}</span>
+    ${activeLogicBundle.label ? `<span>${escapeHtml(activeLogicBundle.label)}</span>` : ""}
+    <span class="mono" style="color: var(--text-faint);">sha256 ${escapeHtml(activeLogicBundle.bundleSha.slice(0, 8))}…</span>
+    <a href="/mjolnir/ota" class="btn-ghost" style="margin-left:auto;">change →</a>
+  </div>`;
+}
+
+function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle) {
   const totalEligible = forecast.byDeck.reduce((n, d) => n + d.newlyEligibleCount, 0);
   const affectedDecks = forecast.byDeck.filter((d) => d.newlyEligibleCount > 0);
   const totalQueueDepth = forecast.byDeck.reduce((n, d) => n + d.pendingQueueDepth, 0);
@@ -100,6 +124,8 @@ function renderForecastPage(forecast, jobs, batches, batchDetails) {
   <div><h2>Forecast &amp; publish</h2><div class="page-sub">What would ship if you published right now — no floor, every eligible note mints.</div></div>
   <button class="btn-primary" id="publish-now">Publish now</button>
 </div>
+
+${renderActiveLogicBundleBanner(activeLogicBundle)}
 
 <div class="stat-row">
   <div class="stat"><div class="label">Eligible notes</div><div class="value">${totalEligible}</div><div class="sub">across ${affectedDecks.length} deck${affectedDecks.length === 1 ? "" : "s"}</div></div>
@@ -278,15 +304,16 @@ export function createServer(pool, config) {
         req.method === "GET" &&
         (url.pathname === "/builder" || url.pathname === "/builder/" || url.pathname === "/builder/ui")
       ) {
-        const [forecast, jobs, batches] = await Promise.all([
+        const [forecast, jobs, batches, activeLogicBundle] = await Promise.all([
           runForecast(pool, config),
           recentBuildJobs(pool),
           recentBatches(pool, 5),
+          getActiveMeta(pool),
         ]);
         const batchDetails = new Map();
         for (const b of batches) batchDetails.set(b.buildId, await occurrencesForBuild(pool, b.buildId));
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderForecastPage(forecast, jobs, batches, batchDetails));
+        return res.end(renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle));
       }
       // Task 4.15: triggers 4.2-4.12 immediately, independent of the
       // schedule — a no-op if nothing is newly eligible (runPublish handles it).

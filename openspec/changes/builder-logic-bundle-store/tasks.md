@@ -164,3 +164,39 @@ into a real publish yet).
       Recorded as D107 (`logic_bundles.file_path` is content-addressed by
       sha256, not `<id>.js`) and D108 (`patch_rev` is caller-supplied at
       assembly time — `bundle-tool` has no database access of its own).
+
+## 7. Follow-up enhancements (post-implementation, operator-requested)
+
+- [x] 7.1 `bundle-session-management` spec (MODIFIED): the workbench app is
+      now also reachable embedded inside hub, at `/mjolnir/workbench`, gated
+      by the same operator-auth check as every other hub page — no local
+      `bundle-tool ui`/npx invocation required for a deployed instance.
+      `src/commands/ui.js`'s `createServer` was factored into a reusable
+      `createRequestHandler` (standalone CLI use unchanged) that
+      `hub/src/server.js` mounts directly; `app.js`'s `fetch()` calls and
+      `index.html`'s asset links were made prefix-relative so the same
+      static bundle works at any mount point. Nav link added
+      ("Tools → Bundle workbench").
+- [x] 7.2 `builder`'s forecast page (`/builder`) now shows a banner naming
+      the currently active `logic_bundles` row (base_version/patch_rev/
+      label/sha256 prefix) the next publish would build onto, or an explicit
+      warning when none is active yet — `builder/src/logicBundle.js` gained
+      `getActiveMeta(pool)` (metadata-only, no file read, returns `null`
+      instead of throwing) for this display.
+- [x] 7.3 hub's publish-history page (`/mjolnir`) gained "download" (streams
+      that build's exact published bytes via a new
+      `GET /mjolnir/ota/download/:buildId` route) and "inspect" (opens that
+      exact file in the embedded bundle workbench via `?open=<path>`, new
+      tab) actions per row.
+- [x] 7.4 `builder/src/projector.js`'s word-card content, requested
+      directly (not independently derived from a spec): translations are one
+      per line with the lang code highlighted `<b class="bold teal">` —
+      reusing the stock bundle's own existing emphasis classes (confirmed by
+      inspecting real stock card B12002), not an invented style. Per-POS
+      inflection layout with no field-name labels, matching how the stock
+      bundle already renders these (confirmed against real stock card
+      B04181's verb layout): substantiv → `article sg_indef / sg_def /
+      pl_def / pl_indef`; adjektiv → `positiv / nøytrum flertall /
+      komparativ superlativ`; verb → `infinitiv / presens / preteritum /
+      perfektum`; adverb → `form`. A POS with no defined layout (or empty
+      inflections) falls back to the bare `text`, unchanged from before.

@@ -8,6 +8,7 @@ import { getPool, closePool } from "../src/db.js";
 import { DECK_ALLOCATION } from "../../hub/src/decks.js";
 import { createServer } from "../src/server.js";
 import { startFakeStabbur } from "./helpers/fakeStabbur.js";
+import { seedActiveLogicBundle } from "./helpers/logicBundleFixture.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describe = DATABASE_URL ? test : test.skip;
@@ -48,6 +49,22 @@ describe("builder's HTTP server: forecast, schedule, and run-log pages all rende
     assert.match(html, /Forecast/);
     assert.match(html, /Publish now/);
     assert.match(html, /Past batches/);
+  });
+
+  await t.test("GET /builder warns when no logic bundle is active yet", async () => {
+    const html = await (await fetch(`http://localhost:${port}/builder`)).text();
+    assert.match(html, /No active logic bundle/);
+  });
+
+  await t.test("GET /builder shows the active logic bundle's base_version/patch_rev once one is activated", async () => {
+    const logicBundlePath = path.join(tmpDir, "logic-bundle.js");
+    fs.writeFileSync(logicBundlePath, "var __BUNDLE_START_TIME__=1;\nfixture");
+    await seedActiveLogicBundle(pool, logicBundlePath, { baseVersion: "1.5.12", patchRev: 3 });
+
+    const html = await (await fetch(`http://localhost:${port}/builder`)).text();
+    assert.doesNotMatch(html, /No active logic bundle/);
+    assert.match(html, /base 1\.5\.12/);
+    assert.match(html, /logic 3/);
   });
 
   await t.test("GET /builder/schedule renders with the default daily 02:00 selected", async () => {

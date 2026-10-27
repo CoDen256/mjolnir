@@ -27,7 +27,15 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
   process.env.ALLOW_HTTP = "1";
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mjolnir-hub-"));
   const dataDir = path.join(tmpDir, "data");
-  const config = { dataDir, publicBase: "http://localhost:8080", stabburUiBase: "http://localhost:5056" };
+  // Isolated from the real repo's own `patches/` directory — never let a
+  // test write/read the operator's actual stored patches.
+  const workbenchPatchesDir = path.join(tmpDir, "workbench-patches");
+  const config = {
+    dataDir,
+    publicBase: "http://localhost:8080",
+    stabburUiBase: "http://localhost:5056",
+    workbenchPatchesDir,
+  };
 
   await t.test("seeding decks is idempotent and matches the allocation table", async () => {
     for (const { code, title } of DECK_ALLOCATION) {
@@ -237,6 +245,33 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
     }
   });
 
+  await t.test("bundle-session-management: the workbench is reachable embedded, no local npx invocation needed", async () => {
+    const server = createServer(pool, config);
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+    try {
+      const bare = await fetch(`http://localhost:${port}/mjolnir/workbench`, { redirect: "manual" });
+      assert.equal(bare.status, 302);
+      assert.equal(bare.headers.get("location"), "/mjolnir/workbench/");
+
+      const shell = await fetch(`http://localhost:${port}/mjolnir/workbench/`);
+      assert.equal(shell.status, 200);
+      assert.match(await shell.text(), /bundle-workbench/);
+
+      const asset = await fetch(`http://localhost:${port}/mjolnir/workbench/app.js`);
+      assert.equal(asset.status, 200);
+
+      // The embedded handler's own API, reachable under the mount prefix —
+      // proves req.url rewriting/prefix-stripping actually works, not just
+      // that the static shell loads.
+      const patches = await fetch(`http://localhost:${port}/mjolnir/workbench/api/patches`);
+      assert.equal(patches.status, 200);
+      assert.deepEqual(await patches.json(), []);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   await t.test("D-H6: with an operator token configured, pages require it — via cookie (page loads) or bearer header (API)", async () => {
     const authedServer = createServer(pool, { ...config, operatorAuthToken: "secret123" });
     await new Promise((resolve) => authedServer.listen(0, resolve));
@@ -248,6 +283,16 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
 
       const apiNoAuth = await fetch(`http://localhost:${port}/mjolnir/api/publications`);
       assert.equal(apiNoAuth.status, 401);
+
+      const workbenchNoAuth = await fetch(`http://localhost:${port}/mjolnir/workbench/`, { redirect: "manual" });
+      assert.equal(workbenchNoAuth.status, 302);
+      assert.match(workbenchNoAuth.headers.get("location"), /^\/mjolnir\/login/);
+      const workbenchApiNoAuth = await fetch(`http://localhost:${port}/mjolnir/workbench/api/patches`);
+      assert.equal(workbenchApiNoAuth.status, 401);
+      const workbenchWithHeader = await fetch(`http://localhost:${port}/mjolnir/workbench/api/patches`, {
+        headers: { Authorization: "Bearer secret123" },
+      });
+      assert.equal(workbenchWithHeader.status, 200);
 
       const apiWithHeader = await fetch(`http://localhost:${port}/mjolnir/api/publications`, {
         headers: { Authorization: "Bearer secret123" },

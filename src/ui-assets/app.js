@@ -6,7 +6,12 @@ function stripHtml(html) {
 }
 
 async function api(method, path, body) {
-  const res = await fetch(path, {
+  // Relative, not absolute: lets this same bundle of static assets be
+  // mounted under any prefix (e.g. hub's `/mjolnir/workbench/`, task: "no
+  // npx required") without a basePath threaded through every call site —
+  // the browser resolves "api/..." against wherever this page's own URL
+  // actually is, standalone root ("/") or a mount prefix alike.
+  const res = await fetch(path.replace(/^\//, ""), {
     method,
     headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -86,21 +91,37 @@ function setActiveSession(id) {
   refreshCurrentView();
 }
 
-async function openBundlePath() {
-  const input = el("open-path-input");
+async function openBundleByPath(p) {
   const errorEl = el("open-path-error");
   errorEl.classList.add("hidden");
-  const p = input.value.trim();
   if (!p) return;
   try {
     const session = await api("POST", "/api/sessions", { path: p });
     if (!app.sessions.some((s) => s.id === session.id)) app.sessions.push(session);
-    input.value = "";
     setActiveSession(session.id);
+    return session;
   } catch (err) {
     errorEl.textContent = err.message;
     errorEl.classList.remove("hidden");
   }
+}
+
+async function openBundlePath() {
+  const input = el("open-path-input");
+  const p = input.value.trim();
+  const session = await openBundleByPath(p);
+  if (session) input.value = "";
+}
+
+// `?open=<path>` (hub's publish-history "inspect" link, and the Assemble
+// tab's own result panel) — auto-opens that exact bundle as a session and
+// switches straight to Explorer, instead of the operator having to
+// copy-paste a server-side path by hand.
+async function openFromQueryParam() {
+  const openPath = new URLSearchParams(location.search).get("open");
+  if (!openPath) return;
+  const session = await openBundleByPath(openPath);
+  if (session) showView("explorer");
 }
 
 function refreshCurrentView() {
@@ -1160,6 +1181,7 @@ async function loadExistingSessions() {
   renderSessionBar();
   populateComparePickers();
   refreshCurrentView();
+  await openFromQueryParam();
 }
 
 init();

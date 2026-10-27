@@ -111,6 +111,10 @@ const NAV = [
       { href: "/mjolnir", label: "Publish history" },
     ],
   },
+  {
+    group: "Tools",
+    items: [{ href: "/mjolnir/workbench/", label: "Bundle workbench" }],
+  },
 ];
 
 function renderRail(activeHref) {

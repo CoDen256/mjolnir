@@ -1,4 +1,6 @@
 import http from "node:http";
+import path from "node:path";
+import fs from "node:fs";
 import { listPublications, updateLabel, deleteBuild, readCurrent } from "./publications.js";
 import { verifyBundle, verifyLogicBundleBytes, submitBundle, activateLogicBundle, forcePublish, setCurrent } from "./ota.js";
 import { findBakedBaseVersion, findBakedPatchRev } from "../../tool/src/otaPublish.js";
@@ -7,6 +9,9 @@ import { cardsList, stripHtml } from "./cards.js";
 import { DECK_ALLOCATION } from "./decks.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
+import { createRequestHandler as createWorkbenchHandler } from "../../src/commands/ui.js";
+
+const WORKBENCH_MOUNT = "/mjolnir/workbench";
 
 const MAX_BODY_BYTES = 67108864; // D48 — same ceiling the publish guards enforce anyway
 
@@ -41,10 +46,12 @@ async function readJson(req) {
 
 // ---- Publish history ----
 
-function renderHistoryPage(publications, current) {
+function renderHistoryPage(publications, current, config) {
   const rows = publications
     .map((p) => {
       const isCurrent = current && current.buildId === p.build_id;
+      const bundlePath = path.join(config.dataDir, "ota", "bundle", `${p.build_id}.js`);
+      const inspectHref = `${WORKBENCH_MOUNT}/?open=${encodeURIComponent(bundlePath)}`;
       return `<tr>
         <td>${isCurrent ? '<span class="pill pill-ok">● current</span> ' : ""}<span class="mono">${escapeHtml(p.build_id)}</span></td>
         <td class="wrap">${escapeHtml(p.label || "")}</td>
@@ -55,6 +62,8 @@ function renderHistoryPage(publications, current) {
         <td class="mono">${escapeHtml(p.bundle_sha.slice(0, 4))}…${escapeHtml(p.bundle_sha.slice(-4))}</td>
         <td class="mono">${escapeHtml(new Date(p.created_at).toISOString())}</td>
         <td>
+          <a class="btn-ghost" href="/mjolnir/ota/download/${encodeURIComponent(p.build_id)}">download</a>
+          <a class="btn-ghost" href="${inspectHref}" target="_blank" rel="noopener">inspect →</a>
           <button class="btn-ghost set-current-btn" data-build-id="${escapeHtml(p.build_id)}" ${isCurrent ? "disabled" : ""}>set current</button>
           <button class="btn-ghost edit-label-btn" data-build-id="${escapeHtml(p.build_id)}">edit label</button>
           <button class="btn-ghost btn-danger delete-build-btn" data-build-id="${escapeHtml(p.build_id)}">delete</button>
@@ -76,7 +85,7 @@ function renderHistoryPage(publications, current) {
     </table>
   </div>
 </div>
-<div class="inline-note">"set current" repoints <code>current.json</code> at that build (no shell command). "delete" is blocked while a build shipped any occurrence (D93) or is the live current build.</div>
+<div class="inline-note">"download" streams that build's exact published bytes. "inspect" opens it in the bundle workbench (new tab) to browse its modules/deck/card data. "set current" repoints <code>current.json</code> at that build (no shell command). "delete" is blocked while a build shipped any occurrence (D93) or is the live current build.</div>
 <script>
 document.querySelectorAll('.set-current-btn').forEach((btn) => {
   btn.addEventListener('click', async () => {
@@ -431,9 +440,41 @@ forcePublishBtn.addEventListener('click', async () => {
 }
 
 export function createServer(pool, config) {
+  // bundle-session-management: reachable embedded here, with no local
+  // `bundle-tool ui`/npx invocation required for a deployed instance.
+  // Instantiated once (not per-request) — its session store is an
+  // in-memory Map that must survive across requests. `patchesDir` is the
+  // same `patches/` directory the standalone CLI and `bundle-tool assemble`
+  // already read/write, so a logic bundle assembled here is immediately
+  // visible to the CLI and vice versa.
+  const workbenchHandler = createWorkbenchHandler({ patchesDir: config.workbenchPatchesDir || "patches" });
+
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, "http://localhost");
+
+      // Mounted before the operator-auth gate below would otherwise apply
+      // per-route — checked explicitly here instead, since the workbench's
+      // own routes/static assets live under one prefix rather than hub's
+      // per-page route list. Every path here is already gated the exact
+      // same way every other operator page is: skipped entirely when
+      // `OPERATOR_AUTH_TOKEN` is unset (local/dev), required otherwise.
+      if (url.pathname === WORKBENCH_MOUNT) {
+        // Relative asset/API paths (`app.js`, `api/...`) only resolve
+        // correctly against a trailing-slash URL — redirect once, like any
+        // static-site mount point would.
+        res.writeHead(302, { Location: `${WORKBENCH_MOUNT}/` });
+        return res.end();
+      }
+      if (url.pathname === WORKBENCH_MOUNT + "/" || url.pathname.startsWith(WORKBENCH_MOUNT + "/")) {
+        if (config.operatorAuthToken) {
+          if (!requireAuth(req, res, config.operatorAuthToken, { loginPath: "/mjolnir/login" })) return;
+        }
+        // Strip the mount prefix so the embedded handler sees exactly the
+        // same paths it would standalone (`/`, `/app.js`, `/api/...`).
+        req.url = url.pathname.slice(WORKBENCH_MOUNT.length) + url.search;
+        return workbenchHandler(req, res);
+      }
 
       // D-H6: checked before every route except /mjolnir/login itself.
       // Namespaced under /mjolnir (not a bare /login) because Caddy only
@@ -469,7 +510,28 @@ export function createServer(pool, config) {
       ) {
         const [publications, current] = [await listPublications(), readCurrent(config.dataDir)];
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderHistoryPage(publications, current));
+        return res.end(renderHistoryPage(publications, current, config));
+      }
+      // Streams a historical build's exact published bytes — the operator
+      // asked to be able to inspect/download a publish, not just see its
+      // metadata row. Same file `setCurrent`/`forcePublish` already treat as
+      // the on-disk source of truth; this route only ever reads it.
+      if (req.method === "GET" && url.pathname.startsWith("/mjolnir/ota/download/")) {
+        const buildId = decodeURIComponent(url.pathname.slice("/mjolnir/ota/download/".length));
+        const bundlePath = path.join(config.dataDir, "ota", "bundle", `${buildId}.js`);
+        let bytes;
+        try {
+          bytes = fs.readFileSync(bundlePath);
+        } catch {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          return res.end(`no bundle on disk for "${buildId}"`);
+        }
+        res.writeHead(200, {
+          "Content-Type": "application/javascript; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${buildId}.js"`,
+          "Content-Length": bytes.length,
+        });
+        return res.end(bytes);
       }
 
       if (req.method === "GET" && url.pathname === "/mjolnir/cards") {

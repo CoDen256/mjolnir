@@ -835,11 +835,20 @@ function dispatchDeckCard(session, subPath, req, res, url, body) {
   sendJson(res, status, resBody);
 }
 
-export function createServer({ patchesDir = DEFAULT_PATCHES_DIR, editorCmd = DEFAULT_EDITOR_CMD } = {}) {
+// The actual request-handling logic, factored out from `http.createServer`
+// so it can be mounted inside another service's own HTTP server (hub's
+// `/mjolnir/workbench/*`, bundle-session-management's "reachable with no
+// local invocation" requirement) as well as run standalone. Every internal
+// path here (`/api/...`, `/`, `/app.js`, `/styles.css`) is relative to
+// wherever this handler is itself mounted — a caller mounting it under a
+// prefix is responsible for stripping that prefix off `req.url` first (see
+// `hub/src/server.js`'s mount point), exactly the contract `app.js`'s own
+// relative `fetch()` calls and `index.html`'s relative asset links assume.
+export function createRequestHandler({ patchesDir = DEFAULT_PATCHES_DIR, editorCmd = DEFAULT_EDITOR_CMD } = {}) {
   const sessions = createSessionStore();
   const routes = createRoutes(sessions, { patchesDir, editorCmd });
 
-  return http.createServer(async (req, res) => {
+  return async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
 
     if (!url.pathname.startsWith("/api/")) {
@@ -877,7 +886,11 @@ export function createServer({ patchesDir = DEFAULT_PATCHES_DIR, editorCmd = DEF
     } catch (err) {
       sendError(res, 400, err.message);
     }
-  });
+  };
+}
+
+export function createServer(opts = {}) {
+  return http.createServer(createRequestHandler(opts));
 }
 
 export function runUi({ port = 0, patchesDir = DEFAULT_PATCHES_DIR, editorCmd = DEFAULT_EDITOR_CMD } = {}) {
