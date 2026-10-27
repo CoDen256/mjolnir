@@ -1,6 +1,6 @@
 import { loadDeckCardModel, saveDeckCardModel, addOccurrence } from "../../src/deckData.js";
 import { createCard, upsertCardContent, ensureDeck } from "../../src/injectDeck.js";
-import { publish } from "../../tool/src/otaPublish.js";
+import { publish, restampCompanionBuildId } from "../../tool/src/otaPublish.js";
 import { pullNotes, filterAudioEligible } from "./stabburClient.js";
 import { partitionByDeck } from "./eligibility.js";
 import { project } from "./projector.js";
@@ -283,6 +283,12 @@ export async function runPublish(
     }
 
     saveDeckCardModel(bundlePath, model);
+
+    // The working bundle's boot-ok companion bakes a BUILD_ID that never
+    // moves on its own — re-stamp it to this run's buildId on every publish,
+    // not just the first, or publish()'s own checkCompanionMatch refuses
+    // every run after the one where it happened to already match.
+    restampCompanionBuildId(bundlePath, buildId);
 
     const cardAudio = await allCardAudio(pool);
     const finalCardAudio = await ensureBlobsPresent(cardAudio, { stabburBaseUrl, dataDir, selMsByCardId });

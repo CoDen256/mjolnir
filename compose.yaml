@@ -71,7 +71,14 @@ services:
       - postgres_data:/var/lib/postgresql/data
     # Deliberately NOT published to the host: only sibling containers reach it.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mjolnir"]
+      # -d postgres is required: pg_isready with no -d defaults to a database
+      # named after -U's value ("mjolnir"), which doesn't exist — POSTGRES_DB
+      # above is "postgres". Harmless to the healthcheck's pass/fail result
+      # (pg_isready still reports the server as accepting connections even
+      # when the probed database doesn't exist) but spams
+      # `FATAL: database "mjolnir" does not exist` into the logs forever,
+      # every 10s, drowning out real problems.
+      test: ["CMD-SHELL", "pg_isready -U mjolnir -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -10,6 +10,7 @@ import {
   checkCompanionMatch,
   checkReuse,
   publish,
+  restampCompanionBuildId,
 } from "../../tool/src/otaPublish.js";
 
 const MAGIC = "var __BUNDLE_START_TIME__=";
@@ -47,6 +48,34 @@ test("checkCompanionMatch refuses a baked BUILD_ID that differs from the publish
   const bytes = bundleBytes({ buildId: "b1" });
   assert.equal(checkCompanionMatch(bytes, "b1"), "b1");
   assert.throws(() => checkCompanionMatch(bytes, "b2"));
+});
+
+test("restampCompanionBuildId updates the baked id so a second publish doesn't refuse itself", () => {
+  withTmpDir((dir) => {
+    const file = path.join(dir, "bundle.js");
+    fs.writeFileSync(file, bundleBytes({ buildId: "b000001" }));
+
+    // Second publish, same working file: without the restamp, this would
+    // refuse forever (the exact bug this test guards against).
+    const result = restampCompanionBuildId(file, "b000002");
+    assert.equal(result, "b000002");
+
+    const updated = fs.readFileSync(file);
+    assert.equal(checkCompanionMatch(updated, "b000002"), "b000002");
+    assert.throws(() => checkCompanionMatch(updated, "b000001"));
+  });
+});
+
+test("restampCompanionBuildId is a no-op when already correct or when there's no companion", () => {
+  withTmpDir((dir) => {
+    const matching = path.join(dir, "matching.js");
+    fs.writeFileSync(matching, bundleBytes({ buildId: "b1" }));
+    assert.equal(restampCompanionBuildId(matching, "b1"), "b1");
+
+    const noCompanion = path.join(dir, "none.js");
+    fs.writeFileSync(noCompanion, bundleBytes({ withCompanion: false }));
+    assert.equal(restampCompanionBuildId(noCompanion, "b1"), null);
+  });
 });
 
 test("checkCompanionMatch refuses a missing companion unless allowNoCompanion", () => {

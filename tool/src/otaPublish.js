@@ -55,6 +55,30 @@ export function checkCompanionMatch(bytes, buildId, { allowNoCompanion = false }
   return null;
 }
 
+// `builder` keeps ONE persistent working bundle on disk and mutates it in
+// place forever, snapshotting it into a new immutable `data/ota/bundle/
+// <buildId>.js` on every publish (the correct append-only design — no need
+// to re-derive from "the latest OTA build" each run, since this file already
+// *is* the accumulated state). But the boot-ok companion's baked
+// `BUILD_ID` literal is plain appended text, not something `deckData.js`'s
+// save path touches — nothing was re-stamping it, so it stayed frozen at
+// whatever id the file was first seeded with. `checkCompanionMatch` only
+// ever validated that mismatch and refused; it never had a way to fix it.
+// Call this on the working file, after the deck/card save and before
+// `publish()`, on every single run — not just the first.
+export function restampCompanionBuildId(bundlePath, newBuildId) {
+  const text = fs.readFileSync(bundlePath, "utf8");
+  const baked = findBakedBuildId(Buffer.from(text, "utf8"));
+  if (baked == null) return null; // no companion — nothing to restamp (allowNoCompanion path)
+  if (baked === newBuildId) return baked; // already correct (e.g. the very first publish)
+  const restamped = text.replace(
+    `BUILD_ID = '${baked}'`,
+    `BUILD_ID = '${newBuildId}'`
+  );
+  fs.writeFileSync(bundlePath, restamped, "utf8");
+  return newBuildId;
+}
+
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
