@@ -14,6 +14,7 @@ import {
 import { previousVersions, writePublication } from "./publications.js";
 import { create as createLogicBundle, activate } from "./logicBundles.js";
 import { query } from "./db.js";
+import { slugify } from "./slug.js";
 
 // D-H5/task 6.1: verification reuses exactly the guards `ota-publish.sh`/
 // `builder` already enforce — no second implementation. Returns a list of
@@ -70,13 +71,26 @@ export function verifyLogicBundleBytes(bytes) {
   return { ok: checks.every((c) => c.ok), checks };
 }
 
-function writeLogicBundleFile(dataDir, logicBundleDir, bytes, bundleSha) {
+// D110: the filename itself is now human-readable (`<baseVersion>-patch
+// <patchRev>[-<label-slug>]-<sha-prefix>.js`) instead of the bare sha256 —
+// an operator browsing `data/logic/` or the workbench's file-path input
+// could not tell one file from another before this. Still effectively
+// content-addressed where it matters: the sha256 prefix in the filename
+// keeps it unique and keeps a byte-identical resubmission a no-op write
+// (same bytes -> same sha prefix -> same filename), not a collision risk —
+// `baseVersion`/`patchRev`/`label` are cosmetic parts of the name only, the
+// database row (keyed by its own id) remains the actual source of truth for
+// which file is active.
+function writeLogicBundleFile(dataDir, logicBundleDir, bytes, bundleSha, { baseVersion, patchRev, label } = {}) {
   const dir = logicBundleDir || path.join(dataDir, "logic");
   fs.mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, `${bundleSha}.js`);
-  // Content-addressed, not identity-addressed the way a buildId's bundle
-  // file is (D-L1: "immutable once written") — identical bytes under the
-  // same sha is simply a no-op write, never an error.
+  const parts = [slugify(baseVersion) || "base", `patch${patchRev ?? 0}`];
+  if (label) parts.push(slugify(label));
+  parts.push(bundleSha.slice(0, 10));
+  const filePath = path.join(dir, `${parts.join("-")}.js`);
+  // Content-addressed in practice, not identity-addressed the way a
+  // buildId's bundle file is (D-L1: "immutable once written") — identical
+  // bytes under the same sha prefix is simply a no-op write, never an error.
   if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, bytes);
   return filePath;
 }
@@ -109,7 +123,11 @@ export async function submitBundle(bytes, { label, baseVersion, patchRev, dataDi
   }
 
   const bundleSha = crypto.createHash("sha256").update(bytes).digest("hex");
-  const filePath = writeLogicBundleFile(dataDir, logicBundleDir, bytes, bundleSha);
+  const filePath = writeLogicBundleFile(dataDir, logicBundleDir, bytes, bundleSha, {
+    baseVersion: resolvedBaseVersion,
+    patchRev: resolvedPatchRev,
+    label,
+  });
 
   return createLogicBundle({
     baseVersion: resolvedBaseVersion,
@@ -145,13 +163,18 @@ export async function forcePublish(bytes, buildId, label, { dataDir, logicBundle
     const patchRev = findBakedPatchRev(bytes) ?? 0;
     await writePublication({ buildId, baseVersion, patchRev, dataRev, bundleSha: result.sha256, label });
 
-    const filePath = writeLogicBundleFile(dataDir, logicBundleDir, bytes, result.sha256);
+    const forceLabel = `force-publish: ${label || buildId}`;
+    const filePath = writeLogicBundleFile(dataDir, logicBundleDir, bytes, result.sha256, {
+      baseVersion,
+      patchRev,
+      label: forceLabel,
+    });
     await createLogicBundle({
       baseVersion,
       patchRev,
       filePath,
       bundleSha: result.sha256,
-      label: `force-publish: ${label || buildId}`,
+      label: forceLabel,
     });
 
     return result;

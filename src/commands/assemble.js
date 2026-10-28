@@ -22,12 +22,24 @@ export const BASE_BUNDLE_RELATIVE_PATH = path.join("assets", "index.android.bund
 // bundle's own bytes, D-L7); `patch_rev` is the caller's responsibility to
 // supply (builder-logic-bundle-store's single global counter lives in hub's
 // `logic_bundles` table — this module has no database access of its own).
+// D110: a bundle's two kinds of "patch" are genuinely different operations,
+// not degrees of the same thing — `patchNames` (via `src/patches.js`) each
+// REPLACE an existing module's factory body in place (patchback's
+// locate-by-content + diff-and-splice algorithm); `companionFiles` each
+// APPEND brand-new top-level code after the bundle's entry call, touching
+// zero existing module bytes (`src/commands/companion.js`'s mechanism —
+// what `boot-ok-companion.js`/`config-rotate.js`/`ota-debug-report.js` all
+// are, per `patches/README.md`). Assembly applies every replace-patch first,
+// in the given order, then appends every companion, in the given order —
+// companions are independent of each other and of patch order (each is its
+// own sentinel-guarded append), so only patch-vs-patch order matters, not
+// patch-vs-companion order.
 export async function assembleBundle({
   baseFolderPath,
   patchNames,
   patchesDir,
   outputPath,
-  companionFile,
+  companionFiles,
   buildId,
   patchRev,
 }) {
@@ -44,6 +56,12 @@ export async function assembleBundle({
   // doesn't even exist on disk must fail before the output path is touched
   // at all, not partway through applying earlier patches.
   const patches = (patchNames || []).map((name) => loadPatch(patchesDir, name));
+  // Same up-front resolution for companions: a missing file must abort
+  // before any write happens, exactly like a missing patch name.
+  const companionSources = (companionFiles || []).map((file) => ({
+    name: path.basename(file).replace(/\.js$/, ""),
+    source: fs.readFileSync(file, "utf8"),
+  }));
 
   const outDir = path.dirname(outputPath);
   if (outDir && outDir !== ".") fs.mkdirSync(outDir, { recursive: true });
@@ -60,11 +78,9 @@ export async function assembleBundle({
       await applyPatch({ bundlePath: outputPath, cache, patch });
     }
 
-    if (companionFile) {
+    for (const { name, source } of companionSources) {
       const bundle = fs.readFileSync(outputPath);
-      const companionSource = fs.readFileSync(companionFile, "utf8");
-      const name = path.basename(companionFile).replace(/\.js$/, "");
-      const out = appendCompanion(bundle, companionSource, { buildId, baseVersion, patchRev, name });
+      const out = appendCompanion(bundle, source, { buildId, baseVersion, patchRev, name });
       fs.writeFileSync(outputPath, out);
     }
   } catch (err) {
@@ -74,5 +90,11 @@ export async function assembleBundle({
     throw err;
   }
 
-  return { outputPath, baseVersion, patchRev, appliedPatches: patchNames || [] };
+  return {
+    outputPath,
+    baseVersion,
+    patchRev,
+    appliedPatches: patchNames || [],
+    appliedCompanions: companionSources.map((c) => c.name),
+  };
 }

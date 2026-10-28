@@ -115,26 +115,28 @@ program
   .description(
     "Apply one or more stored patches (in order) against a base APK folder's own bundle, stamp base_version/patch_rev/buildId, write one output bundle. Never touches the base folder."
   )
-  .option("--patches <names>", "comma-separated, ordered patch names to apply (src/patches.js store)", "")
+  .option("--patches <names>", "comma-separated, ordered REPLACE patch names to apply (src/patches.js store — modifies an existing module's factory body in place)", "")
   .option("--patches-dir <dir>", "directory to read patch files from, relative to CWD", "patches")
-  .option("--companion <file>", "companion file to append (e.g. patches/js/boot-ok-companion.js)")
-  .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if the companion uses it)")
+  .option("--companions <files>", "comma-separated, ordered companion files to APPEND (e.g. patches/js/boot-ok-companion.js,patches/js/config-rotate.js — new top-level code, touches zero existing module bytes)", "")
+  .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if any companion uses it)")
   .option("--patch-rev <n>", "patch_rev to bake in — the operator's responsibility to supply (D-L2's global counter lives in hub's logic_bundles table)")
   .action(async (baseFolder, outputBundle, opts) => {
     const patchNames = opts.patches ? opts.patches.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    const companionFiles = opts.companions ? opts.companions.split(",").map((s) => s.trim()).filter(Boolean) : [];
     const result = await assembleBundle({
       baseFolderPath: baseFolder,
       patchNames,
       patchesDir: opts.patchesDir,
       outputPath: outputBundle,
-      companionFile: opts.companion,
+      companionFiles,
       buildId: opts.buildId,
       patchRev: opts.patchRev !== undefined ? Number(opts.patchRev) : undefined,
     });
     console.log(`assembled ${outputBundle}`);
     console.log(`  base_version  ${result.baseVersion}`);
     console.log(`  patch_rev     ${result.patchRev ?? "(not baked — no --patch-rev given)"}`);
-    console.log(`  patches       ${result.appliedPatches.join(", ") || "(none)"}`);
+    console.log(`  patches (replace)    ${result.appliedPatches.join(", ") || "(none)"}`);
+    console.log(`  companions (append)  ${result.appliedCompanions.join(", ") || "(none)"}`);
   });
 
 program

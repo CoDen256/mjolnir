@@ -27,6 +27,7 @@ import {
   applyPatch,
 } from "../patches.js";
 import { assembleBundle } from "./assemble.js";
+import { listCompanions } from "../companions.js";
 import {
   loadDeckCardModel,
   saveDeckCardModel,
@@ -598,7 +599,7 @@ const DECKCARD_PREFIX_PATTERN = /^\/api\/sessions\/([^/]+)\/deckcard(\/.*)?$/;
 
 // --- Route table ------------------------------------------------------
 
-function createRoutes(sessions, { patchesDir, editorCmd }) {
+function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
   return [
     {
       method: "GET",
@@ -795,6 +796,17 @@ function createRoutes(sessions, { patchesDir, editorCmd }) {
       pattern: /^\/api\/patches-dir$/,
       handler: () => ({ status: 200, body: { patchesDir: path.resolve(patchesDir) } }),
     },
+    // D110: companions (append-only, `bundle-tool companion`) are a
+    // genuinely different kind of "patch" from the JSON-store ones above
+    // (replace-in-place) — listed separately, from `patchesDir/js` (this
+    // repo's own convention, `patches/README.md`), excluding raw
+    // `.baseline.js`/`.edited.js` pair members, which are replace-patch
+    // source material, not standalone scripts.
+    {
+      method: "GET",
+      pattern: /^\/api\/companions$/,
+      handler: () => ({ status: 200, body: { companionsDir: path.resolve(companionsDir), companions: listCompanions(companionsDir) } }),
+    },
     {
       method: "POST",
       pattern: /^\/api\/patches$/,
@@ -843,7 +855,7 @@ function createRoutes(sessions, { patchesDir, editorCmd }) {
       method: "POST",
       pattern: /^\/api\/assemble$/,
       handler: async (match, body) => {
-        const { baseFolderPath, patchNames, outputPath, companionFile, buildId, patchRev } = body || {};
+        const { baseFolderPath, patchNames, outputPath, companionFiles, buildId, patchRev } = body || {};
         if (!baseFolderPath) throw new Error("baseFolderPath is required");
         if (!outputPath) throw new Error("outputPath is required");
         const result = await assembleBundle({
@@ -851,7 +863,7 @@ function createRoutes(sessions, { patchesDir, editorCmd }) {
           patchNames: patchNames || [],
           patchesDir,
           outputPath,
-          companionFile: companionFile || undefined,
+          companionFiles: companionFiles || [],
           buildId: buildId || undefined,
           patchRev: patchRev === undefined || patchRev === null || patchRev === "" ? undefined : Number(patchRev),
         });
@@ -888,9 +900,13 @@ function dispatchDeckCard(session, subPath, req, res, url, body) {
 // prefix is responsible for stripping that prefix off `req.url` first (see
 // `hub/src/server.js`'s mount point), exactly the contract `app.js`'s own
 // relative `fetch()` calls and `index.html`'s relative asset links assume.
-export function createRequestHandler({ patchesDir = DEFAULT_PATCHES_DIR, editorCmd = DEFAULT_EDITOR_CMD } = {}) {
+export function createRequestHandler({ patchesDir = DEFAULT_PATCHES_DIR, companionsDir, editorCmd = DEFAULT_EDITOR_CMD } = {}) {
   const sessions = createSessionStore();
-  const routes = createRoutes(sessions, { patchesDir, editorCmd });
+  // Defaults to `<patchesDir>/js` (this repo's own convention,
+  // `patches/README.md`) rather than a hardcoded literal, so overriding
+  // `patchesDir` (e.g. `WORKBENCH_PATCHES_DIR`) relocates companions too.
+  const resolvedCompanionsDir = companionsDir || path.join(patchesDir, "js");
+  const routes = createRoutes(sessions, { patchesDir, companionsDir: resolvedCompanionsDir, editorCmd });
 
   return async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");

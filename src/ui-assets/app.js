@@ -582,6 +582,7 @@ async function showPatchesDirCaption(elementId) {
 async function loadPatchesList() {
   showPatchesDirCaption("patches-dir-caption");
   patchesCache = await api("GET", "/api/patches");
+  el("patches-empty-note").classList.toggle("hidden", patchesCache.length > 0);
   const list = el("patches-list");
   list.innerHTML = "";
   for (const p of patchesCache) {
@@ -636,69 +637,107 @@ async function applyPreviewedPatch() {
 // typically a handful of patches.
 
 let assembleSelected = [];
+let assembleCompanionsCache = [];
+let assembleCompanionsSelected = [];
+let companionsDefaultApplied = false;
 
 async function loadAssembleView() {
   showPatchesDirCaption("assemble-patches-dir-caption");
   patchesCache = await api("GET", "/api/patches");
   assembleSelected = assembleSelected.filter((name) => patchesCache.some((p) => p.name === name));
+
+  const { companionsDir, companions } = await api("GET", "/api/companions");
+  el("assemble-companions-dir-caption").textContent = `Reading companions from: ${companionsDir}`;
+  assembleCompanionsCache = companions;
+  assembleCompanionsSelected = assembleCompanionsSelected.filter((name) => companions.some((c) => c.name === name));
+  // Pre-select boot-ok-companion the first time this view loads, matching
+  // the old single-field default — every real assembled bundle needs
+  // BUILD_ID baked in, so this saves the obvious, almost-always-wanted
+  // click without forcing it (the operator can still remove it).
+  if (!companionsDefaultApplied) {
+    companionsDefaultApplied = true;
+    if (companions.some((c) => c.name === "boot-ok-companion")) {
+      assembleCompanionsSelected = ["boot-ok-companion"];
+    }
+  }
+
   renderAssemblePickers();
 }
 
-function renderAssemblePickers() {
-  const availableList = el("assemble-available-list");
-  const selectedList = el("assemble-selected-list");
-  availableList.innerHTML = "";
-  selectedList.innerHTML = "";
+// Generic ordered two-list picker (available -> selected, add/remove/▲/▼) —
+// shared between the Patches picker (REPLACE-style) and the Companions
+// picker (APPEND-style, D110) below, since both are "pick some items from a
+// cache, in order" with identical interaction.
+function renderOrderedPicker({ cache, selected, availableListEl, selectedListEl, onChange }) {
+  availableListEl.innerHTML = "";
+  selectedListEl.innerHTML = "";
 
-  const available = patchesCache.filter((p) => !assembleSelected.includes(p.name));
-  availableList.classList.toggle("empty", available.length === 0);
-  for (const p of available) {
+  const available = cache.filter((item) => !selected.includes(item.name));
+  availableListEl.classList.toggle("empty", available.length === 0);
+  for (const item of available) {
     const li = document.createElement("li");
-    li.innerHTML = `<span class="assemble-pick-name" title="${p.description || ""}">${p.name}</span>
-      <span class="assemble-pick-actions"><button type="button" class="small" data-add="${p.name}">add →</button></span>`;
-    availableList.appendChild(li);
+    li.innerHTML = `<span class="assemble-pick-name" title="${item.description || ""}">${item.name}</span>
+      <span class="assemble-pick-actions"><button type="button" class="small" data-add="${item.name}">add →</button></span>`;
+    availableListEl.appendChild(li);
   }
 
-  selectedList.classList.toggle("empty", assembleSelected.length === 0);
-  assembleSelected.forEach((name, idx) => {
+  selectedListEl.classList.toggle("empty", selected.length === 0);
+  selected.forEach((name, idx) => {
     const li = document.createElement("li");
     li.innerHTML = `<span class="assemble-pick-name">${idx + 1}. ${name}</span>
       <span class="assemble-pick-actions">
         <button type="button" class="small" data-up="${name}" ${idx === 0 ? "disabled" : ""}>▲</button>
-        <button type="button" class="small" data-down="${name}" ${idx === assembleSelected.length - 1 ? "disabled" : ""}>▼</button>
+        <button type="button" class="small" data-down="${name}" ${idx === selected.length - 1 ? "disabled" : ""}>▼</button>
         <button type="button" class="small" data-remove="${name}">remove</button>
       </span>`;
-    selectedList.appendChild(li);
+    selectedListEl.appendChild(li);
   });
 
-  availableList.querySelectorAll("[data-add]").forEach((btn) =>
+  availableListEl.querySelectorAll("[data-add]").forEach((btn) =>
+    btn.addEventListener("click", () => onChange([...selected, btn.dataset.add]))
+  );
+  selectedListEl.querySelectorAll("[data-remove]").forEach((btn) =>
+    btn.addEventListener("click", () => onChange(selected.filter((n) => n !== btn.dataset.remove)))
+  );
+  selectedListEl.querySelectorAll("[data-up]").forEach((btn) =>
     btn.addEventListener("click", () => {
-      assembleSelected.push(btn.dataset.add);
-      renderAssemblePickers();
+      const i = selected.indexOf(btn.dataset.up);
+      const next = [...selected];
+      if (i > 0) [next[i - 1], next[i]] = [next[i], next[i - 1]];
+      onChange(next);
     })
   );
-  selectedList.querySelectorAll("[data-remove]").forEach((btn) =>
+  selectedListEl.querySelectorAll("[data-down]").forEach((btn) =>
     btn.addEventListener("click", () => {
-      assembleSelected = assembleSelected.filter((n) => n !== btn.dataset.remove);
-      renderAssemblePickers();
+      const i = selected.indexOf(btn.dataset.down);
+      const next = [...selected];
+      if (i !== -1 && i < next.length - 1) [next[i + 1], next[i]] = [next[i], next[i + 1]];
+      onChange(next);
     })
   );
-  selectedList.querySelectorAll("[data-up]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const i = assembleSelected.indexOf(btn.dataset.up);
-      if (i > 0) [assembleSelected[i - 1], assembleSelected[i]] = [assembleSelected[i], assembleSelected[i - 1]];
+}
+
+function renderAssemblePickers() {
+  renderOrderedPicker({
+    cache: patchesCache,
+    selected: assembleSelected,
+    availableListEl: el("assemble-available-list"),
+    selectedListEl: el("assemble-selected-list"),
+    onChange: (next) => {
+      assembleSelected = next;
       renderAssemblePickers();
-    })
-  );
-  selectedList.querySelectorAll("[data-down]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const i = assembleSelected.indexOf(btn.dataset.down);
-      if (i !== -1 && i < assembleSelected.length - 1) {
-        [assembleSelected[i + 1], assembleSelected[i]] = [assembleSelected[i], assembleSelected[i + 1]];
-      }
+    },
+  });
+  renderOrderedPicker({
+    cache: assembleCompanionsCache,
+    selected: assembleCompanionsSelected,
+    availableListEl: el("assemble-companions-available-list"),
+    selectedListEl: el("assemble-companions-selected-list"),
+    onChange: (next) => {
+      assembleCompanionsSelected = next;
       renderAssemblePickers();
-    })
-  );
+    },
+  });
 }
 
 async function runAssemble() {
@@ -715,17 +754,20 @@ async function runAssemble() {
     return;
   }
   const patchRevRaw = el("assemble-patch-rev").value.trim();
+  const companionFiles = assembleCompanionsSelected
+    .map((name) => assembleCompanionsCache.find((c) => c.name === name)?.path)
+    .filter(Boolean);
 
   try {
     const result = await api("POST", "/api/assemble", {
       baseFolderPath,
       patchNames: assembleSelected,
       outputPath,
-      companionFile: el("assemble-companion").value.trim() || undefined,
+      companionFiles,
       buildId: el("assemble-build-id").value.trim() || undefined,
       patchRev: patchRevRaw ? Number(patchRevRaw) : undefined,
     });
-    resultEl.innerHTML = `Assembled <code>${result.outputPath}</code> — base_version <strong>${result.baseVersion}</strong>, patch_rev <strong>${result.patchRev ?? "(not baked)"}</strong>, ${result.appliedPatches.length} patch(es) applied.<br>Submit it to hub's OTA console (<code>/mjolnir/ota</code>) when ready, or drag-drop it there by hand.`;
+    resultEl.innerHTML = `Assembled <code>${result.outputPath}</code> — base_version <strong>${result.baseVersion}</strong>, patch_rev <strong>${result.patchRev ?? "(not baked)"}</strong>, ${result.appliedPatches.length} patch(es) applied, ${result.appliedCompanions.length} companion(s) appended.<br>Submit it to hub's OTA console (<code>/mjolnir/ota</code>) when ready, or drag-drop it there by hand.`;
     resultEl.classList.remove("hidden");
   } catch (err) {
     errorEl.textContent = err.message;

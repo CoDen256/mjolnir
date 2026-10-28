@@ -242,3 +242,50 @@ than new scope.
       patches-dir` tests (4/4 passing for real, no DB needed). Full main-repo
       suite re-run: 149/150 (one pre-existing, unrelated failure). Full
       `node --check` sweep: clean.
+
+## 9. Second operator feedback round: card-preview borders, readable logic filenames, patches/companions split (D110)
+
+- [x] 9.1 **Card-preview faces get a white, rounded border.**
+      `hub/src/server.js`'s `.card-preview-face` CSS rule gains
+      `border: 2px solid #fff; border-radius: 14px;` (was borderless,
+      `border-radius: 10px`), per direct request.
+- [x] 9.2 **Logic bundle filenames are human-readable, not a bare sha256
+      (supersedes the filename shape introduced by D107 — content-addressing
+      itself is unchanged, only the name).** `hub/src/ota.js`'s
+      `writeLogicBundleFile` now builds `<baseVersion>-patch<patchRev>-
+      <label>-<sha10>.js` (slugified via new `hub/src/slug.js`), sha kept
+      only as a 10-char disambiguating suffix, not the whole name. Both
+      `submitBundle` and `forcePublish` call sites pass through
+      `baseVersion`/`patchRev`/`label`. `hub/test/hub.test.js` asserts the
+      new shape with a regex.
+- [x] 9.3 **REPLACE-style patches vs. APPEND-style companions are now a
+      first-class distinction in bundle-tool itself (D110), not just an
+      undocumented filesystem split.** New `src/companions.js` (`listCompanions`)
+      reads `<patchesDir>/js`, listing standalone `.js` scripts and excluding
+      `.baseline.js`/`.edited.js` pair halves (those belong to the raw
+      patchback mechanism, targeted by module id via the CLI, never
+      companions). `assembleBundle` (`src/commands/assemble.js`) takes
+      `companionFiles` (an ordered array, fail-fast resolved up front same as
+      patches) instead of a single `companionFile`; returns
+      `appliedCompanions` alongside `appliedPatches`. `src/commands/ui.js`
+      gained `GET /api/companions`; `bin/bundle-tool.js`'s `assemble` command
+      takes `--companions <files>` (comma-separated) instead of
+      `--companion <file>`, and prints both `patches (replace)` and
+      `companions (append)` lines. The Assemble tab's UI
+      (`src/ui-assets/index.html`/`app.js`) gained a second ordered
+      available/selected picker, mirroring the existing patches picker,
+      auto-preselecting `boot-ok-companion` the first time it loads (nearly
+      every real assembly needs it) — the old single `assemble-companion`
+      text input is gone. The Patches tab gained an empty-state note
+      (`patches-empty-note`, shown only when the JSON store is genuinely
+      empty) explaining the REPLACE/APPEND split and pointing to the
+      Assemble tab for companions, since an operator seeing an empty list
+      has no other way to discover this distinction exists.
+- [x] 9.4 Tests: `test/unit/companions.test.js` (new, 3/3 — exclusion of
+      pair members, missing-directory, real `patches/js/` fixture);
+      `test/unit/assemble.test.js` extended (multiple companions applied in
+      order, unknown companion file aborts before output is touched);
+      `test/unit/ui.test.js` extended (`GET /api/companions`, multi-companion
+      assemble via the API). Full suite re-run: 154/155 (same one
+      pre-existing, unrelated `mock.module` failure as section 8). Full
+      `node --check` sweep: clean. D110 recorded in `tun/docs/07-decisions.md`.

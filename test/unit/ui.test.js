@@ -925,3 +925,50 @@ test("GET /api/patches-dir reports the resolved absolute patches directory", asy
     assert.ok(path.isAbsolute(data.patchesDir));
   }, { patchesDir: "patches" });
 });
+
+test("GET /api/companions lists companion scripts from <patchesDir>/js, excluding replace-patch pairs", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir }) => {
+    const companionsDir = path.join(patchesDir, "js");
+    fs.mkdirSync(companionsDir, { recursive: true });
+    fs.writeFileSync(path.join(companionsDir, "boot-ok-companion.js"), "// companion\n");
+    fs.writeFileSync(path.join(companionsDir, "2176-x.baseline.js"), "// not a companion\n");
+    fs.writeFileSync(path.join(companionsDir, "2176-x.edited.js"), "// not a companion\n");
+
+    const { status, data } = await api(baseUrl, "GET", "/api/companions");
+    assert.equal(status, 200);
+    assert.deepEqual(data.companions.map((c) => c.name), ["boot-ok-companion"]);
+    assert.ok(path.isAbsolute(data.companionsDir));
+  });
+});
+
+test("POST /api/assemble applies multiple companions in order", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir, bundlePath }) => {
+    const dir = path.dirname(bundlePath);
+    const baseFolder = path.join(dir, "base-folder-3");
+    fs.mkdirSync(path.join(baseFolder, "assets"), { recursive: true });
+    fs.copyFileSync(bundlePath, path.join(baseFolder, "assets", "index.android.bundle"));
+    fs.writeFileSync(
+      path.join(baseFolder, "apktool.yml"),
+      "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 1.5.12\n"
+    );
+
+    const companion1 = path.join(dir, "companion1.js");
+    const companion2 = path.join(dir, "companion2.js");
+    fs.writeFileSync(companion1, "globalThis.__C1__ = 1;\n");
+    fs.writeFileSync(companion2, "globalThis.__C2__ = 2;\n");
+
+    const outputPath = path.join(dir, "out3", "assembled.bundle");
+    const { status, data } = await api(baseUrl, "POST", "/api/assemble", {
+      baseFolderPath: baseFolder,
+      patchNames: [],
+      outputPath,
+      companionFiles: [companion1, companion2],
+    });
+    assert.equal(status, 201);
+    assert.deepEqual(data.appliedCompanions, ["companion1", "companion2"]);
+
+    const outSource = fs.readFileSync(outputPath, "utf8");
+    assert.match(outSource, /__C1__ = 1/);
+    assert.match(outSource, /__C2__ = 2/);
+  });
+});

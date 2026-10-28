@@ -73,7 +73,7 @@ test("assembling from 3 patches against a known base produces one bundle reflect
       patchNames: ["bump-2042", "bump-1186", "patch-824"],
       patchesDir,
       outputPath,
-      companionFile: COMPANION_FILE,
+      companionFiles: [COMPANION_FILE],
       buildId: "b000099",
       patchRev: 7,
     });
@@ -81,6 +81,7 @@ test("assembling from 3 patches against a known base produces one bundle reflect
     assert.equal(result.baseVersion, "1.5.12");
     assert.equal(result.patchRev, 7);
     assert.deepEqual(result.appliedPatches, ["bump-2042", "bump-1186", "patch-824"]);
+    assert.deepEqual(result.appliedCompanions, ["boot-ok-companion"]);
 
     assert.match(moduleSource(outputPath, 2042), /9\.9\.9/);
     assert.match(moduleSource(outputPath, 1186), /99\.0\.0/);
@@ -164,12 +165,57 @@ test("assembling with zero patches still produces a byte-faithful copy stamped w
       patchNames: [],
       patchesDir,
       outputPath,
-      companionFile: COMPANION_FILE,
+      companionFiles: [COMPANION_FILE],
       buildId: "b000001",
       patchRev: 1,
     });
 
     assert.equal(result.baseVersion, "2.0.0");
     assert.match(moduleSource(outputPath, 2042), /2\.3\.0/, "no patches applied — original content untouched");
+  });
+});
+
+test("multiple companions are all applied, in order — independent of patch order (D110)", async () => {
+  await withTmpDir(async (dir) => {
+    const baseFolder = makeBaseFolder(dir, "1.5.12");
+    const patchesDir = path.join(dir, "patches");
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+
+    const secondCompanionPath = path.join(dir, "second-companion.js");
+    fs.writeFileSync(secondCompanionPath, "globalThis.__SECOND_COMPANION__ = true;\n");
+
+    const result = await assembleBundle({
+      baseFolderPath: baseFolder,
+      patchNames: [],
+      patchesDir,
+      outputPath,
+      companionFiles: [COMPANION_FILE, secondCompanionPath],
+      buildId: "b000002",
+      patchRev: 3,
+    });
+
+    assert.deepEqual(result.appliedCompanions, ["boot-ok-companion", "second-companion"]);
+    const outBytes = fs.readFileSync(outputPath, "utf8");
+    assert.match(outBytes, /BUILD_ID = 'b000002'/, "the first companion's placeholders are substituted");
+    assert.match(outBytes, /__SECOND_COMPANION__ = true/, "the second companion's own content is appended too");
+  });
+});
+
+test("an unknown companion file aborts the assembly before the output path is touched", async () => {
+  await withTmpDir(async (dir) => {
+    const baseFolder = makeBaseFolder(dir, "1.5.12");
+    const patchesDir = path.join(dir, "patches");
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+
+    await assert.rejects(() =>
+      assembleBundle({
+        baseFolderPath: baseFolder,
+        patchNames: [],
+        patchesDir,
+        outputPath,
+        companionFiles: [path.join(dir, "no-such-companion.js")],
+      })
+    );
+    assert.equal(fs.existsSync(outputPath), false);
   });
 });

@@ -149,6 +149,10 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
     assert.equal(row.active, false, "submitting alone never activates");
 
     assert.equal(fs.existsSync(path.join(dataDir, "ota", "current.json")), false, "submit must not touch current.json");
+
+    // D110: the on-disk filename is human-readable, not the bare sha256.
+    assert.match(path.basename(row.file_path), /^1\.5\.12-patch1-test-logic-bundle-[0-9a-f]{10}\.js$/);
+    assert.ok(fs.existsSync(row.file_path));
   });
 
   await t.test("ota console: submitting a bundle with no baked constants requires a manual base_version/patch_rev", async () => {

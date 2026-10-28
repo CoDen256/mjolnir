@@ -9,6 +9,7 @@ import { cardsList, stripHtml, getCardSlot } from "./cards.js";
 import { DECK_ALLOCATION } from "./decks.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
+import { slugify } from "./slug.js";
 import { createRequestHandler as createWorkbenchHandler } from "../../src/commands/ui.js";
 // D109: builder's own pages are rendered here directly, in-process — same
 // monorepo, same shared Postgres (D-P3) — instead of the earlier iframe-
@@ -58,16 +59,6 @@ async function readJson(req) {
   return body.length ? JSON.parse(body.toString("utf8")) : {};
 }
 
-// D-C7: a small, local, filesystem-safe slug — lowercase, non-alphanumerics
-// collapsed to a single hyphen, trimmed to a sane length. No dependency
-// needed for something this constrained.
-function slugify(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-}
 
 // ---- Publish history ----
 
@@ -242,7 +233,8 @@ const CARD_PREVIEW_STYLE = `
   color: #fff;
   background: #1B1D21;
   text-align: center;
-  border-radius: 10px;
+  border: 2px solid #fff;
+  border-radius: 14px;
   padding: 18px 16px;
   min-height: 70px;
   display: flex;

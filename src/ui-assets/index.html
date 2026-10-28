@@ -116,9 +116,18 @@
         </div>
       </section>
 
-      <!-- Patches -->
+      <!-- Patches: REPLACE-style only (modifies an existing module's factory
+           body in place) — companions (APPEND-style, new top-level code)
+           are a separate concept, picked in the Assemble tab below (D110). -->
       <section id="view-patches" class="view hidden">
         <div id="patches-dir-caption" class="dir-caption"></div>
+        <div class="empty-state hidden" id="patches-empty-note">
+          No stored patches yet. This list is only the REPLACE-style kind —
+          saved via the Editor tab's "Save as patch," each one modifies an
+          existing module's factory body in place. APPEND-style scripts (new
+          top-level code — boot-ok-companion, config-rotate, etc.) are a
+          different mechanism, picked separately in the Assemble tab.
+        </div>
         <ul id="patches-list" class="patch-list"></ul>
         <div id="patches-preview" class="hidden">
           <h3>Preview</h3>
@@ -142,10 +151,6 @@
                 <input id="assemble-output-path" type="text" placeholder="out/assembled.bundle" />
               </label>
               <label>
-                Companion file <span class="field-hint">appends BUILD_ID/BASE_VERSION/PATCH_REV</span>
-                <input id="assemble-companion" type="text" value="patches/js/boot-ok-companion.js" />
-              </label>
-              <label>
                 Build id <span class="field-hint">cosmetic here — builder restamps it on every real publish</span>
                 <input id="assemble-build-id" type="text" placeholder="b000000" />
               </label>
@@ -156,7 +161,7 @@
             </div>
 
             <div id="assemble-patches-dir-caption" class="dir-caption"></div>
-            <h3>Patches to apply, in order</h3>
+            <h3>Patches to apply, in order <span class="field-hint">REPLACE-style — modifies an existing module in place</span></h3>
             <div class="assemble-picker">
               <div class="assemble-picker-col">
                 <div class="assemble-picker-label">Available</div>
@@ -165,6 +170,19 @@
               <div class="assemble-picker-col">
                 <div class="assemble-picker-label">Selected (apply order)</div>
                 <ol id="assemble-selected-list" class="patch-list assemble-pick-list"></ol>
+              </div>
+            </div>
+
+            <div id="assemble-companions-dir-caption" class="dir-caption"></div>
+            <h3>Companions to append, in order <span class="field-hint">APPEND-style — new top-level code, no existing module touched</span></h3>
+            <div class="assemble-picker">
+              <div class="assemble-picker-col">
+                <div class="assemble-picker-label">Available</div>
+                <ul id="assemble-companions-available-list" class="patch-list assemble-pick-list"></ul>
+              </div>
+              <div class="assemble-picker-col">
+                <div class="assemble-picker-label">Selected (apply order)</div>
+                <ol id="assemble-companions-selected-list" class="patch-list assemble-pick-list"></ol>
               </div>
             </div>
 
