@@ -141,6 +141,27 @@
 	# reverse_proxy /smia/*    smia:8000
 	# reverse_proxy /phonexa/* phonexa:8000
 
+	# ---- /adminer : tun/compose.yaml's shared Adminer (D-T3) -------------
+	# Only reachable this way when deployed via tun's `include:` unification
+	# (D94/D101) — that's the only compose file defining a service literally
+	# named "adminer"; mjolnir's own compose.yaml does not, so this route
+	# simply 502s (same as /stabbur above when stabbur isn't up) under any
+	# other deployment mode. `handle_path` strips the prefix before
+	# forwarding, same reasoning as /stabbur above: Adminer generates its
+	# own links relative to wherever it's mounted and has no equivalent of
+	# stabbur's X-Forwarded-Prefix handling, so it must see itself as
+	# mounted at "/", not "/adminer".
+	#
+	# No auth here, same as today's direct `8082:8080` host port mapping in
+	# tun/compose.yaml (D-H6's OPERATOR_AUTH_TOKEN gates hub/builder, not
+	# this) — this route is a path convenience, not a new exposure. Add a
+	# Caddy `basicauth` block here (or drop the 8082 port mapping) if the
+	# bare port is meant to go away too.
+	redir /adminer /adminer/ 308
+	handle_path /adminer/* {
+		reverse_proxy adminer:8080
+	}
+
 	handle {
 		respond "mjolnir" 404
 	}
