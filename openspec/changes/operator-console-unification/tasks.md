@@ -289,3 +289,54 @@ than new scope.
       assemble via the API). Full suite re-run: 154/155 (same one
       pre-existing, unrelated `mock.module` failure as section 8). Full
       `node --check` sweep: clean. D110 recorded in `tun/docs/07-decisions.md`.
+
+## 10. Third patch-like mechanism: raw patch-back pairs (D111)
+
+D110 (section 9) correctly explained why the Patches tab's JSON store was
+empty, but incorrectly assumed every non-JSON file under `patches/js` was a
+companion — missing that `2176-my-account-build-id.baseline.js`/`.edited.js`
+is a third, real, REPLACE-style mechanism (patch-back pairs, module-id
+addressed) that was still completely invisible to bundle-tool.
+
+- [x] 10.1 New `src/patchbackPairs.js`: `listPatchbackPairs(dir)` finds
+      complete `<id>-name.baseline.js`/`.edited.js` pairs (a lone half is
+      skipped, not an error), parsing the leading module id from the
+      filename; `loadPatchbackPair(dir, name)` throws a clear error for an
+      unknown name or one with no parseable module id.
+- [x] 10.2 `assembleBundle` (`src/commands/assemble.js`) gained
+      `patchbackPairNames`/`patchbackDir` (defaulting to `<patchesDir>/js`,
+      same convention as companions): each pair is resolved up front
+      (fail-fast, same "no partial output on failure" guarantee as patches/
+      companions) and applied via `computePatchedModuleSource` — the exact
+      same reconciliation core `src/patches.js`'s JSON patches use, just
+      located by the pair's own module id instead of a content locator.
+      Returns `appliedPatchbackPairs` alongside `appliedPatches`/
+      `appliedCompanions`.
+- [x] 10.3 `src/commands/ui.js` gained `GET /api/patchback-pairs` (listing)
+      and `POST /api/patchback-pairs/:name/preview`/`/apply` (mirroring the
+      existing JSON-patch preview/apply routes exactly, against an open
+      session). `/api/assemble` passes `patchbackPairNames`/`patchbackDir`
+      through.
+- [x] 10.4 `bin/bundle-tool.js`'s `assemble` command gained
+      `--patchback-pairs <names>` (comma-separated); prints
+      `patch-back pairs (replace)` alongside the existing `patches (replace,
+      JSON)`/`companions (append)` lines.
+- [x] 10.5 UI: the Patches tab (`src/ui-assets/index.html`) now shows two
+      separate lists — "Saved patches" (JSON store) and "Patch-back pairs"
+      (module-id addressed) — sharing one preview/apply panel
+      (`app.js`'s `previewPatchByName(kind, name)` now takes a kind so the
+      same panel can hit either `/api/patches/...` or
+      `/api/patchback-pairs/...`). The Assemble tab gained a third ordered
+      picker ("Patch-back pairs to apply, in order"), reusing the same
+      `renderOrderedPicker` helper as the patches/companions pickers.
+- [x] 10.6 Tests: `test/unit/patchbackPairs.test.js` (new, 5/5 — pair
+      discovery, missing directory, unknown name, no-module-id name, and
+      the real repo's own `2176-my-account-build-id` fixture);
+      `test/unit/assemble.test.js` extended (a synthetic pair applied
+      end-to-end, unknown pair name aborts before output is touched);
+      `test/unit/ui.test.js` extended (list/preview/apply routes, assemble
+      with a pair alongside patches/companions). Full suite re-run: 165/166
+      (same one pre-existing, unrelated `mock.module` failure). Full
+      `node --check` sweep: clean. D111 recorded in
+      `tun/docs/07-decisions.md`; `patches/README.md` updated to describe
+      all three mechanisms.

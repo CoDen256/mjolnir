@@ -589,20 +589,56 @@ async function loadPatchesList() {
     const li = document.createElement("li");
     li.innerHTML = `<strong>${p.name}</strong> — ${p.description || ""} <code>${p.locator.contains}</code>`;
     li.style.cursor = "pointer";
-    li.addEventListener("click", () => previewPatchByName(p.name));
+    li.addEventListener("click", () => previewPatchByName("patch", p.name));
+    list.appendChild(li);
+  }
+
+  await loadPatchbackPairsList();
+}
+
+// D111: raw <module-id>-name.baseline.js/.edited.js pairs under
+// patches/js — a second REPLACE-style patch kind, located by the module id
+// named in the filename rather than a content string. Same preview/apply
+// panel as the JSON-store list above, via `previewPatchByName`'s "pair"
+// kind.
+let patchbackPairsCache = [];
+
+async function loadPatchbackPairsList() {
+  try {
+    const { patchbackDir, pairs } = await api("GET", "/api/patchback-pairs");
+    el("patchback-pairs-dir-caption").textContent = `Reading patch-back pairs from: ${patchbackDir}`;
+    patchbackPairsCache = pairs;
+  } catch {
+    el("patchback-pairs-dir-caption").textContent = "";
+    patchbackPairsCache = [];
+  }
+  el("patchback-pairs-empty-note").classList.toggle("hidden", patchbackPairsCache.length > 0);
+  const list = el("patchback-pairs-list");
+  list.innerHTML = "";
+  for (const p of patchbackPairsCache) {
+    const li = document.createElement("li");
+    li.innerHTML = `<strong>${p.name}</strong> — module <code>${p.moduleId}</code>`;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => previewPatchByName("pair", p.name));
     list.appendChild(li);
   }
 }
 
+let patchesPreviewKind = null; // "patch" | "pair"
 let patchesPreviewName = null;
 
-async function previewPatchByName(name) {
+function previewApiBase(kind) {
+  return kind === "pair" ? "/api/patchback-pairs" : "/api/patches";
+}
+
+async function previewPatchByName(kind, name) {
   if (!app.activeSessionId) {
     alert("Open and select an active session first.");
     return;
   }
+  patchesPreviewKind = kind;
   patchesPreviewName = name;
-  const result = await api("POST", `/api/patches/${encodeURIComponent(name)}/preview`, {
+  const result = await api("POST", `${previewApiBase(kind)}/${encodeURIComponent(name)}/preview`, {
     sessionId: app.activeSessionId,
   });
   el("patches-preview").classList.remove("hidden");
@@ -612,9 +648,11 @@ async function previewPatchByName(name) {
 
 async function applyPreviewedPatch() {
   if (!patchesPreviewName || !app.activeSessionId) return;
-  const result = await api("POST", `/api/patches/${encodeURIComponent(patchesPreviewName)}/apply`, {
-    sessionId: app.activeSessionId,
-  });
+  const result = await api(
+    "POST",
+    `${previewApiBase(patchesPreviewKind)}/${encodeURIComponent(patchesPreviewName)}/apply`,
+    { sessionId: app.activeSessionId }
+  );
   const resultEl = el("patches-apply-result");
   resultEl.textContent = `Applied to module ${result.targetModuleId}`;
   resultEl.classList.remove("hidden");
@@ -637,6 +675,8 @@ async function applyPreviewedPatch() {
 // typically a handful of patches.
 
 let assembleSelected = [];
+let assemblePatchbackPairsCache = [];
+let assemblePatchbackPairsSelected = [];
 let assembleCompanionsCache = [];
 let assembleCompanionsSelected = [];
 let companionsDefaultApplied = false;
@@ -645,6 +685,13 @@ async function loadAssembleView() {
   showPatchesDirCaption("assemble-patches-dir-caption");
   patchesCache = await api("GET", "/api/patches");
   assembleSelected = assembleSelected.filter((name) => patchesCache.some((p) => p.name === name));
+
+  const { patchbackDir, pairs } = await api("GET", "/api/patchback-pairs");
+  el("assemble-patchback-pairs-dir-caption").textContent = `Reading patch-back pairs from: ${patchbackDir}`;
+  assemblePatchbackPairsCache = pairs;
+  assemblePatchbackPairsSelected = assemblePatchbackPairsSelected.filter((name) =>
+    pairs.some((p) => p.name === name)
+  );
 
   const { companionsDir, companions } = await api("GET", "/api/companions");
   el("assemble-companions-dir-caption").textContent = `Reading companions from: ${companionsDir}`;
@@ -729,6 +776,16 @@ function renderAssemblePickers() {
     },
   });
   renderOrderedPicker({
+    cache: assemblePatchbackPairsCache,
+    selected: assemblePatchbackPairsSelected,
+    availableListEl: el("assemble-patchback-pairs-available-list"),
+    selectedListEl: el("assemble-patchback-pairs-selected-list"),
+    onChange: (next) => {
+      assemblePatchbackPairsSelected = next;
+      renderAssemblePickers();
+    },
+  });
+  renderOrderedPicker({
     cache: assembleCompanionsCache,
     selected: assembleCompanionsSelected,
     availableListEl: el("assemble-companions-available-list"),
@@ -762,12 +819,13 @@ async function runAssemble() {
     const result = await api("POST", "/api/assemble", {
       baseFolderPath,
       patchNames: assembleSelected,
+      patchbackPairNames: assemblePatchbackPairsSelected,
       outputPath,
       companionFiles,
       buildId: el("assemble-build-id").value.trim() || undefined,
       patchRev: patchRevRaw ? Number(patchRevRaw) : undefined,
     });
-    resultEl.innerHTML = `Assembled <code>${result.outputPath}</code> — base_version <strong>${result.baseVersion}</strong>, patch_rev <strong>${result.patchRev ?? "(not baked)"}</strong>, ${result.appliedPatches.length} patch(es) applied, ${result.appliedCompanions.length} companion(s) appended.<br>Submit it to hub's OTA console (<code>/mjolnir/ota</code>) when ready, or drag-drop it there by hand.`;
+    resultEl.innerHTML = `Assembled <code>${result.outputPath}</code> — base_version <strong>${result.baseVersion}</strong>, patch_rev <strong>${result.patchRev ?? "(not baked)"}</strong>, ${result.appliedPatches.length} patch(es) applied, ${result.appliedPatchbackPairs.length} patch-back pair(s) applied, ${result.appliedCompanions.length} companion(s) appended.<br>Submit it to hub's OTA console (<code>/mjolnir/ota</code>) when ready, or drag-drop it there by hand.`;
     resultEl.classList.remove("hidden");
   } catch (err) {
     errorEl.textContent = err.message;

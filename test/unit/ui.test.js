@@ -972,3 +972,87 @@ test("POST /api/assemble applies multiple companions in order", async () => {
     assert.match(outSource, /__C2__ = 2/);
   });
 });
+
+// D111: a third real patch kind — raw <id>-name.baseline.js/.edited.js
+// pairs, module-id addressed, same reconciliation algorithm as JSON-store
+// patches (not content-located). Lives alongside companions in the same
+// <patchesDir>/js directory.
+test("GET /api/patchback-pairs lists baseline/edited pairs, excluding standalone companion scripts", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir }) => {
+    const pairsDir = path.join(patchesDir, "js");
+    fs.mkdirSync(pairsDir, { recursive: true });
+    fs.writeFileSync(path.join(pairsDir, "boot-ok-companion.js"), "// companion, not a pair\n");
+    fs.writeFileSync(path.join(pairsDir, "42-bump-version.baseline.js"), "// baseline\n");
+    fs.writeFileSync(path.join(pairsDir, "42-bump-version.edited.js"), "// edited\n");
+
+    const { status, data } = await api(baseUrl, "GET", "/api/patchback-pairs");
+    assert.equal(status, 200);
+    assert.deepEqual(data.pairs.map((p) => p.name), ["42-bump-version"]);
+    assert.equal(data.pairs[0].moduleId, 42);
+    assert.ok(path.isAbsolute(data.patchbackDir));
+  });
+});
+
+test("previewing a patch-back pair shows a diff, located by module id, and never writes to the bundle", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir, bundlePath, sessionId }) => {
+    const pairsDir = path.join(patchesDir, "js");
+    fs.mkdirSync(pairsDir, { recursive: true });
+    fs.writeFileSync(path.join(pairsDir, "42-bump.baseline.js"), patchModuleSource(""));
+    fs.writeFileSync(path.join(pairsDir, "42-bump.edited.js"), patchModuleSource(", added: 3"));
+
+    const before = fs.readFileSync(bundlePath);
+    const { status, data } = await api(baseUrl, "POST", "/api/patchback-pairs/42-bump/preview", { sessionId });
+    assert.equal(status, 200);
+    assert.equal(data.targetModuleId, 42);
+    assert.ok(flattenDiffEntries(data.diff).some((e) => e.kind === "added"));
+    const after = fs.readFileSync(bundlePath);
+    assert.ok(before.equals(after));
+  });
+});
+
+test("applying a patch-back pair locates the target by its filename's module id and writes the change", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir, bundlePath, sessionId }) => {
+    const pairsDir = path.join(patchesDir, "js");
+    fs.mkdirSync(pairsDir, { recursive: true });
+    fs.writeFileSync(path.join(pairsDir, "42-bump.baseline.js"), patchModuleSource(""));
+    fs.writeFileSync(path.join(pairsDir, "42-bump.edited.js"), patchModuleSource(", added: 3"));
+
+    const { status, data } = await api(baseUrl, "POST", "/api/patchback-pairs/42-bump/apply", { sessionId });
+    assert.equal(status, 200);
+    assert.equal(data.targetModuleId, 42);
+
+    const after = fs.readFileSync(bundlePath, "utf8");
+    assert.match(after, /added:3/);
+  });
+});
+
+test("POST /api/assemble applies a patch-back pair alongside JSON patches and companions", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir, bundlePath }) => {
+    const dir = path.dirname(bundlePath);
+    const baseFolder = path.join(dir, "base-folder-4");
+    fs.mkdirSync(path.join(baseFolder, "assets"), { recursive: true });
+    fs.copyFileSync(bundlePath, path.join(baseFolder, "assets", "index.android.bundle"));
+    fs.writeFileSync(
+      path.join(baseFolder, "apktool.yml"),
+      "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 1.5.12\n"
+    );
+
+    const pairsDir = path.join(patchesDir, "js");
+    fs.mkdirSync(pairsDir, { recursive: true });
+    fs.writeFileSync(path.join(pairsDir, "42-bump.baseline.js"), patchModuleSource(""));
+    fs.writeFileSync(path.join(pairsDir, "42-bump.edited.js"), patchModuleSource(", added: 3"));
+
+    const outputPath = path.join(dir, "out4", "assembled.bundle");
+    const { status, data } = await api(baseUrl, "POST", "/api/assemble", {
+      baseFolderPath: baseFolder,
+      patchNames: [],
+      patchbackPairNames: ["42-bump"],
+      outputPath,
+    });
+    assert.equal(status, 201);
+    assert.deepEqual(data.appliedPatchbackPairs, ["42-bump"]);
+
+    const outSource = fs.readFileSync(outputPath, "utf8");
+    assert.match(outSource, /added:3/);
+  });
+});

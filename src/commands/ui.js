@@ -25,9 +25,12 @@ import {
   savePatch,
   previewPatch,
   applyPatch,
+  computePatchedModuleSource,
 } from "../patches.js";
 import { assembleBundle } from "./assemble.js";
 import { listCompanions } from "../companions.js";
+import { listPatchbackPairs, loadPatchbackPair } from "../patchbackPairs.js";
+import { reassembleBundle } from "../reassemble.js";
 import {
   loadDeckCardModel,
   saveDeckCardModel,
@@ -807,6 +810,75 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
       pattern: /^\/api\/companions$/,
       handler: () => ({ status: 200, body: { companionsDir: path.resolve(companionsDir), companions: listCompanions(companionsDir) } }),
     },
+    // D111: raw `<id>-name.baseline.js`/`.edited.js` pairs (also REPLACE-
+    // style, same reconciliation algorithm as the JSON-store patches above,
+    // just module-id addressed instead of content-located) — e.g. this
+    // repo's own `2176-my-account-build-id`. Listed from the same directory
+    // companions live in (`patches/js`), since `listCompanions` already
+    // excludes pair members from its own list.
+    {
+      method: "GET",
+      pattern: /^\/api\/patchback-pairs$/,
+      handler: () => ({
+        status: 200,
+        body: { patchbackDir: path.resolve(companionsDir), pairs: listPatchbackPairs(companionsDir) },
+      }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/patchback-pairs\/([^/]+)\/preview$/,
+      handler: async (match, body, url, res) => {
+        const session = requireSession(sessions, res, body && body.sessionId);
+        if (!session) return null;
+        const pair = loadPatchbackPair(companionsDir, decodeURIComponent(match[1]));
+        if (!session.cache.modules[pair.moduleId]) {
+          throw new Error(`module ${pair.moduleId} not found in this session's bundle`);
+        }
+        const currentSource = readModuleSource(session.bundlePath, session.cache.modules[pair.moduleId]);
+        const patch = {
+          baseline: fs.readFileSync(pair.baselinePath, "utf8"),
+          modified: fs.readFileSync(pair.editedPath, "utf8"),
+        };
+        const newSource = await computePatchedModuleSource({
+          bundlePath: session.bundlePath,
+          cache: session.cache,
+          targetModuleId: pair.moduleId,
+          patch,
+        });
+        const rFactory = extractFactoryBody(parseModuleSource(currentSource)).factory;
+        const mFactory = extractFactoryBody(parseModuleSource(newSource)).factory;
+        const diff = serializeDiffEntries(diffModuleFactories(rFactory, mFactory));
+        return { status: 200, body: { targetModuleId: pair.moduleId, diff } };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/patchback-pairs\/([^/]+)\/apply$/,
+      handler: async (match, body, url, res) => {
+        const session = requireSession(sessions, res, body && body.sessionId);
+        if (!session) return null;
+        const pair = loadPatchbackPair(companionsDir, decodeURIComponent(match[1]));
+        if (!session.cache.modules[pair.moduleId]) {
+          throw new Error(`module ${pair.moduleId} not found in this session's bundle`);
+        }
+        const patch = {
+          baseline: fs.readFileSync(pair.baselinePath, "utf8"),
+          modified: fs.readFileSync(pair.editedPath, "utf8"),
+        };
+        const newSource = await computePatchedModuleSource({
+          bundlePath: session.bundlePath,
+          cache: session.cache,
+          targetModuleId: pair.moduleId,
+          patch,
+        });
+        const outBuffer = reassembleBundle(session.bundlePath, session.cache.modules, [
+          { moduleId: pair.moduleId, newSource },
+        ]);
+        fs.writeFileSync(session.bundlePath, outBuffer);
+        invalidateSessionAfterWrite(session);
+        return { status: 200, body: { targetModuleId: pair.moduleId } };
+      },
+    },
     {
       method: "POST",
       pattern: /^\/api\/patches$/,
@@ -855,13 +927,16 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
       method: "POST",
       pattern: /^\/api\/assemble$/,
       handler: async (match, body) => {
-        const { baseFolderPath, patchNames, outputPath, companionFiles, buildId, patchRev } = body || {};
+        const { baseFolderPath, patchNames, patchbackPairNames, outputPath, companionFiles, buildId, patchRev } =
+          body || {};
         if (!baseFolderPath) throw new Error("baseFolderPath is required");
         if (!outputPath) throw new Error("outputPath is required");
         const result = await assembleBundle({
           baseFolderPath,
           patchNames: patchNames || [],
           patchesDir,
+          patchbackPairNames: patchbackPairNames || [],
+          patchbackDir: companionsDir,
           outputPath,
           companionFiles: companionFiles || [],
           buildId: buildId || undefined,

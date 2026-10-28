@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadIndex } from "../parseBundle.js";
-import { loadPatch, applyPatch } from "../patches.js";
+import { loadPatch, applyPatch, computePatchedModuleSource } from "../patches.js";
+import { loadPatchbackPair } from "../patchbackPairs.js";
+import { reassembleBundle } from "../reassemble.js";
 import { readBaseVersion } from "../apktoolYml.js";
 import { appendCompanion } from "./companion.js";
 
@@ -22,22 +24,29 @@ export const BASE_BUNDLE_RELATIVE_PATH = path.join("assets", "index.android.bund
 // bundle's own bytes, D-L7); `patch_rev` is the caller's responsibility to
 // supply (builder-logic-bundle-store's single global counter lives in hub's
 // `logic_bundles` table — this module has no database access of its own).
-// D110: a bundle's two kinds of "patch" are genuinely different operations,
-// not degrees of the same thing — `patchNames` (via `src/patches.js`) each
-// REPLACE an existing module's factory body in place (patchback's
-// locate-by-content + diff-and-splice algorithm); `companionFiles` each
+// D110/D111: a bundle's patch-like inputs are three genuinely different
+// operations, not degrees of the same thing. `patchNames` (via
+// `src/patches.js`, JSON-store) and `patchbackPairNames` (via
+// `src/patchbackPairs.js`, raw `<id>-name.baseline.js`/`.edited.js` file
+// pairs) both REPLACE an existing module's factory body in place, using the
+// identical reconciliation algorithm (`computePatchedModuleSource`) — they
+// differ only in how the target module is found (content locator vs. a
+// module id named in the pair's own filename) and in storage shape (one
+// JSON file with metadata vs. two plain source files). `companionFiles`
 // APPEND brand-new top-level code after the bundle's entry call, touching
 // zero existing module bytes (`src/commands/companion.js`'s mechanism —
 // what `boot-ok-companion.js`/`config-rotate.js`/`ota-debug-report.js` all
-// are, per `patches/README.md`). Assembly applies every replace-patch first,
-// in the given order, then appends every companion, in the given order —
-// companions are independent of each other and of patch order (each is its
-// own sentinel-guarded append), so only patch-vs-patch order matters, not
-// patch-vs-companion order.
+// are, per `patches/README.md`). Assembly applies every JSON-store patch,
+// then every patch-back pair, then appends every companion — all three in
+// their own given order; only replace-vs-replace order can matter (two
+// patches touching the same module), so patches and pairs are applied in
+// argument order with no interleaving between the two lists.
 export async function assembleBundle({
   baseFolderPath,
   patchNames,
   patchesDir,
+  patchbackPairNames,
+  patchbackDir,
   outputPath,
   companionFiles,
   buildId,
@@ -56,6 +65,11 @@ export async function assembleBundle({
   // doesn't even exist on disk must fail before the output path is touched
   // at all, not partway through applying earlier patches.
   const patches = (patchNames || []).map((name) => loadPatch(patchesDir, name));
+  // Same up-front resolution for patch-back pairs: an unknown name, or one
+  // whose filename carries no leading module id, must abort before any
+  // write happens too.
+  const resolvedPatchbackDir = patchbackDir || (patchesDir ? path.join(patchesDir, "js") : undefined);
+  const patchbackPairs = (patchbackPairNames || []).map((name) => loadPatchbackPair(resolvedPatchbackDir, name));
   // Same up-front resolution for companions: a missing file must abort
   // before any write happens, exactly like a missing patch name.
   const companionSources = (companionFiles || []).map((file) => ({
@@ -78,6 +92,25 @@ export async function assembleBundle({
       await applyPatch({ bundlePath: outputPath, cache, patch });
     }
 
+    for (const pair of patchbackPairs) {
+      const cache = loadIndex(outputPath);
+      if (!cache.modules[pair.moduleId]) {
+        throw new Error(`patch-back pair "${pair.name}": module ${pair.moduleId} not found in this bundle`);
+      }
+      const patch = {
+        baseline: fs.readFileSync(pair.baselinePath, "utf8"),
+        modified: fs.readFileSync(pair.editedPath, "utf8"),
+      };
+      const newSource = await computePatchedModuleSource({
+        bundlePath: outputPath,
+        cache,
+        targetModuleId: pair.moduleId,
+        patch,
+      });
+      const outBuffer = reassembleBundle(outputPath, cache.modules, [{ moduleId: pair.moduleId, newSource }]);
+      fs.writeFileSync(outputPath, outBuffer);
+    }
+
     for (const { name, source } of companionSources) {
       const bundle = fs.readFileSync(outputPath);
       const out = appendCompanion(bundle, source, { buildId, baseVersion, patchRev, name });
@@ -95,6 +128,7 @@ export async function assembleBundle({
     baseVersion,
     patchRev,
     appliedPatches: patchNames || [],
+    appliedPatchbackPairs: patchbackPairs.map((p) => p.name),
     appliedCompanions: companionSources.map((c) => c.name),
   };
 }

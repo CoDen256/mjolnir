@@ -116,19 +116,34 @@
         </div>
       </section>
 
-      <!-- Patches: REPLACE-style only (modifies an existing module's factory
-           body in place) — companions (APPEND-style, new top-level code)
-           are a separate concept, picked in the Assemble tab below (D110). -->
+      <!-- Patches: both REPLACE-style kinds — the JSON store (saved via the
+           Editor tab's "Save as patch", located by a content string) and
+           raw patch-back pairs (<id>-name.baseline.js/.edited.js under
+           patches/js, located by the module id named in the filename).
+           Both modify an existing module's factory body in place, via the
+           same reconciliation algorithm. Companions (APPEND-style, new
+           top-level code) are a separate concept, picked in the Assemble
+           tab below (D110/D111). -->
       <section id="view-patches" class="view hidden">
         <div id="patches-dir-caption" class="dir-caption"></div>
+        <h3>Saved patches <span class="field-hint">JSON store — located by a content string, survives bundle-version changes</span></h3>
         <div class="empty-state hidden" id="patches-empty-note">
-          No stored patches yet. This list is only the REPLACE-style kind —
-          saved via the Editor tab's "Save as patch," each one modifies an
-          existing module's factory body in place. APPEND-style scripts (new
-          top-level code — boot-ok-companion, config-rotate, etc.) are a
-          different mechanism, picked separately in the Assemble tab.
+          No stored patches yet — saved via the Editor tab's "Save as patch."
         </div>
         <ul id="patches-list" class="patch-list"></ul>
+
+        <h3>Patch-back pairs <span class="field-hint">raw baseline/edited file pairs under patches/js — located by the module id named in the filename (D111)</span></h3>
+        <div id="patchback-pairs-dir-caption" class="dir-caption"></div>
+        <div class="empty-state hidden" id="patchback-pairs-empty-note">
+          No patch-back pairs found. These are raw &lt;module-id&gt;-name.baseline.js /
+          .edited.js file pairs (e.g. 2176-my-account-build-id) — not
+          registered anywhere, just discovered by filename convention.
+          APPEND-style scripts (new top-level code — boot-ok-companion,
+          config-rotate, etc.) are a different mechanism entirely, picked
+          separately in the Assemble tab.
+        </div>
+        <ul id="patchback-pairs-list" class="patch-list"></ul>
+
         <div id="patches-preview" class="hidden">
           <h3>Preview</h3>
           <div id="patches-preview-diff" class="diff-view"></div>
@@ -170,6 +185,19 @@
               <div class="assemble-picker-col">
                 <div class="assemble-picker-label">Selected (apply order)</div>
                 <ol id="assemble-selected-list" class="patch-list assemble-pick-list"></ol>
+              </div>
+            </div>
+
+            <div id="assemble-patchback-pairs-dir-caption" class="dir-caption"></div>
+            <h3>Patch-back pairs to apply, in order <span class="field-hint">REPLACE-style — module-id addressed (D111)</span></h3>
+            <div class="assemble-picker">
+              <div class="assemble-picker-col">
+                <div class="assemble-picker-label">Available</div>
+                <ul id="assemble-patchback-pairs-available-list" class="patch-list assemble-pick-list"></ul>
+              </div>
+              <div class="assemble-picker-col">
+                <div class="assemble-picker-label">Selected (apply order)</div>
+                <ol id="assemble-patchback-pairs-selected-list" class="patch-list assemble-pick-list"></ol>
               </div>
             </div>
 

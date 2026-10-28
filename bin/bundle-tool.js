@@ -117,16 +117,21 @@ program
   )
   .option("--patches <names>", "comma-separated, ordered REPLACE patch names to apply (src/patches.js store — modifies an existing module's factory body in place)", "")
   .option("--patches-dir <dir>", "directory to read patch files from, relative to CWD", "patches")
+  .option("--patchback-pairs <names>", "comma-separated, ordered REPLACE patch-back pair names to apply (raw <id>-name.baseline.js/.edited.js files under <patches-dir>/js, e.g. 2176-my-account-build-id — D111)", "")
   .option("--companions <files>", "comma-separated, ordered companion files to APPEND (e.g. patches/js/boot-ok-companion.js,patches/js/config-rotate.js — new top-level code, touches zero existing module bytes)", "")
   .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if any companion uses it)")
   .option("--patch-rev <n>", "patch_rev to bake in — the operator's responsibility to supply (D-L2's global counter lives in hub's logic_bundles table)")
   .action(async (baseFolder, outputBundle, opts) => {
     const patchNames = opts.patches ? opts.patches.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    const patchbackPairNames = opts.patchbackPairs
+      ? opts.patchbackPairs.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
     const companionFiles = opts.companions ? opts.companions.split(",").map((s) => s.trim()).filter(Boolean) : [];
     const result = await assembleBundle({
       baseFolderPath: baseFolder,
       patchNames,
       patchesDir: opts.patchesDir,
+      patchbackPairNames,
       outputPath: outputBundle,
       companionFiles,
       buildId: opts.buildId,
@@ -135,8 +140,9 @@ program
     console.log(`assembled ${outputBundle}`);
     console.log(`  base_version  ${result.baseVersion}`);
     console.log(`  patch_rev     ${result.patchRev ?? "(not baked — no --patch-rev given)"}`);
-    console.log(`  patches (replace)    ${result.appliedPatches.join(", ") || "(none)"}`);
-    console.log(`  companions (append)  ${result.appliedCompanions.join(", ") || "(none)"}`);
+    console.log(`  patches (replace, JSON)      ${result.appliedPatches.join(", ") || "(none)"}`);
+    console.log(`  patch-back pairs (replace)   ${result.appliedPatchbackPairs.join(", ") || "(none)"}`);
+    console.log(`  companions (append)          ${result.appliedCompanions.join(", ") || "(none)"}`);
   });
 
 program

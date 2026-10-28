@@ -219,3 +219,52 @@ test("an unknown companion file aborts the assembly before the output path is to
     assert.equal(fs.existsSync(outputPath), false);
   });
 });
+
+test("a patch-back pair (module-id addressed, same reconciliation algorithm as JSON patches) is applied during assembly (D111)", async () => {
+  await withTmpDir(async (dir) => {
+    const baseFolder = makeBaseFolder(dir, "1.5.12");
+    const baseBundlePath = path.join(baseFolder, "assets", "index.android.bundle");
+    const patchesDir = path.join(dir, "patches");
+    const patchbackDir = path.join(patchesDir, "js");
+    fs.mkdirSync(patchbackDir, { recursive: true });
+
+    const m2042 = moduleSource(baseBundlePath, 2042);
+    fs.writeFileSync(path.join(patchbackDir, "2042-bump-version.baseline.js"), m2042);
+    fs.writeFileSync(path.join(patchbackDir, "2042-bump-version.edited.js"), m2042.replace("2.3.0", "7.7.7"));
+
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+    const result = await assembleBundle({
+      baseFolderPath: baseFolder,
+      patchNames: [],
+      patchesDir,
+      patchbackPairNames: ["2042-bump-version"],
+      outputPath,
+    });
+
+    assert.deepEqual(result.appliedPatchbackPairs, ["2042-bump-version"]);
+    assert.match(moduleSource(outputPath, 2042), /7\.7\.7/);
+    // The base folder's own bundle must never be touched.
+    assert.match(moduleSource(baseBundlePath, 2042), /2\.3\.0/);
+  });
+});
+
+test("an unknown patch-back pair name aborts the assembly before the output path is touched", async () => {
+  await withTmpDir(async (dir) => {
+    const baseFolder = makeBaseFolder(dir, "1.5.12");
+    const patchesDir = path.join(dir, "patches");
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+
+    await assert.rejects(
+      () =>
+        assembleBundle({
+          baseFolderPath: baseFolder,
+          patchNames: [],
+          patchesDir,
+          patchbackPairNames: ["nope"],
+          outputPath,
+        }),
+      /no such patch-back pair/
+    );
+    assert.equal(fs.existsSync(outputPath), false);
+  });
+});
