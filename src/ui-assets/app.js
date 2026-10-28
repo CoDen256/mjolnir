@@ -594,6 +594,36 @@ async function loadPatchesList() {
   }
 
   await loadPatchbackPairsList();
+  await loadPatchesCompanionsList();
+}
+
+// Companions have no "before" state to diff against (APPEND-style — new
+// top-level code, no existing module touched), so they're listed here
+// read-only for inspection: click one to see its raw source in the shared
+// preview panel below (no "Apply to active session" — picking a companion
+// for a real build happens in the Assemble tab, where buildId/baseVersion/
+// patchRev are available to substitute its placeholders).
+let patchesCompanionsCache = [];
+
+async function loadPatchesCompanionsList() {
+  try {
+    const { companionsDir, companions } = await api("GET", "/api/companions");
+    el("patches-companions-dir-caption").textContent = `Reading companions from: ${companionsDir}`;
+    patchesCompanionsCache = companions;
+  } catch {
+    el("patches-companions-dir-caption").textContent = "";
+    patchesCompanionsCache = [];
+  }
+  el("patches-companions-empty-note").classList.toggle("hidden", patchesCompanionsCache.length > 0);
+  const list = el("patches-companions-list");
+  list.innerHTML = "";
+  for (const c of patchesCompanionsCache) {
+    const li = document.createElement("li");
+    li.innerHTML = `<strong>${c.name}</strong>`;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => previewPatchByName("companion", c.name));
+    list.appendChild(li);
+  }
 }
 
 // D111: raw <module-id>-name.baseline.js/.edited.js pairs under
@@ -624,7 +654,7 @@ async function loadPatchbackPairsList() {
   }
 }
 
-let patchesPreviewKind = null; // "patch" | "pair"
+let patchesPreviewKind = null; // "patch" | "pair" | "companion"
 let patchesPreviewName = null;
 
 function previewApiBase(kind) {
@@ -632,22 +662,39 @@ function previewApiBase(kind) {
 }
 
 async function previewPatchByName(kind, name) {
-  if (!app.activeSessionId) {
+  // Companions have no bundle to locate a target in — they're pure source
+  // inspection, so (unlike patch/pair previews) no active session is
+  // required.
+  if (kind !== "companion" && !app.activeSessionId) {
     alert("Open and select an active session first.");
     return;
   }
   patchesPreviewKind = kind;
   patchesPreviewName = name;
+  el("patches-preview").classList.remove("hidden");
+  el("patches-apply-result").classList.add("hidden");
+
+  if (kind === "companion") {
+    const result = await api("GET", `/api/companions/${encodeURIComponent(name)}/source`);
+    el("patches-preview-diff").classList.add("hidden");
+    el("patches-apply-btn").classList.add("hidden");
+    const sourceEl = el("patches-preview-source");
+    sourceEl.textContent = result.source;
+    sourceEl.classList.remove("hidden");
+    return;
+  }
+
+  el("patches-preview-source").classList.add("hidden");
+  el("patches-apply-btn").classList.remove("hidden");
   const result = await api("POST", `${previewApiBase(kind)}/${encodeURIComponent(name)}/preview`, {
     sessionId: app.activeSessionId,
   });
-  el("patches-preview").classList.remove("hidden");
-  el("patches-apply-result").classList.add("hidden");
   renderDiffInto(el("patches-preview-diff"), result.diff);
+  el("patches-preview-diff").classList.remove("hidden");
 }
 
 async function applyPreviewedPatch() {
-  if (!patchesPreviewName || !app.activeSessionId) return;
+  if (patchesPreviewKind === "companion" || !patchesPreviewName || !app.activeSessionId) return;
   const result = await api(
     "POST",
     `${previewApiBase(patchesPreviewKind)}/${encodeURIComponent(patchesPreviewName)}/apply`,

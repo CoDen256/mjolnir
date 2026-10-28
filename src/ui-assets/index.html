@@ -144,9 +144,17 @@
         </div>
         <ul id="patchback-pairs-list" class="patch-list"></ul>
 
+        <h3>Companions <span class="field-hint">APPEND-style — new top-level code, touches no existing module; picked for assembly in the Assemble tab</span></h3>
+        <div id="patches-companions-dir-caption" class="dir-caption"></div>
+        <div class="empty-state hidden" id="patches-companions-empty-note">
+          No companion scripts found under patches/js.
+        </div>
+        <ul id="patches-companions-list" class="patch-list"></ul>
+
         <div id="patches-preview" class="hidden">
           <h3>Preview</h3>
           <div id="patches-preview-diff" class="diff-view"></div>
+          <pre id="patches-preview-source" class="diff-view hidden"></pre>
           <button id="patches-apply-btn" type="button">Apply to active session</button>
           <div id="patches-apply-result" class="hidden"></div>
         </div>

@@ -340,3 +340,17 @@ addressed) that was still completely invisible to bundle-tool.
       `node --check` sweep: clean. D111 recorded in
       `tun/docs/07-decisions.md`; `patches/README.md` updated to describe
       all three mechanisms.
+- [x] 10.7 Companions gained a read-only preview in the Patches tab too, so
+      all three mechanisms are inspectable from one place: new
+      `GET /api/companions/:name/source` (`src/commands/ui.js`) returns the
+      companion's raw, unsubstituted source (no bundle/session to diff
+      against — companions add code, they don't modify any existing
+      module). The Patches tab's shared preview panel now branches on a
+      third `previewPatchByName` kind, `"companion"` — renders the raw
+      source in a `<pre>` instead of the diff view, hides "Apply to active
+      session" (substituting a companion's placeholders needs buildId/
+      baseVersion/patchRev, only available in the Assemble tab's own
+      flow), and needs no active session at all to preview. Tests:
+      `test/unit/ui.test.js` gained 2 cases (source returned with
+      placeholders intact; unknown name errors clearly). Full suite
+      re-run: 167/168 (same pre-existing failure).

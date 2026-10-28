@@ -810,6 +810,22 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
       pattern: /^\/api\/companions$/,
       handler: () => ({ status: 200, body: { companionsDir: path.resolve(companionsDir), companions: listCompanions(companionsDir) } }),
     },
+    // Companions have no "before" state to diff against — they add new
+    // code, they don't modify any existing module — so their "preview" is
+    // just their own raw source (placeholders shown unsubstituted; actual
+    // values are only known at assembly time). Session-free, unlike the
+    // patch/pair preview routes above, since it's not located against any
+    // particular bundle at all.
+    {
+      method: "GET",
+      pattern: /^\/api\/companions\/([^/]+)\/source$/,
+      handler: (match) => {
+        const name = decodeURIComponent(match[1]);
+        const companion = listCompanions(companionsDir).find((c) => c.name === name);
+        if (!companion) throw new Error(`no such companion: ${name}`);
+        return { status: 200, body: { name, source: fs.readFileSync(companion.path, "utf8") } };
+      },
+    },
     // D111: raw `<id>-name.baseline.js`/`.edited.js` pairs (also REPLACE-
     // style, same reconciliation algorithm as the JSON-store patches above,
     // just module-id addressed instead of content-located) — e.g. this

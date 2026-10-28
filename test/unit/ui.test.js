@@ -941,6 +941,30 @@ test("GET /api/companions lists companion scripts from <patchesDir>/js, excludin
   });
 });
 
+test("GET /api/companions/:name/source returns the companion's raw source, unsubstituted placeholders and all", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir }) => {
+    const companionsDir = path.join(patchesDir, "js");
+    fs.mkdirSync(companionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(companionsDir, "boot-ok-companion.js"),
+      "globalThis.__BUILD_ID__ = '__MJOLNIR_BUILD_ID__';\n"
+    );
+
+    const { status, data } = await api(baseUrl, "GET", "/api/companions/boot-ok-companion/source");
+    assert.equal(status, 200);
+    assert.equal(data.name, "boot-ok-companion");
+    assert.match(data.source, /__MJOLNIR_BUILD_ID__/);
+  });
+});
+
+test("GET /api/companions/:name/source 400s with a clear error for an unknown name", async () => {
+  await withPatchSession(async ({ baseUrl, patchesDir }) => {
+    fs.mkdirSync(path.join(patchesDir, "js"), { recursive: true });
+    const { data } = await api(baseUrl, "GET", "/api/companions/nope/source");
+    assert.match(data.error, /no such companion/);
+  });
+});
+
 test("POST /api/assemble applies multiple companions in order", async () => {
   await withPatchSession(async ({ baseUrl, patchesDir, bundlePath }) => {
     const dir = path.dirname(bundlePath);
