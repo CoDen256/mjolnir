@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
-import { ensureBlobsPresent } from "../src/audioSnapshot.js";
+import { ensureBlobsPresent, writeAudioByCardFiles } from "../src/audioSnapshot.js";
 import { startFakeStabbur, shaOf } from "./helpers/fakeStabbur.js";
 
 function ffmpegAvailable() {
@@ -103,4 +103,36 @@ describe("audioSnapshot: D-F1 trims a card's audio to its note's audio_sel_ms", 
     await fake.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
+});
+
+test("writeAudioByCardFiles: publishing a card with audio produces identical bytes at /blob/<sha256> and /audio-by-card/<cardId>.mp3, and a republish of the same audio is idempotent", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mjolnir-audio-by-card-"));
+  const sourceBytes = Buffer.from("fake mp3 bytes for CARDONE");
+  const originalSha = shaOf(sourceBytes);
+
+  const fake = startFakeStabbur({ blobs: {} });
+  fake.addBlob(originalSha, sourceBytes);
+  const stabburBaseUrl = await fake.listen();
+  const dataDir = path.join(tmpDir, "data");
+
+  try {
+    const cardAudio = { CARDONE: originalSha };
+    const finalCardAudio = await ensureBlobsPresent(cardAudio, { stabburBaseUrl, dataDir, selMsByCardId: {} });
+
+    writeAudioByCardFiles(finalCardAudio, { dataDir });
+
+    const blobPath = path.join(dataDir, "blob", finalCardAudio.CARDONE);
+    const byCardPath = path.join(dataDir, "audio-by-card", "CARDONE.mp3");
+    assert.ok(fs.existsSync(byCardPath));
+    assert.deepEqual(fs.readFileSync(byCardPath), fs.readFileSync(blobPath));
+    assert.deepEqual(fs.readFileSync(byCardPath), sourceBytes);
+
+    // Republishing the same, unchanged audio must not error — it's just a
+    // re-copy of the same bytes to the same destination.
+    assert.doesNotThrow(() => writeAudioByCardFiles(finalCardAudio, { dataDir }));
+    assert.deepEqual(fs.readFileSync(byCardPath), sourceBytes);
+  } finally {
+    await fake.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

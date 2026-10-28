@@ -10,7 +10,7 @@ import { recordShipments } from "./occurrenceShipments.js";
 import { previousVersions, writePublication } from "./publications.js";
 import { createBuildJob, markSucceeded, markFailed } from "./buildJobs.js";
 import { nextBuildId } from "./buildId.js";
-import { ensureBlobsPresent, writeAudioManifest } from "./audioSnapshot.js";
+import { ensureBlobsPresent, writeAudioByCardFiles, writeAudioManifest } from "./audioSnapshot.js";
 import { loadActive } from "./logicBundle.js";
 import { replay } from "./replay.js";
 import { upsert as upsertCardContentRow, getAll as getAllCardContent, contentChanged } from "./cardContent.js";
@@ -346,6 +346,7 @@ export async function runPublish(
 
     const cardAudio = await allCardAudio(pool);
     const finalCardAudio = await ensureBlobsPresent(cardAudio, { stabburBaseUrl, dataDir, selMsByCardId });
+    writeAudioByCardFiles(finalCardAudio, { dataDir });
     await log(buildJobId, `snapshot: audio manifest covers ${Object.keys(finalCardAudio).length} card(s)`);
 
     // D-L6: base_version/patch_rev now come from the logic bundle this run

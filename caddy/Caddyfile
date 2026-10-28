@@ -59,6 +59,23 @@
 		file_server
 	}
 
+	# ---- /audio-by-card/<cardId>.mp3 : card-id-keyed, immutable ----------
+	# A plain static copy of the same bytes already at /blob/<sha256>
+	# (builder's audio-snapshot step writes both), so the device can play a
+	# custom card's audio with a predictable, name-based URL and no
+	# manifest fetch of its own — no auth, same reasoning as /blob/* above:
+	# this is deliberately never a route in hub's Node process, where
+	# requireAuth runs unconditionally (D-A3).
+	handle /audio-by-card/* {
+		@not_read not method GET HEAD
+		respond @not_read "method not allowed" 405 {
+			close
+		}
+		header Cache-Control "public, max-age=31536000, immutable"
+		root * /srv
+		file_server
+	}
+
 	# ---- service UIs, mounted as each is written (D46) ------------------
 	# D-H6: uncommented only after the shared-bearer-token auth check on
 	# both services was verified working (task 7.3) — never the other way
