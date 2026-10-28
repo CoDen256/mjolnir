@@ -165,6 +165,62 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
     assert.equal(row.patch_rev, 5);
   });
 
+  await t.test("D112: assembleDefaults reports the base folder's own base_version and the next patch_rev", async () => {
+    const { assembleDefaults } = await import("../src/ota.js");
+    const baseFolderDir = path.join(tmpDir, "base-folder");
+    fs.mkdirSync(path.join(baseFolderDir, "assets"), { recursive: true });
+    fs.copyFileSync(
+      path.join(import.meta.dirname, "../../test/fixtures/demo.bundle"),
+      path.join(baseFolderDir, "assets", "index.android.bundle")
+    );
+    fs.writeFileSync(
+      path.join(baseFolderDir, "apktool.yml"),
+      "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 9.9.1\n"
+    );
+
+    const defaults = await assembleDefaults({ baseFolderDir });
+    assert.equal(defaults.baseVersion, "9.9.1");
+    assert.equal(typeof defaults.nextPatchRev, "number");
+  });
+
+  await t.test("D112: assembleAndSubmit assembles against the repo's own base folder and submits directly, no output path or base folder from the caller", async () => {
+    const { assembleAndSubmit } = await import("../src/ota.js");
+    const baseFolderDir = path.join(tmpDir, "base-folder-2");
+    fs.mkdirSync(path.join(baseFolderDir, "assets"), { recursive: true });
+    // Prefixed with the real device-facing magic prefix
+    // (`verifyLogicBundleBytes`'s own guard, checked by `submitBundle`
+    // inside `assembleAndSubmit`) — the fixture bundle's own bytes don't
+    // start with it, unlike a real production bundle.
+    fs.writeFileSync(
+      path.join(baseFolderDir, "assets", "index.android.bundle"),
+      "var __BUNDLE_START_TIME__=1;\n" +
+        fs.readFileSync(path.join(import.meta.dirname, "../../test/fixtures/demo.bundle"), "utf8")
+    );
+    fs.writeFileSync(
+      path.join(baseFolderDir, "apktool.yml"),
+      "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 9.9.2\n"
+    );
+
+    const row = await assembleAndSubmit({
+      baseFolderDir,
+      patchNames: [],
+      patchesDir: workbenchPatchesDir,
+      patchbackPairNames: [],
+      companionFiles: [],
+      dataDir,
+      logicBundleDir: config.logicBundleDir,
+    });
+
+    assert.equal(row.base_version, "9.9.2");
+    assert.equal(typeof row.patch_rev, "number");
+    // No label given -> auto-generated from base_version + patch_rev.
+    assert.equal(row.label, `9.9.2-patch${row.patch_rev}`);
+    assert.ok(fs.existsSync(row.file_path));
+    // No partial/temp file left behind.
+    const leftoverTmp = fs.readdirSync(dataDir).filter((f) => f.startsWith(".assemble-submit-"));
+    assert.deepEqual(leftoverTmp, []);
+  });
+
   await t.test("ota console: activating a logic bundle does not publish anything on its own", async () => {
     const { activateLogicBundle } = await import("../src/ota.js");
     await activateLogicBundle(firstLogicBundleId);
@@ -240,10 +296,11 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
 
       const otaRes = await fetch(`http://localhost:${port}/mjolnir/ota`);
       assert.equal(otaRes.status, 200);
-      assert.match(await otaRes.text(), /Submit bundle/);
+      const otaHtml = await otaRes.text();
+      assert.match(otaHtml, /Submit bundle/);
       // D-C5/3.4: the logic-bundles table gained the same inspect link
       // publish history already had.
-      assert.match(await otaRes.text(), /inspect/);
+      assert.match(otaHtml, /inspect/);
 
       const catalogueRes = await fetch(`http://localhost:${port}/mjolnir/catalogue`);
       assert.equal(catalogueRes.status, 200);
@@ -349,6 +406,43 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
     }
   });
 
+  await t.test("D112: GET /mjolnir/ota/assemble-defaults and POST .../assemble-submit, end to end over HTTP", async () => {
+    const baseFolderDir = path.join(tmpDir, "base-folder-http");
+    fs.mkdirSync(path.join(baseFolderDir, "assets"), { recursive: true });
+    fs.writeFileSync(
+      path.join(baseFolderDir, "assets", "index.android.bundle"),
+      "var __BUNDLE_START_TIME__=1;\n" +
+        fs.readFileSync(path.join(import.meta.dirname, "../../test/fixtures/demo.bundle"), "utf8")
+    );
+    fs.writeFileSync(
+      path.join(baseFolderDir, "apktool.yml"),
+      "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 9.9.3\n"
+    );
+
+    const server = createServer(pool, { ...config, baseFolderDir });
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+    try {
+      const defaultsRes = await fetch(`http://localhost:${port}/mjolnir/ota/assemble-defaults`);
+      assert.equal(defaultsRes.status, 200);
+      const defaults = await defaultsRes.json();
+      assert.equal(defaults.baseVersion, "9.9.3");
+
+      const submitRes = await fetch(`http://localhost:${port}/mjolnir/ota/assemble-submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: "http-test-bundle", patchNames: [], companionFiles: [] }),
+      });
+      assert.equal(submitRes.status, 200);
+      const row = await submitRes.json();
+      assert.equal(row.base_version, "9.9.3");
+      assert.equal(row.label, "http-test-bundle");
+      assert.ok(fs.existsSync(row.file_path));
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   await t.test("card-preview: a real blob on disk gets a working audio player, not a static badge", async () => {
     const sha = "realaudiosha";
     fs.mkdirSync(path.join(dataDir, "blob"), { recursive: true });
@@ -363,8 +457,13 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
     await new Promise((resolve) => server.listen(0, resolve));
     const port = server.address().port;
     try {
-      const previewHtml = await (await fetch(`http://localhost:${port}/mjolnir/cards/C20098/preview`)).text();
-      assert.match(previewHtml, /<audio controls src="\/mjolnir\/cards\/C20098\/audio">/);
+      // card-preview is an inline expandable row within /mjolnir/cards
+      // itself (task 8.2) — there is no separate /preview page/route to
+      // fetch; the audio tag for this card is already server-rendered,
+      // just hidden (`style="display:none;"`) until the operator clicks
+      // "preview".
+      const cardsHtml = await (await fetch(`http://localhost:${port}/mjolnir/cards`)).text();
+      assert.match(cardsHtml, /<audio controls src="\/mjolnir\/cards\/C20098\/audio">/);
 
       const audioRes = await fetch(`http://localhost:${port}/mjolnir/cards/C20098/audio`);
       assert.equal(audioRes.status, 200);

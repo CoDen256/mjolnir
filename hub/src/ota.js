@@ -12,9 +12,11 @@ import {
   MAX_BUNDLE_SIZE,
 } from "../../tool/src/otaPublish.js";
 import { previousVersions, writePublication } from "./publications.js";
-import { create as createLogicBundle, activate } from "./logicBundles.js";
+import { create as createLogicBundle, activate, nextPatchRev } from "./logicBundles.js";
 import { query } from "./db.js";
-import { slugify } from "./slug.js";
+import { slugify, versionSlug } from "./slug.js";
+import { assembleBundle } from "../../src/commands/assemble.js";
+import { readBaseVersion } from "../../src/apktoolYml.js";
 
 // D-H5/task 6.1: verification reuses exactly the guards `ota-publish.sh`/
 // `builder` already enforce — no second implementation. Returns a list of
@@ -84,7 +86,7 @@ export function verifyLogicBundleBytes(bytes) {
 function writeLogicBundleFile(dataDir, logicBundleDir, bytes, bundleSha, { baseVersion, patchRev, label } = {}) {
   const dir = logicBundleDir || path.join(dataDir, "logic");
   fs.mkdirSync(dir, { recursive: true });
-  const parts = [slugify(baseVersion) || "base", `patch${patchRev ?? 0}`];
+  const parts = [versionSlug(baseVersion) || "base", `patch${patchRev ?? 0}`];
   if (label) parts.push(slugify(label));
   parts.push(bundleSha.slice(0, 10));
   const filePath = path.join(dir, `${parts.join("-")}.js`);
@@ -136,6 +138,70 @@ export async function submitBundle(bytes, { label, baseVersion, patchRev, dataDi
     bundleSha,
     label: label || null,
   });
+}
+
+// Placeholder for a companion's BUILD_ID placeholder at assembly time — a
+// freshly-assembled logic bundle has no device-facing build identity yet
+// (that's only assigned once `builder` eventually publishes from it, and
+// re-stamped on every publish regardless, D105's `restampCompanionBuildId`)
+// so any value matching `appendCompanion`'s own charset (D48) is fine here.
+const ASSEMBLE_PLACEHOLDER_BUILD_ID = "unassigned";
+
+// D-L7 follow-up: what the embedded Assemble tab shows the operator before
+// they hit "Assemble" — the base version it'll read (so an empty Patch rev/
+// Label field's eventual value isn't a total surprise) and what Patch rev
+// will resolve to if left blank.
+export async function assembleDefaults({ baseFolderDir }) {
+  const baseVersion = readBaseVersion(baseFolderDir);
+  const nextRev = await nextPatchRev();
+  return { baseFolderDir, baseVersion, nextPatchRev: nextRev };
+}
+
+// D112: the embedded Assemble tab's one-step "Assemble" action — assembles
+// against this repo's own one base folder (never client-supplied; see
+// config.js's `baseFolderDir`) and submits the result as a new
+// `logic_bundles` row directly, with no intermediate output-bundle-path
+// step and no separate upload-to-/mjolnir/ota/submit round trip. Standalone
+// `bundle-tool`/bundle-workbench (no hub, no database, D108) keeps its own
+// `assembleBundle` -> file path flow unchanged — this is hub-only, exactly
+// like `forcePublish`'s own direct-to-disk-then-submit shape above.
+export async function assembleAndSubmit({
+  baseFolderDir,
+  patchNames,
+  patchesDir,
+  patchbackPairNames,
+  companionFiles,
+  label,
+  patchRev,
+  dataDir,
+  logicBundleDir,
+}) {
+  const resolvedPatchRev = patchRev === undefined || patchRev === null ? await nextPatchRev() : Number(patchRev);
+  const tmpPath = path.join(dataDir, `.assemble-submit-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+  fs.mkdirSync(dataDir, { recursive: true });
+  try {
+    const assembled = await assembleBundle({
+      baseFolderPath: baseFolderDir,
+      patchNames: patchNames || [],
+      patchesDir,
+      patchbackPairNames: patchbackPairNames || [],
+      outputPath: tmpPath,
+      companionFiles: companionFiles || [],
+      buildId: ASSEMBLE_PLACEHOLDER_BUILD_ID,
+      patchRev: resolvedPatchRev,
+    });
+    const bytes = fs.readFileSync(tmpPath);
+    const resolvedLabel = label || `${assembled.baseVersion}-patch${resolvedPatchRev}`;
+    return await submitBundle(bytes, {
+      label: resolvedLabel,
+      baseVersion: assembled.baseVersion,
+      patchRev: resolvedPatchRev,
+      dataDir,
+      logicBundleDir,
+    });
+  } finally {
+    fs.rmSync(tmpPath, { force: true });
+  }
 }
 
 // Task 4.2: thin wrapper over `logicBundles.activate` — the UI's "activate"

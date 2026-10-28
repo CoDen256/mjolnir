@@ -354,3 +354,67 @@ addressed) that was still completely invisible to bundle-tool.
       `test/unit/ui.test.js` gained 2 cases (source returned with
       placeholders intact; unknown name errors clearly). Full suite
       re-run: 167/168 (same pre-existing failure).
+
+## 11. Assemble tab: no base folder/output path when embedded, submits a logic bundle directly (D112)
+
+Two operator reports: "no bundle found at base/smali.mjolnir.merged/
+assets/index.android.bundle" even though it genuinely exists (root cause:
+a relative path typed into the Assemble tab resolved against hub's own
+`process.cwd()`, `/app/hub` per its Dockerfile's `WORKDIR`, not the repo
+root `/app`); and a request to drop the output-bundle-path/base-folder
+fields entirely, submitting straight to the logic bundles store instead,
+with the same optional label/patch-rev fields the existing OTA "submit
+bundle" form already has.
+
+- [x] 11.1 `hub/src/config.js` gained `baseFolderDir`
+      (`BASE_FOLDER_DIR` env override, defaulting REPO_ROOT-anchored to
+      `base/smali.mjolnir.merged` — same anchoring pattern as
+      `workbenchPatchesDir`/`logicBundleDir`), fixing the cwd-vs-REPO_ROOT
+      bug directly: the embedded Assemble tab never asks for a base folder
+      at all now, so there's no client-typed relative path left to get
+      wrong.
+- [x] 11.2 `hub/src/ota.js` gained `assembleDefaults({baseFolderDir})` (read-
+      only: the base folder's own `base_version` plus the next global
+      `patch_rev`, for the UI to show before the operator hits "Assemble")
+      and `assembleAndSubmit({...})` — assembles via `src/commands/
+      assemble.js`'s `assembleBundle` against a throwaway temp path (same
+      shape as `forcePublish`'s own temp-file-then-cleanup pattern), then
+      submits the bytes via the existing `submitBundle` directly, no
+      intermediate output file the operator has to separately upload.
+      `patchRev` auto-resolves via `logicBundles.nextPatchRev()` if not
+      given; `label` auto-generates as `<baseVersion>-patch<patchRev>` if
+      not given — both matching the user's "optional, auto" ask exactly.
+      Companions' `BUILD_ID` placeholder gets a fixed `"unassigned"` value
+      at this stage (cosmetic until actual publish re-stamps it for real,
+      D105).
+- [x] 11.3 `hub/src/server.js` gained `GET /mjolnir/ota/assemble-defaults`
+      and `POST /mjolnir/ota/assemble-submit`, both gated by the same
+      operator-auth check every other `/mjolnir/*` route already has.
+- [x] 11.4 UI (`src/ui-assets/index.html`/`app.js`): the Assemble tab now
+      probes `GET /mjolnir/ota/assemble-defaults` on load to detect
+      "running embedded in hub" (200) vs. "standalone bundle-tool, no
+      database, D108" (anything else — same degrade-gracefully pattern the
+      Catalogue tab already uses for `/mjolnir/catalogue.json`). Embedded:
+      shows only a "Label" field (patch rev stays, now optional/auto-
+      hinted), hides base folder/output path/build id entirely, submits via
+      the new hub routes. Standalone: unchanged original flow. The patches/
+      patch-back-pairs/companions pickers are identical in both modes —
+      only the final submit step and its required fields differ.
+- [x] 11.5 Running `hub/test/hub.test.js` for the first time this session
+      against a REAL database (a throwaway Postgres db on the already-
+      running `mjolnir-postgres` container — previously always `test.skip`
+      since no `DATABASE_URL` had ever been configured in the sandbox)
+      surfaced 3 unrelated, already-latent bugs, fixed alongside this:
+      `writeLogicBundleFile` (D110) slugified `base_version`, turning every
+      dot into a dash (`"1.5.12"` -> `"1-5-12"`) — fixed with a new
+      `versionSlug` (`hub/src/slug.js`) that preserves dots, used only for
+      `base_version`, not the free-text `label` (still `slugify`); a stale
+      test still called the standalone `/mjolnir/cards/:id/preview` route
+      removed when card-preview moved inline (task 8.2), never updated
+      when that landed; a test read the same `fetch` Response body twice.
+      New tests: `assembleDefaults`/`assembleAndSubmit` direct-call cases
+      plus an end-to-end HTTP case for both new routes. Full hub suite
+      (22 tests) verified passing against the real database, then the
+      throwaway test database dropped. Full bundle-tool suite re-run:
+      167/168 (same pre-existing, unrelated failure). D112 recorded in
+      `tun/docs/07-decisions.md`.

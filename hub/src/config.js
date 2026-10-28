@@ -23,6 +23,16 @@ export function loadConfig() {
   // Absolute and cwd-independent by default; still overridable for a
   // deployment that genuinely wants patches somewhere else.
   const workbenchPatchesDir = process.env.WORKBENCH_PATCHES_DIR || path.join(REPO_ROOT, "patches");
+  // The one base APK folder this repo ever assembles against — absolute
+  // and REPO_ROOT-anchored for the exact same reason `workbenchPatchesDir`
+  // is: a relative "base/smali.mjolnir.merged" typed into the Assemble
+  // tab resolved against hub's own `process.cwd()` (`/app/hub`, per its
+  // Dockerfile's `WORKDIR`), not the repo root (`/app`) the operator
+  // actually meant — "no bundle found" even though the folder genuinely
+  // exists. The embedded workbench's Assemble tab no longer asks for this
+  // at all (`ota.js`'s `assembleAndSubmit`) — there is only ever one base
+  // folder, this one.
+  const baseFolderDir = process.env.BASE_FOLDER_DIR || path.join(REPO_ROOT, "base", "smali.mjolnir.merged");
   // D109: hub's "Builder" nav pages call `runForecast` directly (same
   // monorepo, same shared Postgres, D-P3) rather than proxying to builder's
   // own process — this needs the exact same stabbur credentials builder
@@ -51,6 +61,7 @@ export function loadConfig() {
     operatorAuthToken,
     logicBundleDir,
     workbenchPatchesDir,
+    baseFolderDir,
     stabburBaseUrl,
     stabburAuthToken,
     sourceLang,

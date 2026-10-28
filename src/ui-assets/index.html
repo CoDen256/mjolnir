@@ -164,7 +164,24 @@
       <section id="view-assemble" class="view hidden">
         <div class="assemble-layout">
           <div class="assemble-form-pane">
-            <div class="field-grid">
+            <div id="assemble-mode-caption" class="dir-caption"></div>
+
+            <!-- D112: shown only when running embedded in hub (detected via
+                 GET /mjolnir/ota/assemble-defaults on load) — assembling
+                 always uses this repo's own one base folder, server-side,
+                 never a client-typed path, and the result is submitted
+                 straight to hub's logic_bundles store, not written to an
+                 operator-picked output path. -->
+            <div id="assemble-embedded-fields" class="hidden field-grid">
+              <label class="full-width">
+                Label <span class="field-hint">optional — auto-generated from base version + patch rev if left blank</span>
+                <input id="assemble-label" type="text" placeholder="e.g. november-vocab-patch" />
+              </label>
+            </div>
+
+            <!-- Standalone bundle-tool/bundle-workbench (no hub, no
+                 database, D108) keeps the original path-based flow. -->
+            <div id="assemble-standalone-fields" class="field-grid">
               <label class="full-width">
                 Base folder <span class="field-hint">decoded APK folder, e.g. base/smali.mjolnir.merged</span>
                 <input id="assemble-base-folder" type="text" placeholder="base/smali.mjolnir.merged" />
@@ -177,8 +194,11 @@
                 Build id <span class="field-hint">cosmetic here — builder restamps it on every real publish</span>
                 <input id="assemble-build-id" type="text" placeholder="b000000" />
               </label>
+            </div>
+
+            <div class="field-grid">
               <label>
-                Patch rev <span class="field-hint">the operator's responsibility — read the current max off /mjolnir/ota's history</span>
+                Patch rev (logic version) <span id="assemble-patch-rev-hint" class="field-hint"></span>
                 <input id="assemble-patch-rev" type="number" min="0" step="1" />
               </label>
             </div>

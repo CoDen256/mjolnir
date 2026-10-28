@@ -728,7 +728,46 @@ let assembleCompanionsCache = [];
 let assembleCompanionsSelected = [];
 let companionsDefaultApplied = false;
 
+// D112: running embedded in hub (vs. standalone bundle-tool/bundle-
+// workbench, no database, D108) is detected once per load by probing hub's
+// own GET /mjolnir/ota/assemble-defaults — an absolute, sibling-of-the-
+// mount-point fetch, same pattern loadCatalogueView() already uses for
+// /mjolnir/catalogue.json. A 200 means "embedded, use the one-step
+// assemble-and-submit flow, no base folder or output path to type"; any
+// failure (404 standalone, or genuinely offline) means "standalone, keep
+// the original path-based flow."
+let assembleEmbedded = false;
+
+async function detectAssembleMode() {
+  try {
+    const res = await fetch("/mjolnir/ota/assemble-defaults");
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 async function loadAssembleView() {
+  const defaults = await detectAssembleMode();
+  assembleEmbedded = !!defaults;
+  el("assemble-embedded-fields").classList.toggle("hidden", !assembleEmbedded);
+  el("assemble-standalone-fields").classList.toggle("hidden", assembleEmbedded);
+  el("assemble-run-btn").textContent = assembleEmbedded ? "Assemble & submit logic bundle" : "Assemble";
+  if (assembleEmbedded) {
+    el("assemble-mode-caption").textContent =
+      `Assembling against this repo's own base folder: ${defaults.baseFolderDir} ` +
+      `(base_version ${defaults.baseVersion}). Result is submitted straight to hub's logic bundles — ` +
+      `activate it from /mjolnir/ota when ready.`;
+    el("assemble-patch-rev-hint").textContent =
+      `optional — auto-incremented to ${defaults.nextPatchRev} (the next global patch_rev) if left blank`;
+  } else {
+    el("assemble-mode-caption").textContent =
+      "Running standalone (no hub reachable) — base folder and output bundle path are required below.";
+    el("assemble-patch-rev-hint").textContent =
+      "the operator's responsibility — read the current max off /mjolnir/ota's history";
+  }
+
   showPatchesDirCaption("assemble-patches-dir-caption");
   patchesCache = await api("GET", "/api/patches");
   assembleSelected = assembleSelected.filter((name) => patchesCache.some((p) => p.name === name));
@@ -850,6 +889,35 @@ async function runAssemble() {
   errorEl.classList.add("hidden");
   resultEl.classList.add("hidden");
 
+  const patchRevRaw = el("assemble-patch-rev").value.trim();
+  const companionFiles = assembleCompanionsSelected
+    .map((name) => assembleCompanionsCache.find((c) => c.name === name)?.path)
+    .filter(Boolean);
+
+  if (assembleEmbedded) {
+    try {
+      const res = await fetch("/mjolnir/ota/assemble-submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patchNames: assembleSelected,
+          patchbackPairNames: assemblePatchbackPairsSelected,
+          companionFiles,
+          label: el("assemble-label").value.trim() || undefined,
+          patchRev: patchRevRaw ? Number(patchRevRaw) : undefined,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || `request failed (${res.status})`);
+      resultEl.innerHTML = `Created logic bundle <strong>#${result.id}</strong> — base_version <strong>${result.base_version}</strong>, patch_rev <strong>${result.patch_rev}</strong>${result.label ? `, label <strong>${result.label}</strong>` : ""}.<br>Activate it from <a href="/mjolnir/ota" target="_blank">/mjolnir/ota</a> when ready.`;
+      resultEl.classList.remove("hidden");
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.classList.remove("hidden");
+    }
+    return;
+  }
+
   const baseFolderPath = el("assemble-base-folder").value.trim();
   const outputPath = el("assemble-output-path").value.trim();
   if (!baseFolderPath || !outputPath) {
@@ -857,10 +925,6 @@ async function runAssemble() {
     errorEl.classList.remove("hidden");
     return;
   }
-  const patchRevRaw = el("assemble-patch-rev").value.trim();
-  const companionFiles = assembleCompanionsSelected
-    .map((name) => assembleCompanionsCache.find((c) => c.name === name)?.path)
-    .filter(Boolean);
 
   try {
     const result = await api("POST", "/api/assemble", {

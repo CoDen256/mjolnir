@@ -2,7 +2,16 @@ import http from "node:http";
 import path from "node:path";
 import fs from "node:fs";
 import { listPublications, updateLabel, deleteBuild, readCurrent } from "./publications.js";
-import { verifyBundle, verifyLogicBundleBytes, submitBundle, activateLogicBundle, forcePublish, setCurrent } from "./ota.js";
+import {
+  verifyBundle,
+  verifyLogicBundleBytes,
+  submitBundle,
+  activateLogicBundle,
+  forcePublish,
+  setCurrent,
+  assembleDefaults,
+  assembleAndSubmit,
+} from "./ota.js";
 import { findBakedBaseVersion, findBakedPatchRev } from "../../tool/src/otaPublish.js";
 import { list as listLogicBundles } from "./logicBundles.js";
 import { cardsList, stripHtml, getCardSlot } from "./cards.js";
@@ -844,6 +853,33 @@ export function createServer(pool, config) {
           label,
           baseVersion,
           patchRev,
+          dataDir: config.dataDir,
+          logicBundleDir: config.logicBundleDir,
+        });
+        return sendJson(res, 200, row);
+      }
+      // D112: the embedded Assemble tab's one-step flow — assembles
+      // against this repo's own one base folder (`config.baseFolderDir`,
+      // never client-supplied) and submits the result as a new
+      // `logic_bundles` row directly. `GET .../assemble-defaults` is what
+      // the Assemble tab probes on load both to detect "running embedded in
+      // hub" (vs. standalone bundle-tool, which has no such route) and to
+      // show the operator what an empty Label/Patch rev field will resolve
+      // to before they hit "Assemble".
+      if (req.method === "GET" && url.pathname === "/mjolnir/ota/assemble-defaults") {
+        const defaults = await assembleDefaults({ baseFolderDir: config.baseFolderDir });
+        return sendJson(res, 200, defaults);
+      }
+      if (req.method === "POST" && url.pathname === "/mjolnir/ota/assemble-submit") {
+        const body = await readJson(req);
+        const row = await assembleAndSubmit({
+          baseFolderDir: config.baseFolderDir,
+          patchNames: body.patchNames || [],
+          patchesDir: config.workbenchPatchesDir,
+          patchbackPairNames: body.patchbackPairNames || [],
+          companionFiles: body.companionFiles || [],
+          label: body.label || undefined,
+          patchRev: body.patchRev === undefined || body.patchRev === null || body.patchRev === "" ? undefined : Number(body.patchRev),
           dataDir: config.dataDir,
           logicBundleDir: config.logicBundleDir,
         });
