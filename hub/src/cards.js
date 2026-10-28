@@ -71,3 +71,14 @@ export async function cardsList(pool, { search = "", deckCode = "", statusFilter
 export function stripHtml(html) {
   return String(html).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
+
+// `card-preview` needs the card's own audio sha (for the blob-cache lookup)
+// alongside everything `cardContent.get` already returns — a single small
+// lookup, not folded into `cardsList` since only the preview page needs it.
+export async function getCardSlot(pool, cardId) {
+  const { rows } = await pool.query(
+    "SELECT cs.id, cs.deck_code, cs.note_id, cs.audio_sha256, d.title AS deck_title FROM card_slots cs JOIN decks d ON d.code = cs.deck_code WHERE cs.id = $1",
+    [cardId]
+  );
+  return rows[0] || null;
+}

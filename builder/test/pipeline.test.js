@@ -115,6 +115,27 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     assert.equal(Number(rows[0].count), 0);
   });
 
+  await t.test("forecast still reports a deck's pending queue depth even with zero newly-eligible notes today", async () => {
+    // The confirmed bug: `byDeck` used to be built only by iterating
+    // `newlyEligibleByDeck`, so a deck with real pending_occurrences but no
+    // newly-eligible notes this call never got an entry at all — its real
+    // queue depth silently vanished from the forecast.
+    fake.setNotes([]);
+    await pool.query(
+      "INSERT INTO pending_occurrences (deck_code, card_id, letter, remaining) VALUES ('C29', 'ZZZTST', 'N', 5)"
+    );
+    try {
+      const forecast = await runForecast(pool, config);
+      const c29 = forecast.byDeck.find((d) => d.deckCode === "C29");
+      assert.ok(c29, "C29 must appear in byDeck despite zero newly-eligible notes");
+      assert.equal(c29.newlyEligibleCount, 0);
+      assert.equal(c29.pendingQueueDepth, 5);
+      assert.equal(c29.pendingOldestRemaining, 5);
+    } finally {
+      await pool.query("DELETE FROM pending_occurrences WHERE deck_code = 'C29' AND card_id = 'ZZZTST'");
+    }
+  });
+
   await t.test("forecast reports occurrence-level would-ship/would-queue, without minting (D-H2)", async () => {
     fake.setNotes([wordNote("n1"), wordNote("n2"), wordNote("n3"), wordNote("n4")]);
     for (const id of ["n1", "n2", "n3", "n4"]) fake.addBlob(shaOf(`audio for ${id}`), `audio for ${id}`);
@@ -207,10 +228,26 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     const n1Id = n1CardBefore.ID;
     const n1Position = before.decks.find((d) => d.Name === "C20").Cards.findIndex((ref) => ref.Card.startsWith(n1Id));
 
+    // D-C2: the forecast should predict n1's card content would change
+    // (it's the only already-minted note edited here), and no other
+    // already-minted card's.
+    const forecastBeforePublish = await runForecast(pool, config);
+    const wouldUpdateIds = forecastBeforePublish.wouldUpdate.map((u) => u.cardId);
+    assert.deepEqual(wouldUpdateIds, [n1Id], "only n1's card is predicted to change — n2/n3/n4 are unedited");
+
     const result = await runPublish(pool, config);
     assert.equal(result.published, true);
     assert.equal(result.buildId, "b000002");
     assert.deepEqual(result.decksMinted, [{ deckCode: "C22", count: 1 }]);
+
+    // D-C2: the actual run's log names exactly the card(s) that changed,
+    // not every already-minted card it regenerated.
+    const { rows: regenLog } = await pool.query(
+      "SELECT jl.line FROM job_logs jl JOIN build_jobs bj ON bj.id = jl.build_job_id WHERE bj.build_id = $1 AND jl.line LIKE 'regenerate:%'",
+      [result.buildId]
+    );
+    assert.equal(regenLog.length, 1);
+    assert.match(regenLog[0].line, /^regenerate: 1 of 4 existing card\(s\) actually changed content: C20\d{3}$/);
 
     const after = outputModel(result.buildId);
     const n1CardAfter = after.cards.find((c) => c.ID === n1Id);

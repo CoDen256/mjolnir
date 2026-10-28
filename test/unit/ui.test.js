@@ -857,3 +857,38 @@ test("POST /api/assemble rejects an unknown patch name with no output written", 
     assert.equal(fs.existsSync(outputPath), false);
   });
 });
+
+// --- Upload (task 3, D-C4) ----------------------------------------------
+
+test("POST /api/sessions/upload opens a session from raw bytes, no server-side path required", async () => {
+  await withServer(async ({ baseUrl, bundlePath }) => {
+    const bytes = fs.readFileSync(bundlePath);
+    const res = await fetch(`${baseUrl}/api/sessions/upload`, {
+      method: "POST",
+      headers: { "X-Filename": "my-weird name!.bundle" },
+      body: bytes,
+    });
+    assert.equal(res.status, 201);
+    const session = await res.json();
+    assert.ok(session.id);
+    assert.equal(session.moduleCount > 0, true);
+
+    // The uploaded session is indistinguishable from a path-opened one —
+    // same session list, same summary shape.
+    const list = await api(baseUrl, "GET", "/api/sessions");
+    assert.ok(list.data.some((s) => s.id === session.id));
+  });
+});
+
+test("POST /api/sessions/upload rejects unparseable bytes with a clear error, no session created", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const res = await fetch(`${baseUrl}/api/sessions/upload`, {
+      method: "POST",
+      headers: { "X-Filename": "not-a-bundle.js" },
+      body: Buffer.from("this is not a metro bundle"),
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.match(body.error, /could not parse/);
+  });
+});

@@ -52,6 +52,23 @@ body {
 .session-bar input[type="text"] {
   min-width: 320px;
 }
+.upload-dropzone {
+  font-size: 12px;
+  color: #777;
+  border: 1px dashed #ccc;
+  border-radius: 4px;
+  padding: 4px 10px;
+}
+.upload-dropzone.dragover {
+  border-color: #99a;
+  background: #eef2ff;
+  color: #334;
+}
+.upload-pick-label {
+  color: #448;
+  cursor: pointer;
+  text-decoration: underline;
+}
 .session-list {
   display: flex;
   gap: 6px;

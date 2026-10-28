@@ -21,3 +21,19 @@ export async function getAll(pool) {
   const { rows } = await pool.query("SELECT card_id, n, e, x, a FROM card_content");
   return new Map(rows.map((r) => [r.card_id, { N: r.n, E: r.e, X: r.x, A: r.a }]));
 }
+
+// D-C2: a card's content is a pure function of its note (`project()`), so
+// "would this publish actually change it" is exactly a field-by-field
+// equality check against what's already stored — no fuzzy diffing, no new
+// schema. `existing` is `undefined` for a card with no stored row yet
+// (shouldn't normally happen for an already-minted card, but treated as
+// "changed" rather than crashing on it).
+export function contentChanged(existing, projected) {
+  if (!existing) return true;
+  return (
+    existing.N !== projected.N ||
+    existing.E !== projected.E ||
+    existing.X !== projected.X ||
+    existing.A !== projected.A
+  );
+}

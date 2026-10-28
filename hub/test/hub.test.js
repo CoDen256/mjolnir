@@ -237,6 +237,64 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
       const otaRes = await fetch(`http://localhost:${port}/mjolnir/ota`);
       assert.equal(otaRes.status, 200);
       assert.match(await otaRes.text(), /Submit bundle/);
+      // D-C5/3.4: the logic-bundles table gained the same inspect link
+      // publish history already had.
+      assert.match(await otaRes.text(), /inspect/);
+
+      const catalogueRes = await fetch(`http://localhost:${port}/mjolnir/catalogue`);
+      assert.equal(catalogueRes.status, 200);
+      const catalogueHtml = await catalogueRes.text();
+      assert.match(catalogueHtml, /OTA builds/);
+      assert.match(catalogueHtml, /Logic bundles/);
+      assert.match(catalogueHtml, /b900002/);
+
+      // D-C7: the download filename incorporates the publication's label
+      // ("renamed", set in the earlier "edit label" test), not just the
+      // bare build id.
+      const downloadRes = await fetch(`http://localhost:${port}/mjolnir/ota/download/b900002`);
+      assert.equal(downloadRes.status, 200);
+      assert.match(downloadRes.headers.get("content-disposition"), /filename="b900002-renamed\.js"/);
+
+      // card-preview (D-C8): styled with the extracted stock-app emphasis
+      // classes, audio face flagged, static badge when no blob is on disk.
+      await pool.query(
+        "INSERT INTO card_slots (id, deck_code, card_no, note_id, audio_sha256) VALUES ('C20099', 'C20', 99, 'n99', 'nosuchsha')"
+      );
+      await pool.query(
+        "INSERT INTO card_content (card_id, n, e, x, a) VALUES ('C20099', '<b class=\"bold teal\">en</b>: hus', '<span class=\"red\">rød</span>', '', 'N')"
+      );
+      const previewRes = await fetch(`http://localhost:${port}/mjolnir/cards/C20099/preview`);
+      assert.equal(previewRes.status, 200);
+      const previewHtml = await previewRes.text();
+      assert.match(previewHtml, /bold teal/);
+      assert.match(previewHtml, /#00A4BF/); // the stock "teal" color
+      assert.match(previewHtml, /#246BFD/); // the stock bold/heading-accent color
+      assert.match(previewHtml, /🔊 audio/, "the N face (card_content.a) is flagged, not E or X");
+      assert.match(previewHtml, /audio-badge static/, "no blob on disk for 'nosuchsha' — static badge, not a broken player");
+
+      const missingAudioRes = await fetch(`http://localhost:${port}/mjolnir/cards/C20099/audio`);
+      assert.equal(missingAudioRes.status, 404);
+
+      const missingCardRes = await fetch(`http://localhost:${port}/mjolnir/cards/NOSUCH/preview`);
+      assert.equal(missingCardRes.status, 404);
+
+      // operator-console-shell (D-C9): one page, four iframes over
+      // already-working routes, each with embed=1.
+      const consoleRes = await fetch(`http://localhost:${port}/mjolnir/console`);
+      assert.equal(consoleRes.status, 200);
+      const consoleHtml = await consoleRes.text();
+      assert.match(consoleHtml, /src="\/mjolnir\/cards\?embed=1"/);
+      assert.match(consoleHtml, /src="\/builder\?embed=1"/);
+      assert.match(consoleHtml, /src="\/mjolnir\/ota\?embed=1"/);
+      assert.match(consoleHtml, /src="\/mjolnir\/workbench\/\?embed=1"/);
+
+      // embed=1 strips this page's own top-bar/rail; without it, unaffected.
+      const embeddedHtml = await (await fetch(`http://localhost:${port}/mjolnir/cards?embed=1`)).text();
+      assert.doesNotMatch(embeddedHtml, /class="top-bar"/);
+      assert.doesNotMatch(embeddedHtml, /class="rail"/);
+      const normalHtml = await (await fetch(`http://localhost:${port}/mjolnir/cards`)).text();
+      assert.match(normalHtml, /class="top-bar"/);
+      assert.match(normalHtml, /← unified console/);
 
       const missingRes = await fetch(`http://localhost:${port}/nope`);
       assert.equal(missingRes.status, 404);
@@ -267,6 +325,31 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
       const patches = await fetch(`http://localhost:${port}/mjolnir/workbench/api/patches`);
       assert.equal(patches.status, 200);
       assert.deepEqual(await patches.json(), []);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test("card-preview: a real blob on disk gets a working audio player, not a static badge", async () => {
+    const sha = "realaudiosha";
+    fs.mkdirSync(path.join(dataDir, "blob"), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, "blob", sha), "fake mp3 bytes");
+    await pool.query(
+      "INSERT INTO card_slots (id, deck_code, card_no, note_id, audio_sha256) VALUES ('C20098', 'C20', 98, 'n98', $1)",
+      [sha]
+    );
+    await pool.query("INSERT INTO card_content (card_id, n, e, x, a) VALUES ('C20098', 'n', 'e', '', 'E')");
+
+    const server = createServer(pool, config);
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+    try {
+      const previewHtml = await (await fetch(`http://localhost:${port}/mjolnir/cards/C20098/preview`)).text();
+      assert.match(previewHtml, /<audio controls src="\/mjolnir\/cards\/C20098\/audio">/);
+
+      const audioRes = await fetch(`http://localhost:${port}/mjolnir/cards/C20098/audio`);
+      assert.equal(audioRes.status, 200);
+      assert.equal(await audioRes.text(), "fake mp3 bytes");
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

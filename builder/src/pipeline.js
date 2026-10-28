@@ -13,7 +13,7 @@ import { nextBuildId } from "./buildId.js";
 import { ensureBlobsPresent, writeAudioManifest } from "./audioSnapshot.js";
 import { loadActive } from "./logicBundle.js";
 import { replay } from "./replay.js";
-import { upsert as upsertCardContentRow } from "./cardContent.js";
+import { upsert as upsertCardContentRow, getAll as getAllCardContent, contentChanged } from "./cardContent.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -94,14 +94,22 @@ async function drainThenQueue(pool, deck, deckCode, newACount, toQueue, shipment
 // uses, read-only (no row inserted) — D-P5's "one implementation, two call
 // sites" extends to card-id prediction too, not just eligibility.
 export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sourceLang = "no" } = {}) {
-  const { newlyEligibleByDeck } = await pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLang });
+  const { newlyEligibleByDeck, alreadyMinted } = await pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLang });
   const queueDepths = await pendingQueueDepths(pool);
 
   const wouldShip = [];
   const wouldQueue = [];
   const byDeck = [];
 
-  for (const [deckCode, notes] of newlyEligibleByDeck) {
+  // A deck with a real, nonzero pending-occurrence queue depth but zero
+  // newly-eligible notes today must still be reported — `queueDepths` is
+  // computed independently of `newlyEligibleByDeck`, so iterating only the
+  // latter silently dropped such decks from the forecast entirely (the
+  // confirmed bug: data was always correct in `pending_occurrences`, it was
+  // just never reaching this loop to be reported).
+  const deckCodes = new Set([...newlyEligibleByDeck.keys(), ...queueDepths.keys()]);
+  for (const deckCode of deckCodes) {
+    const notes = newlyEligibleByDeck.get(deckCode) || [];
     const { rows } = await pool.query("SELECT COALESCE(MAX(card_no), 0) AS max_no FROM card_slots WHERE deck_code = $1", [
       deckCode,
     ]);
@@ -149,7 +157,23 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
     });
   }
 
-  return { wouldShip, wouldQueue, byDeck };
+  // D-C2: which already-minted cards would have their content actually
+  // changed by the next publish — a note edit, or a projector/template
+  // change, both show up here identically, since this is a pure
+  // project()-then-compare, the same content a real publish would write.
+  const cardIdByNoteId = await cardIdsForNotes(pool, alreadyMinted.map((n) => n.id));
+  const existingContent = await getAllCardContent(pool);
+  const wouldUpdate = [];
+  for (const note of alreadyMinted) {
+    const entry = cardIdByNoteId.get(note.id);
+    if (!entry) continue;
+    const content = project(note, {});
+    if (contentChanged(existingContent.get(entry.cardId), content)) {
+      wouldUpdate.push({ cardId: entry.cardId, deckCode: entry.deckCode, noteId: note.id, noteText: note.text });
+    }
+  }
+
+  return { wouldShip, wouldQueue, byDeck, wouldUpdate };
 }
 
 // The real run: tasks 4.2-4.12. No floor (D91) — triggered by either the
@@ -241,6 +265,10 @@ export async function runPublish(
     // whatever content it last had, which is correct (it's permanent).
     const alreadyMintedIds = alreadyMinted.map((n) => n.id);
     const cardIdByNoteId = await cardIdsForNotes(pool, alreadyMintedIds);
+    // D-C2: snapshot before this run's upserts overwrite it, so the
+    // comparison is against what was actually stored coming into this run.
+    const existingContentBeforeRegen = await getAllCardContent(pool);
+    const changedCardIds = [];
     const deckTitleCache = new Map();
     async function ensureDeckByCode(deckCode) {
       if (!deckTitleCache.has(deckCode)) deckTitleCache.set(deckCode, await deckTitle(pool, deckCode));
@@ -253,6 +281,7 @@ export async function runPublish(
       const { cardId, deckCode } = entry;
       if (note.audio_sel_ms) selMsByCardId[cardId] = note.audio_sel_ms;
       const content = project(note, { grammarRuleLookup });
+      if (contentChanged(existingContentBeforeRegen.get(cardId), content)) changedCardIds.push(cardId);
       await upsertCardContentRow(pool, cardId, { N: content.N, E: content.E, X: content.X, A: content.A });
       if (model.cards.some((c) => c.ID === cardId)) {
         upsertCardContent(model.cards, cardId, { N: content.N, E: content.E, X: content.X, A: content.A });
@@ -271,7 +300,11 @@ export async function runPublish(
       }
       await updateAudioSha256(pool, cardId, note.audio_blob, note.grammar_rule_id ?? null);
     }
-    await log(buildJobId, `regenerate: refreshed content for ${alreadyMinted.length} existing card(s)`);
+    await log(
+      buildJobId,
+      `regenerate: ${changedCardIds.length} of ${alreadyMinted.length} existing card(s) actually changed content` +
+        (changedCardIds.length ? `: ${changedCardIds.join(", ")}` : "")
+    );
 
     const decksMinted = [];
     for (const [deckCode, notes] of decksToMint) {

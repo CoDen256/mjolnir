@@ -22,6 +22,12 @@ async function readJson(req) {
   return body.length ? JSON.parse(body.toString("utf8")) : {};
 }
 
+// D-C9: see `hub/src/server.js`'s identical helper — true only when the
+// unified console's iframe requested it.
+function isEmbed(url) {
+  return url.searchParams.get("embed") === "1";
+}
+
 function timeAgo(date) {
   const ms = Date.now() - new Date(date).getTime();
   const mins = Math.floor(ms / 60000);
@@ -67,7 +73,7 @@ function renderActiveLogicBundleBanner(activeLogicBundle) {
   </div>`;
 }
 
-function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle) {
+function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle, embed = false) {
   const totalEligible = forecast.byDeck.reduce((n, d) => n + d.newlyEligibleCount, 0);
   const affectedDecks = forecast.byDeck.filter((d) => d.newlyEligibleCount > 0);
   const totalQueueDepth = forecast.byDeck.reduce((n, d) => n + d.pendingQueueDepth, 0);
@@ -100,6 +106,16 @@ function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBu
     )
     .join("\n");
 
+  const updateRows = (forecast.wouldUpdate || [])
+    .map(
+      (u) => `<tr>
+        <td class="mono">${escapeHtml(u.cardId)}</td>
+        <td class="mono">${escapeHtml(u.deckCode)}</td>
+        <td class="wrap">${escapeHtml(u.noteText || "")}</td>
+      </tr>`
+    )
+    .join("\n");
+
   const batchPanels = batches
     .map((b) => {
       const contents = batchDetails.get(b.buildId) || [];
@@ -119,6 +135,7 @@ function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBu
   return renderShell({
     title: "mjolnir / builder — forecast",
     activeHref: "/builder",
+    embed,
     body: `
 <div class="page-head">
   <div><h2>Forecast &amp; publish</h2><div class="page-sub">What would ship if you published right now — no floor, every eligible note mints.</div></div>
@@ -153,6 +170,17 @@ ${renderActiveLogicBundleBanner(activeLogicBundle)}
     </table>
   </div>
   <div class="inline-note" style="margin:0 18px 14px;">A new card's <strong>A</strong> ships the run it's minted. Its <strong>E</strong> doesn't — it ships whenever the queue drains, which can be many batches later. The two rarely land in the same batch, which is why this list is occurrences, not cards.</div>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h3>Existing cards whose content would change <span class="pill pill-neutral" style="margin-left:8px;">not new cards</span></h3></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Card</th><th>Deck</th><th>Note</th></tr></thead>
+      <tbody>${updateRows || `<tr><td colspan="3">no already-minted card's content would change</td></tr>`}</tbody>
+    </table>
+  </div>
+  <div class="inline-note" style="margin:0 18px 14px;">A card lands here when its source note was edited, or when the rendering template itself changed — either way, the next publish would regenerate this card's content differently from what's currently stored.</div>
 </div>
 
 <div class="panel">
@@ -194,13 +222,14 @@ document.getElementById('publish-now').addEventListener('click', async () => {
 
 // ---- Schedule ----
 
-function renderSchedulePage(schedule) {
+function renderSchedulePage(schedule, embed = false) {
   const row = (kind, checked, inner) =>
     `<label class="radio-row ${checked ? "active" : ""}"><input type="radio" name="sched" value="${kind}" ${checked ? "checked" : ""}> ${inner}</label>`;
 
   return renderShell({
     title: "mjolnir / builder — schedule",
     activeHref: "/builder/schedule",
+    embed,
     body: `
 <div class="page-head"><div><h2>Schedule</h2><div class="page-sub">Automatic publishing, independent of the button on the forecast page.</div></div></div>
 <div class="panel panel-pad">
@@ -232,7 +261,7 @@ document.getElementById('save-btn').addEventListener('click', async () => {
 
 // ---- Run log ----
 
-function renderLogsPage(jobs, selectedJob, logLines) {
+function renderLogsPage(jobs, selectedJob, logLines, embed = false) {
   const rows = jobs
     .map((j) => {
       const dotClass = j.status === "succeeded" ? "ok" : j.status === "failed" ? "err" : "";
@@ -259,6 +288,7 @@ function renderLogsPage(jobs, selectedJob, logLines) {
   return renderShell({
     title: "mjolnir / builder — run log",
     activeHref: "/builder/logs",
+    embed,
     body: `
 <div class="page-head"><div><h2>Run log</h2></div></div>
 <div class="panel">
@@ -313,7 +343,7 @@ export function createServer(pool, config) {
         const batchDetails = new Map();
         for (const b of batches) batchDetails.set(b.buildId, await occurrencesForBuild(pool, b.buildId));
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle));
+        return res.end(renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle, isEmbed(url)));
       }
       // Task 4.15: triggers 4.2-4.12 immediately, independent of the
       // schedule — a no-op if nothing is newly eligible (runPublish handles it).
@@ -325,7 +355,7 @@ export function createServer(pool, config) {
 
       if (req.method === "GET" && url.pathname === "/builder/schedule") {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderSchedulePage(await getSchedule(pool)));
+        return res.end(renderSchedulePage(await getSchedule(pool), isEmbed(url)));
       }
       if (req.method === "POST" && url.pathname === "/builder/api/schedule") {
         const schedule = await readJson(req);
@@ -338,7 +368,7 @@ export function createServer(pool, config) {
         const [jobs, selectedJob] = await Promise.all([recentBuildJobs(pool), jobId ? getBuildJob(pool, Number(jobId)) : null]);
         const logLines = selectedJob ? await jobLogLines(pool, selectedJob.id) : [];
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderLogsPage(jobs, selectedJob, logLines));
+        return res.end(renderLogsPage(jobs, selectedJob, logLines, isEmbed(url)));
       }
 
       res.writeHead(404, { "Content-Type": "text/plain" });

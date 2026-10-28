@@ -143,6 +143,28 @@ independent of any Docker restart.
 Logic bundle files live under `LOGIC_BUNDLE_DIR` (defaults to
 `<DATA_DIR>/logic`), content-addressed by sha256 — see `.env.example`.
 
+The bundle-workbench tool embedded at `/mjolnir/workbench` reads/writes its
+stored patches under `WORKBENCH_PATCHES_DIR`, which defaults to the repo's
+own `patches/` directory (resolved against hub's own install location, not
+its process `cwd`) — set this only if you want patches stored somewhere
+else. A patch saved through a locally-run `bundle-tool ui` session and one
+saved through the embedded workbench are the same directory by default, so
+either one sees what the other saved.
+
+## Unified console
+
+`https://<host>/mjolnir/console` presents Cards/Builder/OTA/Tools as
+sections of one page — each section is the exact same route as before,
+framed in, not a merge of hub's and builder's backend processes (they
+still run as separate containers, exactly as today). This relies on an
+existing, previously-implicit property: both services read
+`OPERATOR_AUTH_TOKEN` from the same `.env`, and both set/accept the same
+`operator_token` cookie at `Path=/` — so signing in on either one already
+authenticates the other. **If hub and builder are ever given different
+`OPERATOR_AUTH_TOKEN` values, the unified console's iframes will each
+need their own separate sign-in**, breaking the one-page illusion. Keep
+them equal unless you have a specific reason not to.
+
 ## Publishing and rolling back
 
 The normal path is now the browser: `https://<host>/mjolnir/ota` — drag-drop

@@ -1,4 +1,11 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Anchored to this module's own location, never `process.cwd()` — a
+// long-lived service's working directory is a deployment detail (docker
+// WORKDIR, systemd unit, whatever), not something a stored-data default
+// should depend on. `hub/src/config.js` -> repo root is two levels up.
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // Centralized env reading, mirroring builder/src/config.js's pattern.
 export function loadConfig() {
@@ -10,6 +17,12 @@ export function loadConfig() {
   // mutable working file for hub to read card content from; that now lives
   // in `card_content` (D-L3), queried directly (hub/src/cards.js).
   const logicBundleDir = process.env.LOGIC_BUNDLE_DIR || path.join(dataDir, "logic");
+  // D-C3: previously silently always `"patches"` (this field didn't even
+  // exist) resolved against hub's own `cwd` — a different directory than
+  // wherever a locally-run `bundle-tool` CLI session saved patches to.
+  // Absolute and cwd-independent by default; still overridable for a
+  // deployment that genuinely wants patches somewhere else.
+  const workbenchPatchesDir = process.env.WORKBENCH_PATCHES_DIR || path.join(REPO_ROOT, "patches");
   if (!publicBase) throw new Error("TUN_PUBLIC_BASE is required (passed through to the publish module)");
   // D-H6: not required — unset disables the operator-auth gate entirely
   // (local/dev ergonomics). Task 7.4's ordering constraint is the real
@@ -21,5 +34,5 @@ export function loadConfig() {
   // (cards-browser spec: "stabbur unreachable" tolerance extends to this
   // too, by the same logic: the ledger is always the source of truth for
   // *which* cards exist).
-  return { dataDir, publicBase, stabburUiBase, operatorAuthToken, logicBundleDir };
+  return { dataDir, publicBase, stabburUiBase, operatorAuthToken, logicBundleDir, workbenchPatchesDir };
 }

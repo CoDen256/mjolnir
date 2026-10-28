@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { exec } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -68,6 +69,30 @@ function sendJson(res, status, body) {
 
 function sendError(res, status, message) {
   sendJson(res, status, { error: message });
+}
+
+const MAX_UPLOAD_BYTES = 67108864; // 64 MiB — same ceiling the publish guards elsewhere already enforce (D48)
+
+// D-C4: raw bytes, not JSON — the generic `readJsonBody` below would try
+// (and fail) to `JSON.parse` a binary bundle upload, so the upload route is
+// special-cased in `createRequestHandler` to read via this instead, before
+// the generic JSON-body branch ever runs.
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (chunk) => {
+      total += chunk.length;
+      if (total > MAX_UPLOAD_BYTES) {
+        reject(new Error("upload exceeds 64 MiB"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
 }
 
 function readJsonBody(req) {
@@ -854,6 +879,23 @@ export function createRequestHandler({ patchesDir = DEFAULT_PATCHES_DIR, editorC
     if (!url.pathname.startsWith("/api/")) {
       serveStatic(req, res, url.pathname);
       return;
+    }
+
+    // D-C4: staged to a temp file, then opened exactly like a path-based
+    // session — zero duplicated session logic. Handled before the generic
+    // JSON-body branch below, since this body is raw bundle bytes, not JSON.
+    if (req.method === "POST" && url.pathname === "/api/sessions/upload") {
+      try {
+        const bytes = await readRawBody(req);
+        const rawFilename = req.headers["x-filename"] || "upload.bundle";
+        const safeName = path.basename(rawFilename).replace(/[^A-Za-z0-9._-]/g, "_") || "upload.bundle";
+        const tempPath = path.join(os.tmpdir(), `bundle-tool-upload-${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safeName}`);
+        fs.writeFileSync(tempPath, bytes);
+        const session = sessions.openByPath(tempPath);
+        return sendJson(res, 201, sessionSummary(session));
+      } catch (err) {
+        return sendError(res, 400, err.message);
+      }
     }
 
     const deckCardMatch = url.pathname.match(DECKCARD_PREFIX_PATTERN);

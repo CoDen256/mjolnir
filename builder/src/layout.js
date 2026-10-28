@@ -133,7 +133,22 @@ ${items.map((i) => `<a href="${i.href}" class="${i.href === activeHref ? "active
   ).join("\n");
 }
 
-export function renderShell({ title, activeHref, body }) {
+// D-C9: `embed=1` skips this page's own top-bar/rail entirely — see
+// `hub/src/layout.js`'s identical reasoning, for the unified console.
+export function renderShell({ title, activeHref, body, embed = false }) {
+  if (embed) {
+    return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<style>${STYLE}</style>
+</head>
+<body>
+<div class="content" style="padding: 16px;">${body}</div>
+</body>
+</html>`;
+  }
   return `<!doctype html>
 <html>
 <head>
@@ -145,6 +160,7 @@ export function renderShell({ title, activeHref, body }) {
 <div class="top-bar">
   <strong>mjølnir · builder</strong>
   <nav>
+    <a href="/mjolnir/console">← unified console</a>
     <a href="/mjolnir/ui">hub's Cards &amp; publish history →</a>
     <a href="/stabbur/ui">stabbur: notes &amp; grammar →</a>
   </nav>

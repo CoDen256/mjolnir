@@ -113,6 +113,29 @@ async function openBundlePath() {
   if (session) input.value = "";
 }
 
+// D-C4: no server-side path required — the bytes themselves are uploaded
+// and staged, then opened exactly like a path-based session. Uses `fetch`
+// directly (not the `api()` JSON helper) since the body here is raw bytes.
+async function openBundleFromFile(file) {
+  const errorEl = el("open-path-error");
+  errorEl.classList.add("hidden");
+  try {
+    const bytes = await file.arrayBuffer();
+    const res = await fetch("api/sessions/upload", {
+      method: "POST",
+      headers: { "X-Filename": file.name || "upload.bundle" },
+      body: bytes,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `upload failed (${res.status})`);
+    if (!app.sessions.some((s) => s.id === data.id)) app.sessions.push(data);
+    setActiveSession(data.id);
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+  }
+}
+
 // `?open=<path>` (hub's publish-history "inspect" link, and the Assemble
 // tab's own result panel) — auto-opens that exact bundle as a session and
 // switches straight to Explorer, instead of the operator having to
@@ -1136,6 +1159,20 @@ function init() {
   el("open-path-btn").addEventListener("click", openBundlePath);
   el("open-path-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") openBundlePath();
+  });
+
+  const uploadDz = el("upload-dropzone");
+  const uploadFileInput = el("upload-file-input");
+  uploadDz.addEventListener("dragover", (e) => { e.preventDefault(); uploadDz.classList.add("dragover"); });
+  uploadDz.addEventListener("dragleave", () => uploadDz.classList.remove("dragover"));
+  uploadDz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    uploadDz.classList.remove("dragover");
+    if (e.dataTransfer.files[0]) openBundleFromFile(e.dataTransfer.files[0]);
+  });
+  uploadFileInput.addEventListener("change", () => {
+    if (uploadFileInput.files[0]) openBundleFromFile(uploadFileInput.files[0]);
+    uploadFileInput.value = "";
   });
   el("active-session-select").addEventListener("change", (e) => setActiveSession(e.target.value));
 

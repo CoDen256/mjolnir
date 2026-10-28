@@ -49,6 +49,14 @@ describe("builder's HTTP server: forecast, schedule, and run-log pages all rende
     assert.match(html, /Forecast/);
     assert.match(html, /Publish now/);
     assert.match(html, /Past batches/);
+    assert.match(html, /← unified console/);
+  });
+
+  await t.test("GET /builder?embed=1 strips the top-bar/rail for the unified console's iframe", async () => {
+    const html = await (await fetch(`http://localhost:${port}/builder?embed=1`)).text();
+    assert.doesNotMatch(html, /class="top-bar"/);
+    assert.doesNotMatch(html, /class="rail"/);
+    assert.match(html, /Forecast/, "the page's own content still renders");
   });
 
   await t.test("GET /builder warns when no logic bundle is active yet", async () => {
