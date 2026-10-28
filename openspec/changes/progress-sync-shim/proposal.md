@@ -34,32 +34,23 @@ new code written specifically for migration.
 - **The shim's `.get()` never reports `exists: false`** — every write method
   in mod 2080 is unconditionally gated on `if (doc.exists)` with no `else`,
   so a false `exists` silently and permanently blocks every future write with
-  no error anywhere. The guarantee lives entirely server-side (`hub`'s `GET`
-  auto-creates on first touch) — not duplicated client-side, so it covers
-  every future device, not just the operator's current already-signed-in
-  session.
-- **New always-run startup module** (not gated on sign-in), with two small
-  jobs: (1) on first-ever launch, mint and permanently store a local device
-  id (independent of the uid — see schema below); (2) on every launch,
-  before redux-persist rehydrates, if local state has never been restored
-  and the server already has a doc for this `uid`, write it into
-  `persist:primary`. Needed because this device is already signed in and
-  won't replay the sign-in handlers on its own.
+  no error anywhere. Mirrors what the stock app already relies on
+  (`initUserData()`, called on every sign-in, idempotently creates the doc
+  if missing) — confirmed via `initUserData`'s own call sites (mods 2114,
+  2205).
+- **New always-run startup module** (not gated on sign-in) doing two things,
+  since this device is already signed in and won't replay the sign-in
+  handlers on its own: (1) idempotently ensure this `uid`'s doc exists on
+  `hub` — the same guarantee `initUserData()` gives, but not dependent on a
+  fresh sign-in event; (2) if local state has never been restored before and
+  the server already has a doc for this `uid`, write it into
+  `persist:primary` before redux-persist rehydrates.
 - **Sign-in-triggered restore keeps working unchanged** — mods 2114/2205
   aren't touched; `initUserData()` + `getUserData()` fire exactly as today,
   now against `hub` instead of Google's Firestore.
-- **New `hub` endpoints**: `GET/PATCH/POST/DELETE /mjolnir/userdata/{uid}`
-  (the device-facing contract, piggybacking device status per D31), plus
-  `hub.userdata` (uid-keyed) / `hub.userdata_history` (uid-keyed) /
-  `hub.device_state` (keyed by the locally-generated device id, **not**
-  the uid — two devices on one account must not overwrite each other's OTA/
-  audio state, and a retired device's last-known state needs to stay
-  inspectable).
-- **New `hub` operator console page**: progress and device/OTA state,
-  read-only, with independent "Account (uid)" / "Device ID" selectors
-  (since one account can carry several devices) and a per-card table that
-  shows each card's actual text, not just its id — see `design.md` D-S6 for
-  the full mockup.
+- **New `hub` endpoints**: `GET/PATCH/POST /mjolnir/userdata/{deviceId}` (the
+  device-facing contract, piggybacking device status per D31), plus
+  `hub.userdata` / `hub.userdata_history` / `hub.device_state` tables.
 - No separate migration script, endpoint, or one-time job.
 
 ## Capabilities
@@ -67,7 +58,6 @@ new code written specifically for migration.
 ### New Capabilities
 - `progress-sync-shim`: the mod 2080 patch and the new startup module.
 - `userdata-api`: `hub`'s device-facing sync endpoints and schema.
-- `userdata-console`: the operator-facing progress/device-state page.
 
 ### Modified Capabilities
 <!-- None. -->
@@ -78,8 +68,7 @@ new code written specifically for migration.
   always-run startup companion module (same append mechanism as the
   boot-ok companion).
 - `hub/src/` — new routes, new migration (`userdata`, `userdata_history`,
-  `device_state`), new operator console page reusing the Cards page's
-  `card_content` join pattern.
+  `device_state`).
 - No changes to `stabbur`, `smia`, `builder`'s pipeline, or the native patch.
 - Depends on nothing else proposed or in flight; independent of
   `builder-logic-bundle-store` and `audio-link-playback-minimal`.
