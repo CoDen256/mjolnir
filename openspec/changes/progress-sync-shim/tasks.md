@@ -97,3 +97,76 @@ automate or perform as part of these tasks.
       full existing `totalCards` history to `hub` (check
       `userdata`/`userdata_history` directly); a subsequent sign-in still
       completes normally.
+
+## 5. Follow-up: `device_state` keyed by device id, not uid (found building the console)
+
+Sections 1–4 shipped with `device_state.device_id` holding the same value as
+`userdata.device_id` — the real uid (confirmed: `hub/migrations/013_userdata
+.sql`'s own comment says so explicitly). Building the console's mockup
+(D-S6) surfaced why that's wrong: two devices on one account would overwrite
+each other's OTA/audio state, and a retired device's last-known state
+wouldn't survive a newer device's next sync — which defeats the console's
+Device ID selector before it's even built. See `design.md` D-S5/D-S6 for
+the full reasoning. This section is the fix, on top of already-shipped code,
+not a revision of sections 1–4's history.
+
+- [ ] 5.1 Migration `014_device_state_uid.sql`: add `device_state.uid TEXT
+      NOT NULL` (backfilled from the existing `device_id` column — those
+      pre-fix rows were accidentally keyed by uid, so `uid = device_id` is
+      the correct one-time backfill, not data loss) plus an index on `uid`.
+      `device_id` stays the primary key; going forward its values must be
+      real locally-generated device ids, never a uid.
+- [ ] 5.2 `hub/src/userdata.js`: the device-status write path now takes
+      `{ uid, deviceId, activeBuildId, ... }` and upserts `device_state`
+      keyed by `deviceId`, storing `uid` alongside it (needed for "list
+      every device for this account"). `hub/src/server.js`'s `PATCH`
+      handler reads `deviceId` from the request body — the uid still comes
+      from the URL path, exactly as today, for the `userdata` write.
+- [ ] 5.3 `patches/js/progress-sync-restore-companion.js`: on first-ever
+      launch (no local device-id marker yet), mint a random device id and
+      persist it; every subsequent piggybacked `PATCH` includes it as
+      `deviceId` in the body (D-S4's "two small jobs" revision).
+- [ ] 5.4 Tests: two `PATCH` requests with the same uid but different
+      `deviceId`s produce two separate `device_state` rows; a `deviceId`
+      that stops sending requests keeps its last-written row unchanged
+      (not overwritten by a different device's later sync); the backfill
+      migration populates `uid` correctly for any pre-existing row.
+
+## 6. `userdata-console`: the operator page
+
+Builds the page mocked up at
+**https://claude.ai/code/artifact/12b08e2e-0eba-4990-8125-584a71c7046a** —
+read `design.md` D-S6 alongside this section before writing any markup; the
+mockup is the source of truth for layout, not a rough sketch to improve on.
+
+- [ ] 6.1 `hub/src/userdata.js` (or a sibling): `listAccounts()` (every
+      distinct `userdata.device_id`/uid — in practice one, for this
+      operator, but the selector should not assume exactly one),
+      `listDevicesForAccount(uid)` (every `device_state` row with that
+      `uid`, including ones no longer actively syncing), `perCardProgress
+      (uid)` (join `userdata.doc.totalCards` against `card_content` by card
+      id — same join shape as `hub/src/cards.js`'s `cardsList`, reused not
+      reinvented), `historyDeltas(uid, {limit})` (each `userdata_history`
+      row summarized against its predecessor: session-count delta,
+      `totalCards.length` delta — not a full document diff).
+- [ ] 6.2 `hub/src/server.js`: `GET /mjolnir/device` (or similar — route
+      name TBD), rendering the identity bar (two independent selects, per
+      the mockup), stat row (last synced, active build, audio cached with a
+      completeness-colored pill, last fetch error pill), progress snapshot
+      panel (plain label/value pairs + raw-JSON toggle), per-card progress
+      table (Card id + **Content** column from `card_content`'s stripped
+      N/E text + Side chip + Deck + Stage + Status pill + Type + Last
+      reviewed — labeled "Side," never "language," per the `C1` correction),
+      and sync history timeline (delta summaries, raw doc per row behind a
+      toggle).
+- [ ] 6.3 Add "Device" to `hub/src/layout.js`'s `NAV` groups, linking to the
+      new page.
+- [ ] 6.4 Tests: the per-card table's Content column renders stripped text
+      matching what the Cards page would show for the same card id; the
+      identity bar's device selector includes a device with no rows in the
+      last N days (a "retired" device), and selecting it swaps only the
+      device/OTA panels, leaving the progress panels on the selected
+      account unchanged.
+- [ ] 6.5 If anything here contradicts or refines `design.md` D-S6 during
+      implementation, record it as an ADR amendment in
+      `tun/docs/07-decisions.md`, per this project's established practice.

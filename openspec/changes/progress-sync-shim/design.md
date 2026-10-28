@@ -48,6 +48,9 @@ Confirmed directly from source:
 - Replicate the real restore trigger (sign-in) *and* add a startup-time
   equivalent, since this device won't replay sign-in on its own.
 - Zero new code specifically for migration — the existing write paths do it.
+- A `hub` operator console page (D-S6) for reading progress/device state —
+  read-only, no write actions, so the operator can see sync is actually
+  working without a shell or `psql`.
 
 **Non-Goals:**
 - Changing Firebase Auth / sign-in itself — untouched, still the real Google/
@@ -55,8 +58,11 @@ Confirmed directly from source:
 - An admin-side pull from the vendor's actual Firestore — confirmed
   unnecessary: local storage already has everything, per `05-sync.md`'s own
   "Firestore is pure backup" finding.
-- A UI for any of this — matches D13 ("no new UI inside Mjølnir"); the
-  startup module is headless.
+- Any new screen **inside the Mjølnir app itself** — matches D13 ("no new UI
+  inside Mjølnir"); the startup module is headless. (D-S6's console is a
+  `hub` operator page, a different surface entirely — D13 doesn't apply to
+  it, same as it's never applied to the Cards/OTA/Builder pages already
+  shipped.)
 
 ## Decisions
 
@@ -114,13 +120,18 @@ timestamp field) as an object with a `.toDate()` method, not a bare `Date` —
 `updateSessionUserData` calls `.toDate()` directly on it (confirmed reading
 the source) — matching `05-sync.md`'s already-identified requirement.
 
-### D-S4 — The new startup module only does restore; it does NOT duplicate the exists-guarantee
+### D-S4 — The new startup module does restore, plus minting a local device id; it does NOT duplicate the exists-guarantee
 
 Given D-S2 moves the exists-guarantee server-side, the new always-run
 startup module (appended the same way `boot-ok-companion.js` is, per
-`src/commands/companion.js`) has exactly one job:
+`src/commands/companion.js`) has two small jobs:
 
 ```
+on first-ever launch (no local device-id marker yet):
+    generate a random device id, write it to AsyncStorage, keep it forever
+    — this is the id D-S5's device_state is keyed by; independent of the
+    uid, never regenerated, survives sign-out/sign-in on the same device
+
 on every launch, before redux-persist rehydrates:
     if no local restore-marker:
         GET /mjolnir/userdata/{uid}   (uid read from the same AsyncStorage/
@@ -136,6 +147,11 @@ on every launch, before redux-persist rehydrates:
         write the restore-marker either way (never repeat this check)
 ```
 
+The device id never touches `userdata`/progress — it only ever rides along
+in the piggybacked device-status fields (D-S5) so `device_state` rows stay
+one-per-physical-install, independent of which account happens to be signed
+in on it.
+
 Sign-in-triggered restore (`initUserData()` + `getUserData()`, mods 2114/
 2205) stays completely untouched and keeps working exactly as today,
 against the new backend instead of Google's — per the operator's explicit
@@ -143,22 +159,74 @@ against the new backend instead of Google's — per the operator's explicit
 *additional* path for the case sign-in won't replay (already-authenticated
 sessions, future silent-session-restore on reinstall).
 
-### D-S5 — `hub` schema: `userdata` / `userdata_history` / `device_state`
+### D-S5 — `hub` schema: `userdata` (uid-keyed) / `userdata_history` / `device_state` (device-id-keyed)
 
-Exactly as `05-sync.md` already specified:
+Refined from `05-sync.md`'s single-key sketch once the console mockup
+(D-S6) made the consequence concrete: `userdata` is keyed by the real
+Firebase `uid` (D-S1 — progress must follow the account across devices),
+but `device_state` is keyed by a **separate, locally-generated device id**,
+not the uid:
 
 ```sql
-hub.userdata(device_id PK, doc JSONB, updated_at)
-hub.userdata_history(id, device_id, doc JSONB, at)   -- append-only, every sync
-hub.device_state(device_id, active_build_id, pending_build_id,
+hub.userdata(uid PK, doc JSONB, updated_at)
+hub.userdata_history(id, uid, doc JSONB, at)   -- append-only, every sync
+hub.device_state(device_id PK, uid, active_build_id, pending_build_id,
                  audio_cached, audio_total, last_error, seen_at)
 ```
 
+If `device_state` were also uid-keyed, two devices signed into the same
+account would overwrite each other's row — fine for `userdata` (that's the
+desired merge), wrong here, since "which build is *this phone* on" and "how
+much audio has *this phone* cached" are physically local facts. A retired
+device's last-known state would also be unrecoverable the moment a new
+device's PATCH landed, which defeats the Device ID selector's entire
+purpose (D-S6) — selecting a retired device needs a row that's still there
+to select. `device_state.uid` is kept as a foreign-key-shaped column (not
+unique) so the console can list every device ever seen for a given account.
+
 `userdata_history` gets a row on every PATCH/POST — "last-write-wins storage
 is not a backup" (05-sync.md). Device status piggybacks on the same PATCH
-payload (D31) rather than a separate endpoint — `activeBuildId`,
-`pendingBuildId`, `audioCached`, `audioTotal`, `lastFetchError` ride along,
-written into `device_state` server-side from the same request body.
+payload (D31) rather than a separate endpoint — the request body now also
+carries `deviceId` (generated once by the startup module, task 3.1, and
+persisted locally — not derived from the uid) alongside `activeBuildId`,
+`pendingBuildId`, `audioCached`, `audioTotal`, `lastFetchError`; `hub` writes
+`userdata` keyed by the path's uid and `device_state` keyed by the body's
+`deviceId`, from the same request.
+
+### D-S6 — The console: two independent identity selectors, card content joined in
+
+A static mockup was built and approved before writing this down:
+**https://claude.ai/code/artifact/12b08e2e-0eba-4990-8125-584a71c7046a**
+— read alongside this section, same convention as `13-operator-console-ux.md`'s
+own linked mockup.
+
+The page (`/mjolnir/device` or similar — exact route TBD at implementation)
+has:
+
+- **An identity bar with two independent selectors**: "Account (uid)" and
+  "Device ID." They're deliberately not one combined picker — an account can
+  carry several devices (the operator's own stated expectation: "I will
+  most likely swap devices in the future"), and a device's last-known state
+  should stay inspectable after it's no longer the active one. Progress
+  (the panels below) follows whichever uid is selected; OTA/audio state
+  follows whichever device id is selected — independently, per D-S5's
+  split schema.
+- **Stat row**: last synced, active build (+ label), audio cached (`142 /
+  150`, pill-colored by completeness), last fetch error (pill).
+- **Progress snapshot**: plain label/value pairs from the `userdata` JSONB
+  (completed sessions, consistency rate, archived/in-progress counts,
+  account-since, last session) — a raw-JSON toggle underneath for anything
+  not worth a dedicated field.
+- **Per-card progress table**: `totalCards` records joined against
+  `card_content` (same join `hub/src/cards.js`'s `cardsList` already does
+  for the Cards page) — a **Content** column shows the card's stripped N/E
+  text so a row reads as "hus — a house," not just "C20001." Without this,
+  the table is a wall of ids with no way to tell what's actually being
+  reviewed. "Side" labels the stored `language` field plainly — never
+  "language" in the UI, matching the `C1` correction.
+- **Sync history**: a timeline of `userdata_history` rows rendered as
+  diffs against the previous row (`completedSessions 46 → 47`, `totalCards
+  +2`), not raw JSON per row — a full dump stays one click away.
 
 ## Risks / Trade-offs
 
