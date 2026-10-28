@@ -10,21 +10,21 @@ them — this change extends shipped code, it doesn't re-derive it.
 
 ## 1. `device_state` per-device key
 
-- [ ] 1.1 Migration: `device_state.uid TEXT`, backfilled from the existing
+- [x] 1.1 Migration: `device_state.uid TEXT`, backfilled from the existing
       `device_id` column (every pre-existing row's `device_id` was actually
       a uid — `uid = device_id` is the correct one-time correction, not a
       general pattern), then `NOT NULL`; index on `uid`.
-- [ ] 1.2 `hub/src/userdata.js`: the device-status write path accepts
+- [x] 1.2 `hub/src/userdata.js`: the device-status write path accepts
       `{ deviceId, activeBuildId, pendingBuildId, audioCached, audioTotal,
       lastFetchError }` from the request body and upserts `device_state`
       keyed by `deviceId`, storing the path's uid into `device_state.uid`
       alongside it.
-- [ ] 1.3 `hub/src/server.js`: `PATCH /mjolnir/userdata/:uid` reads
+- [x] 1.3 `hub/src/server.js`: `PATCH /mjolnir/userdata/:uid` reads
       `deviceId` from the body (required for the device-status half of the
       payload; absent `deviceId` simply skips the `device_state` write,
       same as today's behavior if no device-status fields are present at
       all).
-- [ ] 1.4 Tests: two `PATCH`s with the same uid but different `deviceId`s
+- [x] 1.4 Tests: two `PATCH`s with the same uid but different `deviceId`s
       produce two separate `device_state` rows; a device that stops sending
       requests keeps its last-written row unchanged when a different
       device's later sync arrives; the backfill populates `uid` correctly
@@ -32,11 +32,11 @@ them — this change extends shipped code, it doesn't re-derive it.
 
 ## 2. Restore companion mints a device id
 
-- [ ] 2.1 `patches/js/progress-sync-restore-companion.js`: on first-ever
+- [x] 2.1 `patches/js/progress-sync-restore-companion.js`: on first-ever
       launch (no local device-id marker), generate a random id and persist
       it permanently (independent of, never derived from, the signed-in
       uid). Every subsequent piggybacked `PATCH` includes it as `deviceId`.
-- [ ] 2.2 Tests: the device id is generated exactly once and stays stable
+- [x] 2.2 Tests: the device id is generated exactly once and stays stable
       across subsequent launches, including a sign-out/sign-in on the same
       device.
 
@@ -47,7 +47,7 @@ Build exactly to the mockup —
 read `design.md` in full first; the mockup is the source of truth for
 layout, not a sketch to improve on.
 
-- [ ] 3.1 `hub/src/userdata.js` (or a sibling module): `listAccounts()`
+- [x] 3.1 `hub/src/userdata.js` (or a sibling module): `listAccounts()`
       (every distinct `userdata` uid), `listDevicesForAccount(uid)` (every
       `device_state` row with that `uid`, including ones no longer actively
       syncing, per D-C1's Open Question — include devices with no
@@ -58,7 +58,7 @@ layout, not a sketch to improve on.
       `historyDeltas(uid, {limit})` (each `userdata_history` row summarized
       against its predecessor: session-count delta, `totalCards.length`
       delta — not a full document diff).
-- [ ] 3.2 `hub/src/server.js`: `GET /mjolnir/device` (route name TBD),
+- [x] 3.2 `hub/src/server.js`: `GET /mjolnir/device` (route name TBD),
       rendering: identity bar (two independent selects), stat row (last
       synced, active build, audio cached with a completeness-colored pill,
       last fetch error pill), progress snapshot panel (plain label/value
@@ -67,9 +67,9 @@ layout, not a sketch to improve on.
       + Status pill + Type + Last reviewed — labeled "Side," never
       "language"), sync history timeline (delta summaries, raw doc per row
       behind a toggle).
-- [ ] 3.3 Add "Device" to `hub/src/layout.js`'s `NAV` groups, linking to
+- [x] 3.3 Add "Device" to `hub/src/layout.js`'s `NAV` groups, linking to
       the new page.
-- [ ] 3.4 Tests: the Content column renders a card's `N` text for both its
+- [x] 3.4 Tests: the Content column renders a card's `N` text for both its
       `N`-side and `E`-side rows identically; the identity bar's device
       selector includes a device with no recent activity (a "retired"
       device), and selecting it swaps only the device/OTA panels, leaving
@@ -77,10 +77,10 @@ layout, not a sketch to improve on.
 
 ## 4. Sign-off
 
-- [ ] 4.1 Re-run `progress-sync-shim`'s existing `hub/test/userdata.test.js`
+- [x] 4.1 Re-run `progress-sync-shim`'s existing `hub/test/userdata.test.js`
       and `test/unit/progressSyncRestoreCompanion.test.js` suites in full —
       this change touches code both already exercise.
-- [ ] 4.2 If anything here contradicts or refines `design.md` during
+- [x] 4.2 If anything here contradicts or refines `design.md` during
       implementation, record it as an ADR amendment in
       `tun/docs/07-decisions.md`, per this project's established practice.
 - [ ] 4.3 **(Operator, outside this change)** Apply the updated

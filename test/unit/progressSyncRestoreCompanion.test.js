@@ -20,11 +20,12 @@ const MOD_DECKS_LOGIC = 2110;
 // `__r`/`fetch`, both installed as real globals the same way the real app
 // provides them (`boot-ok-companion.js`'s own pattern). Returns the
 // recorded dispatch calls, fetch calls, and AsyncStorage marker writes.
-async function runCompanion({ marker = null, uid = "uid-1", docResponse = {} } = {}) {
+async function runCompanion({ marker = null, deviceId = null, uid = "uid-1", docResponse = {} } = {}) {
   const dispatched = [];
   const asyncStorageWrites = [];
   const initDecksStatusCalls = [];
   const fetchCalls = [];
+  const storageState = { "mjolnir-sync-restore-done": marker, "mjolnir-device-id": deviceId };
 
   const store = {
     getState: () => ({ deckStats: { decks_info: [{ ID: "C20", PullCounter: 3 }] } }),
@@ -57,8 +58,9 @@ async function runCompanion({ marker = null, uid = "uid-1", docResponse = {} } =
   const registry = {
     [MOD_ASYNC_STORAGE]: {
       default: {
-        getItem: async (key) => (key === "mjolnir-sync-restore-done" ? marker : null),
+        getItem: async (key) => (key in storageState ? storageState[key] : null),
         setItem: async (key, value) => {
+          storageState[key] = value;
           asyncStorageWrites.push({ key, value });
         },
       },
@@ -88,17 +90,59 @@ async function runCompanion({ marker = null, uid = "uid-1", docResponse = {} } =
   // as the real app calling it) — give it a tick to settle before asserting.
   await new Promise((resolve) => setTimeout(resolve, 20));
 
+  const globalDeviceId = globalThis.MJOLNIR_DEVICE_ID;
   delete global.__r;
   delete global.fetch;
+  delete globalThis.MJOLNIR_DEVICE_ID;
 
-  return { dispatched, asyncStorageWrites, initDecksStatusCalls, fetchCalls };
+  return {
+    dispatched,
+    asyncStorageWrites,
+    initDecksStatusCalls,
+    fetchCalls,
+    globalDeviceId,
+    deviceIdWrites: asyncStorageWrites.filter((w) => w.key === "mjolnir-device-id"),
+    markerWrites: asyncStorageWrites.filter((w) => w.key === "mjolnir-sync-restore-done"),
+  };
 }
 
-test("progress-sync-restore-companion: a device with an existing restore marker takes no action at all (D-S4)", async () => {
-  const { dispatched, asyncStorageWrites, fetchCalls } = await runCompanion({ marker: "1" });
+test("progress-sync-restore-companion: a device with an existing restore marker takes no restorative action, but still mints a device id if none exists yet (D-S4/D-C2)", async () => {
+  const { dispatched, fetchCalls, markerWrites, deviceIdWrites, globalDeviceId } = await runCompanion({ marker: "1" });
   assert.equal(fetchCalls.length, 0);
   assert.equal(dispatched.length, 0);
-  assert.equal(asyncStorageWrites.length, 0); // doesn't even rewrite the marker — it's a no-op once set
+  assert.equal(markerWrites.length, 0); // doesn't even rewrite the marker — it's a no-op once set
+  // Device-id minting is independent of the restore-marker flow — it still
+  // runs on this launch, since no device id was persisted yet.
+  assert.equal(deviceIdWrites.length, 1);
+  assert.equal(globalDeviceId, deviceIdWrites[0].value);
+});
+
+test("progress-sync-restore-companion: an existing restore marker AND an existing device id — no action of any kind", async () => {
+  const { dispatched, fetchCalls, asyncStorageWrites, globalDeviceId } = await runCompanion({
+    marker: "1",
+    deviceId: "already-minted-id",
+  });
+  assert.equal(fetchCalls.length, 0);
+  assert.equal(dispatched.length, 0);
+  assert.equal(asyncStorageWrites.length, 0);
+  assert.equal(globalDeviceId, "already-minted-id");
+});
+
+test("progress-sync-restore-companion (D-C2): a device id is minted exactly once and stays stable across subsequent launches, including a sign-out/sign-in", async () => {
+  const first = await runCompanion({ marker: "1" });
+  assert.equal(first.deviceIdWrites.length, 1);
+  const mintedId = first.deviceIdWrites[0].value;
+
+  // A later launch, already signed out (no uid) — the persisted id must be
+  // read back unchanged, not re-minted.
+  const second = await runCompanion({ marker: "1", deviceId: mintedId, uid: null });
+  assert.equal(second.deviceIdWrites.length, 0);
+  assert.equal(second.globalDeviceId, mintedId);
+
+  // Signing back in on the same physical device — still the same id.
+  const third = await runCompanion({ marker: "1", deviceId: mintedId, uid: "uid-1" });
+  assert.equal(third.deviceIdWrites.length, 0);
+  assert.equal(third.globalDeviceId, mintedId);
 });
 
 test("progress-sync-restore-companion: no marker, a real server document — restores via the same action creators mod 2205 uses, then sets the marker", async () => {
@@ -116,8 +160,9 @@ test("progress-sync-restore-companion: no marker, a real server document — res
     hasSeenMjolnirWay: { firstPage: true, lastPage: true },
     decksStatus: [{ ID: "C21", PullCounter: 1 }],
   };
-  const { dispatched, asyncStorageWrites, initDecksStatusCalls, fetchCalls } = await runCompanion({
+  const { dispatched, markerWrites, initDecksStatusCalls, fetchCalls } = await runCompanion({
     marker: null,
+    deviceId: "already-minted-id",
     docResponse: doc,
   });
 
@@ -147,29 +192,38 @@ test("progress-sync-restore-companion: no marker, a real server document — res
   assert.deepEqual(initDecksStatusCalls[0].current, [{ ID: "C20", PullCounter: 3 }]);
   assert.deepEqual(initDecksStatusCalls[0].incoming, doc.decksStatus);
 
-  assert.deepEqual(asyncStorageWrites, [{ key: "mjolnir-sync-restore-done", value: "1" }]);
+  assert.deepEqual(markerWrites, [{ key: "mjolnir-sync-restore-done", value: "1" }]);
 });
 
 test("progress-sync-restore-companion: a doc that is only this call's own auto-creation is not restored, but the marker is still set (D-S2/D-S4)", async () => {
-  const { dispatched, asyncStorageWrites, fetchCalls } = await runCompanion({
+  const { dispatched, markerWrites, fetchCalls } = await runCompanion({
     marker: null,
+    deviceId: "already-minted-id",
     docResponse: { completedSessions: 0, totalCards: [], _justCreated: true },
   });
   assert.equal(fetchCalls.length, 1);
   assert.equal(dispatched.length, 0);
-  assert.deepEqual(asyncStorageWrites, [{ key: "mjolnir-sync-restore-done", value: "1" }]);
+  assert.deepEqual(markerWrites, [{ key: "mjolnir-sync-restore-done", value: "1" }]);
 });
 
 test("progress-sync-restore-companion: not signed in — no fetch at all, marker still set (mirrors mod 2080's own unhandled currentUser gap, D-S1)", async () => {
-  const { dispatched, fetchCalls, asyncStorageWrites } = await runCompanion({ marker: null, uid: null });
+  const { dispatched, fetchCalls, markerWrites } = await runCompanion({
+    marker: null,
+    deviceId: "already-minted-id",
+    uid: null,
+  });
   assert.equal(fetchCalls.length, 0);
   assert.equal(dispatched.length, 0);
-  assert.deepEqual(asyncStorageWrites, [{ key: "mjolnir-sync-restore-done", value: "1" }]);
+  assert.deepEqual(markerWrites, [{ key: "mjolnir-sync-restore-done", value: "1" }]);
 });
 
 test("progress-sync-restore-companion: the check never repeats once the marker is set — a second run with a marker present does nothing", async () => {
-  const first = await runCompanion({ marker: null, docResponse: { completedSessions: 3, totalCards: [] } });
-  assert.equal(first.asyncStorageWrites.length, 1);
+  const first = await runCompanion({
+    marker: null,
+    deviceId: "already-minted-id",
+    docResponse: { completedSessions: 3, totalCards: [] },
+  });
+  assert.equal(first.markerWrites.length, 1);
 
   const second = await runCompanion({ marker: "1", docResponse: { completedSessions: 3, totalCards: [] } });
   assert.equal(second.fetchCalls.length, 0);

@@ -19,7 +19,17 @@ import { DECK_ALLOCATION } from "./decks.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
 import { slugify } from "./slug.js";
-import { getOrCreate, merge, replace, remove, updateDeviceState } from "./userdata.js";
+import {
+  getOrCreate,
+  merge,
+  replace,
+  remove,
+  updateDeviceState,
+  listAccounts,
+  listDevicesForAccount,
+  perCardProgress,
+  historyDeltas,
+} from "./userdata.js";
 import { createRequestHandler as createWorkbenchHandler } from "../../src/commands/ui.js";
 // D109: builder's own pages are rendered here directly, in-process — same
 // monorepo, same shared Postgres (D-P3) — instead of the earlier iframe-
@@ -368,6 +378,224 @@ document.querySelectorAll('.card-preview-toggle').forEach((btn) => {
   });
 });
 </script>`,
+  });
+}
+
+// ---- Device sync (userdata-console) ----
+
+// Built exactly to the approved mockup
+// (https://claude.ai/code/artifact/12b08e2e-0eba-4990-8125-584a71c7046a) —
+// classes not already in layout.js's shared STYLE, lifted verbatim from
+// that mockup's own <style> block.
+const DEVICE_PAGE_STYLE = `
+.identity-bar { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; padding: 14px 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 16px; }
+.identity-bar .field select { font-family: var(--mono); min-width: 230px; }
+.identity-bar .hint { align-self: center; font-size: 12px; color: var(--text-faint); margin-left: auto; max-width: 260px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; color: var(--text-faint); }
+.stat .value .unit { font-size: 13px; font-weight: 600; color: var(--text-dim); font-family: var(--sans); }
+.snap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px 24px; }
+.snap-item .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); font-weight: 600; }
+.snap-item .value { font-size: 16px; font-weight: 650; margin-top: 4px; font-family: var(--mono); }
+.snap-item .value.prose { font-family: var(--sans); font-weight: 600; font-size: 14px; }
+.chip { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; font-family: var(--mono); padding: 1px 6px; border-radius: 4px; background: var(--border-soft); color: var(--text-dim); }
+.pill-accent { background: var(--accent-soft); color: var(--accent-text); }
+details.json-toggle summary { cursor: pointer; font-size: 12.5px; color: var(--text-dim); padding: 4px 0; list-style: none; }
+details.json-toggle summary::-webkit-details-marker { display: none; }
+details.json-toggle summary::before { content: "▸"; display: inline-block; margin-right: 6px; transition: transform .15s ease; color: var(--text-faint); }
+details.json-toggle[open] summary::before { transform: rotate(90deg); }
+details.json-toggle pre { margin: 8px 0 0; padding: 12px 14px; background: var(--bg-sunken); border: 1px solid var(--border-soft); border-radius: var(--radius); font-size: 12px; overflow-x: auto; color: var(--text-dim); }
+.tl-delta { font-family: var(--mono); }
+.tl-delta.up { color: var(--ok); }
+.tl-delta.flat { color: var(--text-faint); }
+`;
+
+function timeAgo(date) {
+  if (!date) return "never";
+  const ms = Date.now() - new Date(date).getTime();
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  return `${Math.floor(days / 7)}w ago`;
+}
+
+// D-C3: Status is derived, not stored — "brand new" wins whenever the
+// scheduler's own Type says so (a just-minted occurrence), otherwise Park/
+// Graduated/default, matching the mockup's own worked examples exactly.
+function cardStatusPill(card) {
+  if (card.type === "brand") return `<span class="pill pill-accent">brand new</span>`;
+  if (card.park) return `<span class="pill pill-warn">parked</span>`;
+  if (card.graduated) return `<span class="pill pill-neutral">graduated</span>`;
+  return `<span class="pill pill-ok">active</span>`;
+}
+
+function perCardRowHtml(card) {
+  return `<tr>
+    <td class="mono">${escapeHtml(card.id)}</td>
+    <td class="wrap">${card.content ? escapeHtml(stripHtml(card.content)) : ""}</td>
+    <td><span class="chip">${escapeHtml(card.side ?? "")}</span></td>
+    <td>${escapeHtml(card.deckTitle || card.deckCode || "")}</td>
+    <td class="num">${card.stage ?? ""}</td>
+    <td>${cardStatusPill(card)}</td>
+    <td class="dim">${escapeHtml(card.type || "")}</td>
+    <td class="dim">${timeAgo(card.lastReviewedAt)}</td>
+  </tr>`;
+}
+
+function historyRowHtml(entry) {
+  const dot = entry.title === "Account deleted" ? "warn" : entry.title === "Synced" ? "" : "ok";
+  const details = entry.detail
+    .map((d) =>
+      d.up === null
+        ? `<span>${escapeHtml(d.label)} <span class="tl-delta flat">${escapeHtml(d.text)}</span></span>`
+        : `<span>${escapeHtml(d.label)} <span class="tl-delta ${d.up ? "up" : "flat"}">${escapeHtml(d.text)}</span></span>`
+    )
+    .join("\n");
+  return `<div class="tl-row">
+    <div class="tl-time">${timeAgo(entry.at)}</div>
+    <div class="tl-rail"><div class="tl-dot ${dot}"></div></div>
+    <div>
+      <div class="tl-title">${escapeHtml(entry.title)}</div>
+      ${details ? `<div class="tl-detail">${details}</div>` : ""}
+      <details class="json-toggle" style="margin-top:4px;">
+        <summary>raw doc</summary>
+        <pre>${escapeHtml(JSON.stringify(entry.doc, null, 2))}</pre>
+      </details>
+    </div>
+  </div>`;
+}
+
+function renderDevicePage({ accounts, selectedUid, devices, selectedDeviceId, doc, perCard, history, activePublication }) {
+  if (accounts.length === 0) {
+    return renderShell({
+      title: "mjolnir / hub — device sync",
+      activeHref: "/mjolnir/device",
+      body: `<style>${DEVICE_PAGE_STYLE}</style>
+<div class="page-head"><div><h2>Device sync</h2><div class="page-sub">Progress and OTA state reported by the signed-in device, kept as a mirror — this view is read-only.</div></div></div>
+<div class="panel panel-pad">No accounts have synced yet.</div>`,
+    });
+  }
+
+  const selectedDevice = devices.find((d) => d.deviceId === selectedDeviceId) || devices[0] || null;
+  const accountOptions = accounts
+    .map((uid) => `<option value="${escapeHtml(uid)}" ${uid === selectedUid ? "selected" : ""}>${escapeHtml(uid)}${accounts.length === 1 ? " — only account on record" : ""}</option>`)
+    .join("");
+  const deviceOptions = devices.length
+    ? devices
+        .map(
+          (d) =>
+            `<option value="${escapeHtml(d.deviceId)}" ${d.deviceId === selectedDeviceId ? "selected" : ""}>${escapeHtml(d.deviceId)} — last seen ${timeAgo(d.seenAt)}</option>`
+        )
+        .join("")
+    : `<option disabled selected>no devices yet</option>`;
+
+  const audioPending = selectedDevice && selectedDevice.audioTotal != null ? selectedDevice.audioTotal - (selectedDevice.audioCached ?? 0) : null;
+  const buildSub = (buildId, pub) => {
+    if (!buildId) return "";
+    return pub ? `base ${escapeHtml(pub.base_version)} · logic ${pub.patch_rev} · data ${pub.data_rev}` : "";
+  };
+
+  const snapGrid = doc
+    ? `<div class="snap-grid">
+        <div class="snap-item"><div class="label">Completed sessions</div><div class="value">${doc.completedSessions ?? 0}</div></div>
+        <div class="snap-item"><div class="label">Consistency rate</div><div class="value">${doc.consistencyRate ?? "—"}</div></div>
+        <div class="snap-item"><div class="label">Cards in progress</div><div class="value">${doc.inProgressCards ?? 0}</div></div>
+        <div class="snap-item"><div class="label">Cards archived</div><div class="value">${doc.archivedCards ?? 0}</div></div>
+        <div class="snap-item"><div class="label">Account since</div><div class="value">${doc.accountCreationDate ? escapeHtml(String(doc.accountCreationDate).slice(0, 10)) : "—"}</div></div>
+        <div class="snap-item"><div class="label">Last completed session</div><div class="value prose">${doc.lastCompletedSession ? timeAgo(doc.lastCompletedSession) : "—"}</div></div>
+      </div>`
+    : `<div class="inline-note">No userdata document for this account yet.</div>`;
+
+  const perCardRows = perCard.map(perCardRowHtml).join("\n");
+  const historyRows = history.map(historyRowHtml).join("\n");
+
+  return renderShell({
+    title: "mjolnir / hub — device sync",
+    activeHref: "/mjolnir/device",
+    body: `<style>${DEVICE_PAGE_STYLE}</style>
+<div class="page-head">
+  <div>
+    <h2>Device sync</h2>
+    <div class="page-sub">Progress and OTA state reported by the signed-in device, kept as a mirror — this view is read-only.</div>
+  </div>
+  <a class="btn btn-ghost" href="/mjolnir/device?uid=${encodeURIComponent(selectedUid)}${selectedDeviceId ? `&device=${encodeURIComponent(selectedDeviceId)}` : ""}">↻ Refresh</a>
+</div>
+
+<form method="GET" action="/mjolnir/device">
+  <div class="identity-bar">
+    <div class="field">
+      <label>Account (uid)</label>
+      <select name="uid" onchange="this.form.submit()">${accountOptions}</select>
+    </div>
+    <div class="field">
+      <label>Device ID</label>
+      <select name="device" onchange="this.form.submit()" ${devices.length === 0 ? "disabled" : ""}>${deviceOptions}</select>
+    </div>
+    <div class="hint">Progress (below) follows the account across devices; OTA/audio state above is reported by whichever device is selected here.</div>
+  </div>
+</form>
+
+<div class="stat-row">
+  <div class="stat">
+    <div class="label">Last synced</div>
+    <div class="value">${selectedDevice ? timeAgo(selectedDevice.seenAt) : "—"}</div>
+    <div class="sub mono">${selectedDevice ? escapeHtml(new Date(selectedDevice.seenAt).toISOString()) : ""}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Active build</div>
+    <div class="value mono">${selectedDevice && selectedDevice.activeBuildId ? escapeHtml(selectedDevice.activeBuildId) : "—"}</div>
+    <div class="sub">${selectedDevice ? buildSub(selectedDevice.activeBuildId, activePublication) : ""}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Audio cached</div>
+    <div class="value">${selectedDevice && selectedDevice.audioTotal != null ? `${selectedDevice.audioCached ?? 0}<span class="unit">/ ${selectedDevice.audioTotal}</span>` : "—"}</div>
+    <div class="sub">${audioPending ? `<span class="pill pill-warn">${audioPending} pending</span>` : audioPending === 0 ? `<span class="pill pill-ok">complete</span>` : ""}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Last fetch error</div>
+    <div class="value" style="font-size:15px; font-family: var(--sans);">${selectedDevice && selectedDevice.lastError ? `<span class="pill pill-err">error</span>` : `<span class="pill pill-ok">none</span>`}</div>
+    <div class="sub">${selectedDevice && selectedDevice.lastError ? escapeHtml(selectedDevice.lastError) : "checked every sync"}</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <div><h3>Progress snapshot</h3><div class="page-sub">From the device's current <code>userdata</code> document.</div></div>
+  </div>
+  <div class="panel-pad">
+    ${snapGrid}
+    ${doc ? `<details class="json-toggle" style="margin-top:16px;"><summary>raw doc</summary><pre>${escapeHtml(JSON.stringify(doc, null, 2))}</pre></details>` : ""}
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <div><h3>Per-card progress</h3><div class="page-sub">Every occurrence with SRS state, joined against card content — ${perCard.length} rows.</div></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Card</th><th>Content</th><th>Side</th><th>Deck</th><th class="num">Stage</th><th>Status</th><th>Type</th><th>Last reviewed</th></tr></thead>
+      <tbody>${perCardRows || `<tr><td colspan="8">no per-card progress recorded yet</td></tr>`}</tbody>
+    </table>
+  </div>
+  <div class="panel-pad" style="padding-top:12px; padding-bottom:14px;">
+    <div class="inline-note">"Content" is always the card's <strong>N</strong> field (stripped of HTML), the same for every row regardless of which side was reviewed — N identifies the card, E is only ever the answer. "Side" is the stored direction letter (N/E/A), never an actual language.</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <div><h3>Sync history</h3><div class="page-sub">Every write, append-only — a last-write-wins row alone would not be a backup.</div></div>
+  </div>
+  <div class="panel-pad">
+    <div class="timeline">${historyRows || `<div class="inline-note">no sync history recorded yet</div>`}</div>
+  </div>
+</div>`,
   });
 }
 
@@ -825,6 +1053,42 @@ export function createServer(pool, config) {
         return res.end(bytes);
       }
 
+      if (req.method === "GET" && url.pathname === "/mjolnir/device") {
+        const accounts = await listAccounts();
+        // Read-only (spec requirement): restricted to a uid `listAccounts`
+        // actually returned, never an arbitrary query param — `getOrCreate`
+        // below auto-creates on a genuine miss (D-S2, for real device
+        // traffic), which this page must never trigger as a side effect of
+        // merely being viewed.
+        const requestedUid = url.searchParams.get("uid") || "";
+        const selectedUid = accounts.includes(requestedUid) ? requestedUid : accounts[0] || "";
+        const devices = selectedUid ? await listDevicesForAccount(selectedUid) : [];
+        const selectedDeviceId = url.searchParams.get("device") || (devices[0] && devices[0].deviceId) || "";
+        const selectedDevice = devices.find((d) => d.deviceId === selectedDeviceId);
+        const [{ doc } = {}, perCard, history, publications] = accounts.length
+          ? await Promise.all([
+              selectedUid ? getOrCreate(selectedUid) : null,
+              selectedUid ? perCardProgress(selectedUid) : [],
+              selectedUid ? historyDeltas(selectedUid, { limit: 20 }) : [],
+              listPublications(),
+            ])
+          : [];
+        const activePublication = selectedDevice && publications ? publications.find((p) => p.build_id === selectedDevice.activeBuildId) : null;
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end(
+          renderDevicePage({
+            accounts,
+            selectedUid,
+            devices,
+            selectedDeviceId,
+            doc: doc || null,
+            perCard: perCard || [],
+            history: history || [],
+            activePublication,
+          })
+        );
+      }
+
       if (req.method === "GET" && url.pathname === "/mjolnir/ota") {
         const logicBundles = await listLogicBundles();
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -936,9 +1200,13 @@ export function createServer(pool, config) {
       // auto-creates factory defaults on first touch.
       const USERDATA_PREFIX = "/mjolnir/userdata/";
       if (url.pathname.startsWith(USERDATA_PREFIX) && url.pathname.length > USERDATA_PREFIX.length) {
-        const deviceId = decodeURIComponent(url.pathname.slice(USERDATA_PREFIX.length));
+        // userdata-console (D-C1): this path segment is the real Firebase
+        // uid (D-S1) — `userdata`/`userdata_history` stay keyed by it
+        // unchanged. `device_state` is keyed by a *different*, locally-
+        // generated `deviceId` carried in the PATCH body, never by this uid.
+        const uid = decodeURIComponent(url.pathname.slice(USERDATA_PREFIX.length));
         if (req.method === "GET") {
-          const { doc, created } = await getOrCreate(deviceId);
+          const { doc, created } = await getOrCreate(uid);
           // D-S4: the startup restore module (patches/js/progress-sync-
           // restore-companion.js) needs to tell "a real existing document"
           // apart from "this GET call's own auto-creation" (D-S2) — mod
@@ -947,27 +1215,30 @@ export function createServer(pool, config) {
           return sendJson(res, 200, created ? { ...doc, _justCreated: true } : doc);
         }
         if (req.method === "PATCH") {
-          // D31/D-S5: device-status fields piggyback on the same PATCH body
-          // as progress fields — split them off into device_state rather
-          // than merging them into the synced userdata doc itself.
+          // D31/D-S5/D-C1: device-status fields piggyback on the same PATCH
+          // body as progress fields — split them off into device_state
+          // rather than merging them into the synced userdata doc itself.
+          // `deviceId` (also in the body, not the path) is device_state's
+          // real key; its absence simply skips that write, same as today's
+          // behavior when no device-status fields are present at all.
           const STATUS_FIELDS = ["activeBuildId", "pendingBuildId", "audioCached", "audioTotal", "lastFetchError"];
-          const body = await readJson(req);
+          const { deviceId, ...body } = await readJson(req);
           const patch = {};
           const status = {};
           for (const [key, value] of Object.entries(body)) {
             (STATUS_FIELDS.includes(key) ? status : patch)[key] = value;
           }
-          const doc = await merge(deviceId, patch);
-          await updateDeviceState(deviceId, status);
+          const doc = await merge(uid, patch);
+          if (deviceId) await updateDeviceState(deviceId, uid, status);
           return sendJson(res, 200, doc);
         }
         if (req.method === "POST") {
           const doc = await readJson(req);
-          const written = await replace(deviceId, doc);
+          const written = await replace(uid, doc);
           return sendJson(res, 200, written);
         }
         if (req.method === "DELETE") {
-          await remove(deviceId);
+          await remove(uid);
           return sendJson(res, 200, { ok: true });
         }
         res.writeHead(405, { "Content-Type": "text/plain" });

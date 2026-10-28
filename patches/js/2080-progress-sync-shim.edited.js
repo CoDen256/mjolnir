@@ -108,7 +108,18 @@ __d(function (g, _r, _i, a, m, _e, d) {
               return req(id, 'POST', doc);
             },
             update: function (patch) {
-              return req(id, 'PATCH', patch);
+              // userdata-console/D-C2: every progress-sync PATCH piggybacks
+              // the locally-generated device id the restore companion
+              // mints and exposes as `globalThis.MJOLNIR_DEVICE_ID` (same
+              // cross-boundary convention as that companion's own
+              // `MJOLNIR_BUILD_ID` — this shim and the companion are two
+              // separate appended/patched pieces of code with no shared
+              // scope otherwise). Absent before the companion's first
+              // AsyncStorage read resolves (a benign startup race — the
+              // very next sync carries it instead, same tolerance already
+              // accepted for the companion's own restore timing, D-S4).
+              var deviceId = typeof globalThis !== 'undefined' ? globalThis.MJOLNIR_DEVICE_ID : undefined;
+              return req(id, 'PATCH', deviceId ? Object.assign({}, patch, { deviceId: deviceId }) : patch);
             },
             delete: function () {
               return req(id, 'DELETE');

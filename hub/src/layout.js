@@ -160,6 +160,10 @@ const NAV = [
     ],
   },
   {
+    group: "Device",
+    items: [{ href: "/mjolnir/device", label: "Sync" }],
+  },
+  {
     group: "Tools",
     items: [
       { href: "/mjolnir/catalogue", label: "Catalogue" },

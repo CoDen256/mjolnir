@@ -130,24 +130,32 @@ export async function remove(deviceId) {
   }
 }
 
-// D-S5: device status piggybacks on the same PATCH payload as progress
+// D-S5/D-C1: device status piggybacks on the same PATCH payload as progress
 // sync (D31) — a separate table, overwritten in place (this is live
-// status, not a history to preserve).
-export async function updateDeviceState(deviceId, status) {
+// status, not a history to preserve), keyed by `deviceId` (a real,
+// locally-generated per-device id — never the uid). `uid` rides along as a
+// non-key column so the console can list every device an account has ever
+// synced from (`listDevicesForAccount`). Two devices signed into the same
+// `uid` get two independent rows; a device that stops syncing keeps its
+// last-written row untouched by a different device's later sync, since
+// each is a separate `deviceId`.
+export async function updateDeviceState(deviceId, uid, status) {
   const fields = ["activeBuildId", "pendingBuildId", "audioCached", "audioTotal", "lastFetchError"];
   if (!fields.some((f) => status[f] !== undefined)) return;
   await query(
-    `INSERT INTO device_state (device_id, active_build_id, pending_build_id, audio_cached, audio_total, last_error, seen_at)
-     VALUES ($1, $2, $3, $4, $5, $6, now())
+    `INSERT INTO device_state (device_id, uid, active_build_id, pending_build_id, audio_cached, audio_total, last_error, seen_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      ON CONFLICT (device_id) DO UPDATE SET
-       active_build_id = COALESCE($2, device_state.active_build_id),
-       pending_build_id = COALESCE($3, device_state.pending_build_id),
-       audio_cached = COALESCE($4, device_state.audio_cached),
-       audio_total = COALESCE($5, device_state.audio_total),
-       last_error = COALESCE($6, device_state.last_error),
+       uid = $2,
+       active_build_id = COALESCE($3, device_state.active_build_id),
+       pending_build_id = COALESCE($4, device_state.pending_build_id),
+       audio_cached = COALESCE($5, device_state.audio_cached),
+       audio_total = COALESCE($6, device_state.audio_total),
+       last_error = COALESCE($7, device_state.last_error),
        seen_at = now()`,
     [
       deviceId,
+      uid,
       status.activeBuildId ?? null,
       status.pendingBuildId ?? null,
       status.audioCached ?? null,
@@ -155,4 +163,131 @@ export async function updateDeviceState(deviceId, status) {
       status.lastFetchError ?? null,
     ]
   );
+}
+
+// ---- userdata-console: read-only queries for the Device sync page ----
+
+// Every distinct account (uid) ever seen — `userdata.device_id` is the uid
+// column despite its name (D-S1; never renamed, D-C1's smaller-diff
+// reasoning extends to this pre-existing column too).
+export async function listAccounts() {
+  const { rows } = await query("SELECT device_id AS uid FROM userdata ORDER BY device_id");
+  return rows.map((r) => r.uid);
+}
+
+// Every device `device_state` has ever recorded for this uid, most-recently
+// -seen first — including a device that has stopped syncing (D-C1's Open
+// Question: "yes, this is useful information, not noise"). A device with
+// OTA/audio activity but zero study sessions still shows up here, since
+// `device_state` is independent of whether `userdata` has any content for
+// this uid at all.
+export async function listDevicesForAccount(uid) {
+  const { rows } = await query(
+    `SELECT device_id, active_build_id, pending_build_id, audio_cached, audio_total, last_error, seen_at
+     FROM device_state WHERE uid = $1 ORDER BY seen_at DESC`,
+    [uid]
+  );
+  return rows.map((r) => ({
+    deviceId: r.device_id,
+    activeBuildId: r.active_build_id,
+    pendingBuildId: r.pending_build_id,
+    audioCached: r.audio_cached,
+    audioTotal: r.audio_total,
+    lastError: r.last_error,
+    seenAt: r.seen_at,
+  }));
+}
+
+// D-C3: the account's `totalCards` joined against `card_content` — same
+// `card_slots`/`decks`/`card_content` join shape `hub/src/cards.js`'s
+// `cardsList` already uses, reused rather than reinvented, selecting only
+// `card_content.n` (never `.e`) so the Content column always shows the
+// card's identifying text regardless of which occurrence side this row is.
+export async function perCardProgress(uid) {
+  const { rows } = await query("SELECT doc FROM userdata WHERE device_id = $1", [uid]);
+  if (rows.length === 0) return [];
+  const totalCards = rows[0].doc.totalCards || [];
+  if (totalCards.length === 0) return [];
+
+  const cardIds = totalCards.map((c) => c.ID);
+  const { rows: contentRows } = await query(
+    `SELECT cs.id, cs.deck_code, d.title AS deck_title, cc.n
+     FROM card_slots cs
+     JOIN decks d ON d.code = cs.deck_code
+     LEFT JOIN card_content cc ON cc.card_id = cs.id
+     WHERE cs.id = ANY($1)`,
+    [cardIds]
+  );
+  const byId = new Map(contentRows.map((r) => [r.id, r]));
+
+  return totalCards.map((c) => {
+    const info = byId.get(c.ID);
+    return {
+      id: c.ID,
+      content: info ? info.n : null,
+      side: c.language, // the stored direction letter (N/E/A) — findings.md C1
+      deckCode: info ? info.deck_code : null,
+      deckTitle: info ? info.deck_title : null,
+      stage: c.Stage,
+      park: !!c.Park,
+      graduated: !!c.Graduated,
+      type: c.Type,
+      lastReviewedAt: c.Time ? new Date(c.Time) : null,
+    };
+  });
+}
+
+// Summarizes one `userdata_history` row against its predecessor — session-
+// count delta, totalCards-length delta, or (when neither changed) which
+// other top-level fields differ. There is no stored event-type/provenance
+// tag (D-S5 only ever records the resulting document, not which mod 2080
+// method produced it), so the title is inferred from what actually changed,
+// not a literal replay of which screen caused it.
+function summarizeDelta(doc, prevDoc) {
+  if (doc === null) return { title: "Account deleted", detail: [] };
+  const prev = prevDoc || {};
+  const detail = [];
+
+  const sessionsChanged = prev.completedSessions !== doc.completedSessions;
+  const cardsDelta = (doc.totalCards?.length ?? 0) - (prev.totalCards?.length ?? 0);
+
+  if (sessionsChanged) {
+    detail.push({
+      label: "completedSessions",
+      text: `${prev.completedSessions ?? "—"} → ${doc.completedSessions}`,
+      up: (doc.completedSessions ?? 0) > (prev.completedSessions ?? 0),
+    });
+  }
+  if (cardsDelta !== 0) {
+    detail.push({ label: "totalCards", text: `${cardsDelta > 0 ? "+" : ""}${cardsDelta}`, up: cardsDelta > 0 });
+  }
+
+  if (sessionsChanged && cardsDelta !== 0) return { title: "Session completed", detail };
+  if (sessionsChanged) return { title: "Progress updated", detail };
+  if (cardsDelta !== 0) return { title: "Cards updated", detail };
+
+  const changedKeys = Object.keys(doc).filter((k) => JSON.stringify(doc[k]) !== JSON.stringify(prev[k]));
+  if (changedKeys.length > 0) {
+    return {
+      title: "Settings updated",
+      detail: changedKeys.slice(0, 4).map((k) => ({ label: k, text: "changed", up: null })),
+    };
+  }
+  return { title: "Synced", detail: [] };
+}
+
+// `limit + 1` rows are fetched so the oldest row returned still has a real
+// predecessor to diff against; that extra row is used only for the diff,
+// never returned itself.
+export async function historyDeltas(uid, { limit = 20 } = {}) {
+  const { rows } = await query(
+    "SELECT id, doc, at FROM userdata_history WHERE device_id = $1 ORDER BY at DESC LIMIT $2",
+    [uid, limit + 1]
+  );
+  return rows.slice(0, limit).map((row, i) => ({
+    id: row.id,
+    doc: row.doc,
+    at: row.at,
+    ...summarizeDelta(row.doc, rows[i + 1]?.doc),
+  }));
 }
