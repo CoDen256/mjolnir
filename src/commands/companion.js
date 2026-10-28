@@ -22,12 +22,23 @@ const BASE_VERSION_RE = /^[A-Za-z0-9._-]{1,64}$/; // same charset reasoning as b
 const BASE_VERSION_PLACEHOLDER = "__MJOLNIR_BASE_VERSION__";
 const PATCH_REV_PLACEHOLDER = "__MJOLNIR_PATCH_REV__";
 
+// progress-sync-shim: the device-facing sync base URL/token, baked the same
+// way as the other three placeholders — not hardcoded, so a deployment can
+// point at its own hub without hand-editing either patch file. Exported so
+// `substituteSyncPlaceholders` (below) can apply the exact same two
+// placeholders to a patch-back-applied module's source too, not just an
+// appended companion's — `2080-progress-sync-shim.edited.js` carries both,
+// and patch-back has no append-time substitution step of its own.
+export const SYNC_BASE_URL_PLACEHOLDER = "__MJOLNIR_SYNC_BASE_URL__";
+export const SYNC_TOKEN_PLACEHOLDER = "__MJOLNIR_SYNC_TOKEN__";
+const SYNC_BASE_URL_RE = /^https:\/\/\S+$/; // D53-style: transport must not be downgradable
+
 // Pure: returns a new Buffer with `companionSource` appended. `name` is used
 // for a sentinel comment that makes re-appending the same companion an error.
 // If the companion contains a given placeholder, the matching option is
 // required and substituted; a placeholder absent from the source means its
 // option is simply ignored.
-export function appendCompanion(bundleBuffer, companionSource, { buildId, baseVersion, patchRev, name } = {}) {
+export function appendCompanion(bundleBuffer, companionSource, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken, name } = {}) {
   const sentinel = `/* mjolnir-companion: ${name || "unnamed"} */`;
   const original = bundleBuffer.toString("utf8");
 
@@ -63,6 +74,9 @@ export function appendCompanion(bundleBuffer, companionSource, { buildId, baseVe
     }
     source = source.split(PATCH_REV_PLACEHOLDER).join(String(patchRev));
   }
+  if (source.includes(SYNC_BASE_URL_PLACEHOLDER) || source.includes(SYNC_TOKEN_PLACEHOLDER)) {
+    source = substituteSyncPlaceholdersInText(source, { syncBaseUrl, syncToken }, `companion '${name}'`);
+  }
 
   const block = `\n${sentinel}\n${source.trim()}\n`;
 
@@ -80,7 +94,49 @@ export function appendCompanion(bundleBuffer, companionSource, { buildId, baseVe
   return Buffer.from(result, "utf8");
 }
 
-export function runCompanion(bundlePath, outputPath, companionFile, { buildId, baseVersion, patchRev } = {}) {
+// Shared by `appendCompanion` (scoped to one companion's own source) and
+// `substituteSyncPlaceholders` (scoped to a whole bundle, for
+// `2080-progress-sync-shim.edited.js`'s copy of the same two placeholders —
+// patch-back has no append-time substitution step of its own, so that
+// patch's placeholders can only be baked this way, at assemble time).
+function substituteSyncPlaceholdersInText(text, { syncBaseUrl, syncToken }, label) {
+  let result = text;
+  if (result.includes(SYNC_BASE_URL_PLACEHOLDER)) {
+    if (!syncBaseUrl) {
+      throw new Error(`${label} contains ${SYNC_BASE_URL_PLACEHOLDER} but no syncBaseUrl was given`);
+    }
+    if (!SYNC_BASE_URL_RE.test(syncBaseUrl)) {
+      throw new Error(`syncBaseUrl must be a bare https:// URL with no trailing slash expected by the caller — got '${syncBaseUrl}'`);
+    }
+    result = result.split(SYNC_BASE_URL_PLACEHOLDER).join(syncBaseUrl);
+  }
+  if (result.includes(SYNC_TOKEN_PLACEHOLDER)) {
+    if (!syncToken) {
+      throw new Error(`${label} contains ${SYNC_TOKEN_PLACEHOLDER} but no syncToken was given`);
+    }
+    result = result.split(SYNC_TOKEN_PLACEHOLDER).join(syncToken);
+  }
+  return result;
+}
+
+// Substitutes `__MJOLNIR_SYNC_BASE_URL__`/`__MJOLNIR_SYNC_TOKEN__` wherever
+// they appear across an entire assembled bundle — unlike
+// `appendCompanion`'s substitution (one appended companion's own source),
+// this also reaches the patch-back-applied mod 2080 shim, since that
+// module's edited source becomes part of the bundle's own bytes with no
+// append-time hook to substitute through. A no-op (returns the buffer
+// unchanged) when neither placeholder is present anywhere — an unrelated
+// assembly that doesn't use progress-sync-shim at all pays nothing for
+// this existing.
+export function substituteSyncPlaceholders(bundleBuffer, { syncBaseUrl, syncToken } = {}) {
+  const text = bundleBuffer.toString("utf8");
+  if (!text.includes(SYNC_BASE_URL_PLACEHOLDER) && !text.includes(SYNC_TOKEN_PLACEHOLDER)) {
+    return bundleBuffer;
+  }
+  return Buffer.from(substituteSyncPlaceholdersInText(text, { syncBaseUrl, syncToken }, "this bundle"), "utf8");
+}
+
+export function runCompanion(bundlePath, outputPath, companionFile, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken } = {}) {
   // Create the output directory if needed — otherwise writeFileSync throws a
   // raw ENOENT stack at the end of the work, after the bundle is built.
   const outDir = path.dirname(outputPath);
@@ -92,7 +148,7 @@ export function runCompanion(bundlePath, outputPath, companionFile, { buildId, b
   const companionSource = fs.readFileSync(companionFile, "utf8");
   const name = path.basename(companionFile).replace(/\.js$/, "");
 
-  const out = appendCompanion(bundle, companionSource, { buildId, baseVersion, patchRev, name });
+  const out = appendCompanion(bundle, companionSource, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken, name });
   fs.writeFileSync(outputPath, out);
 
   console.log(`appended companion '${name}' → ${outputPath}`);
@@ -106,5 +162,11 @@ export function runCompanion(bundlePath, outputPath, companionFile, { buildId, b
   }
   if (companionSource.includes(PATCH_REV_PLACEHOLDER)) {
     console.log(`  patchRev  ${patchRev}`);
+  }
+  if (companionSource.includes(SYNC_BASE_URL_PLACEHOLDER)) {
+    console.log(`  syncBaseUrl  ${syncBaseUrl}`);
+  }
+  if (companionSource.includes(SYNC_TOKEN_PLACEHOLDER)) {
+    console.log(`  syncToken  (set)`);
   }
 }

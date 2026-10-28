@@ -943,8 +943,17 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
       method: "POST",
       pattern: /^\/api\/assemble$/,
       handler: async (match, body) => {
-        const { baseFolderPath, patchNames, patchbackPairNames, outputPath, companionFiles, buildId, patchRev } =
-          body || {};
+        const {
+          baseFolderPath,
+          patchNames,
+          patchbackPairNames,
+          outputPath,
+          companionFiles,
+          buildId,
+          patchRev,
+          syncBaseUrl,
+          syncToken,
+        } = body || {};
         if (!baseFolderPath) throw new Error("baseFolderPath is required");
         if (!outputPath) throw new Error("outputPath is required");
         const result = await assembleBundle({
@@ -957,6 +966,8 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
           companionFiles: companionFiles || [],
           buildId: buildId || undefined,
           patchRev: patchRev === undefined || patchRev === null || patchRev === "" ? undefined : Number(patchRev),
+          syncBaseUrl: syncBaseUrl || undefined,
+          syncToken: syncToken || undefined,
         });
         return { status: 201, body: result };
       },

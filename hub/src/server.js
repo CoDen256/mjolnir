@@ -19,6 +19,7 @@ import { DECK_ALLOCATION } from "./decks.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
 import { slugify } from "./slug.js";
+import { getOrCreate, merge, replace, remove, updateDeviceState } from "./userdata.js";
 import { createRequestHandler as createWorkbenchHandler } from "../../src/commands/ui.js";
 // D109: builder's own pages are rendered here directly, in-process — same
 // monorepo, same shared Postgres (D-P3) — instead of the earlier iframe-
@@ -882,6 +883,8 @@ export function createServer(pool, config) {
           patchRev: body.patchRev === undefined || body.patchRev === null || body.patchRev === "" ? undefined : Number(body.patchRev),
           dataDir: config.dataDir,
           logicBundleDir: config.logicBundleDir,
+          syncBaseUrl: body.syncBaseUrl || undefined,
+          syncToken: body.syncToken || undefined,
         });
         return sendJson(res, 200, row);
       }
@@ -924,6 +927,51 @@ export function createServer(pool, config) {
         const { buildId } = await readJson(req);
         await deleteBuild(buildId, { dataDir: config.dataDir });
         return sendJson(res, 200, { ok: true });
+      }
+
+      // progress-sync-shim: the device-facing contract mod 2080's shim
+      // (patches/js/2080-progress-sync-shim.js) talks to — gated by the
+      // same shared operator-auth check above (task 4.2's decision), not a
+      // separate device token. D-S2: GET never reports "not found", it
+      // auto-creates factory defaults on first touch.
+      const USERDATA_PREFIX = "/mjolnir/userdata/";
+      if (url.pathname.startsWith(USERDATA_PREFIX) && url.pathname.length > USERDATA_PREFIX.length) {
+        const deviceId = decodeURIComponent(url.pathname.slice(USERDATA_PREFIX.length));
+        if (req.method === "GET") {
+          const { doc, created } = await getOrCreate(deviceId);
+          // D-S4: the startup restore module (patches/js/progress-sync-
+          // restore-companion.js) needs to tell "a real existing document"
+          // apart from "this GET call's own auto-creation" (D-S2) — mod
+          // 2080's own shim ignores this extra field entirely (it only ever
+          // reads the named fields it already knows about).
+          return sendJson(res, 200, created ? { ...doc, _justCreated: true } : doc);
+        }
+        if (req.method === "PATCH") {
+          // D31/D-S5: device-status fields piggyback on the same PATCH body
+          // as progress fields — split them off into device_state rather
+          // than merging them into the synced userdata doc itself.
+          const STATUS_FIELDS = ["activeBuildId", "pendingBuildId", "audioCached", "audioTotal", "lastFetchError"];
+          const body = await readJson(req);
+          const patch = {};
+          const status = {};
+          for (const [key, value] of Object.entries(body)) {
+            (STATUS_FIELDS.includes(key) ? status : patch)[key] = value;
+          }
+          const doc = await merge(deviceId, patch);
+          await updateDeviceState(deviceId, status);
+          return sendJson(res, 200, doc);
+        }
+        if (req.method === "POST") {
+          const doc = await readJson(req);
+          const written = await replace(deviceId, doc);
+          return sendJson(res, 200, written);
+        }
+        if (req.method === "DELETE") {
+          await remove(deviceId);
+          return sendJson(res, 200, { ok: true });
+        }
+        res.writeHead(405, { "Content-Type": "text/plain" });
+        return res.end("method not allowed");
       }
 
       res.writeHead(404, { "Content-Type": "text/plain" });

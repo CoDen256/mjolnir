@@ -5,7 +5,7 @@ import { loadPatch, applyPatch, computePatchedModuleSource } from "../patches.js
 import { loadPatchbackPair } from "../patchbackPairs.js";
 import { reassembleBundle } from "../reassemble.js";
 import { readBaseVersion } from "../apktoolYml.js";
-import { appendCompanion } from "./companion.js";
+import { appendCompanion, substituteSyncPlaceholders } from "./companion.js";
 
 // Where a decoded base APK folder keeps its Metro bundle — confirmed against
 // `base/smali.mjolnir.merged/assets/index.android.bundle` (this repo's own
@@ -51,6 +51,8 @@ export async function assembleBundle({
   companionFiles,
   buildId,
   patchRev,
+  syncBaseUrl,
+  syncToken,
 }) {
   const baseBundlePath = path.join(baseFolderPath, BASE_BUNDLE_RELATIVE_PATH);
   if (!fs.existsSync(baseBundlePath)) {
@@ -113,9 +115,18 @@ export async function assembleBundle({
 
     for (const { name, source } of companionSources) {
       const bundle = fs.readFileSync(outputPath);
-      const out = appendCompanion(bundle, source, { buildId, baseVersion, patchRev, name });
+      const out = appendCompanion(bundle, source, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken, name });
       fs.writeFileSync(outputPath, out);
     }
+
+    // progress-sync-shim: `__MJOLNIR_SYNC_BASE_URL__`/`__MJOLNIR_SYNC_TOKEN__`
+    // also appear inside a patch-back-applied module's own source (the
+    // `2080-progress-sync-shim` pair), not just inside an appended
+    // companion — patch-back has no append-time substitution step of its
+    // own, so this final pass over the whole assembled bundle is where
+    // that patch's copy of the same two placeholders actually gets baked.
+    // A no-op when neither placeholder appears anywhere in the output.
+    fs.writeFileSync(outputPath, substituteSyncPlaceholders(fs.readFileSync(outputPath), { syncBaseUrl, syncToken }));
   } catch (err) {
     // No partial output survives a failed assembly (task 5.3) — the base
     // itself was never touched (it was only ever read, to seed the copy).

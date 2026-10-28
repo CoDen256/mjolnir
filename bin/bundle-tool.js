@@ -92,11 +92,15 @@ program
   .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if the companion uses it)")
   .option("--base-version <v>", "base_version to substitute for __MJOLNIR_BASE_VERSION__ (required if the companion uses it)")
   .option("--patch-rev <n>", "patch_rev to substitute for __MJOLNIR_PATCH_REV__ (required if the companion uses it)")
+  .option("--sync-base-url <url>", "progress-sync-shim: https:// base URL to substitute for __MJOLNIR_SYNC_BASE_URL__ (required if the companion uses it)")
+  .option("--sync-token <token>", "progress-sync-shim: bearer token to substitute for __MJOLNIR_SYNC_TOKEN__ (required if the companion uses it)")
   .action(async (bundle, outputBundle, companionFile, opts) => {
     runCompanion(bundle, outputBundle, companionFile, {
       buildId: opts.buildId,
       baseVersion: opts.baseVersion,
       patchRev: opts.patchRev !== undefined ? Number(opts.patchRev) : undefined,
+      syncBaseUrl: opts.syncBaseUrl,
+      syncToken: opts.syncToken,
     });
   });
 
@@ -121,6 +125,8 @@ program
   .option("--companions <files>", "comma-separated, ordered companion files to APPEND (e.g. patches/js/boot-ok-companion.js,patches/js/config-rotate.js — new top-level code, touches zero existing module bytes)", "")
   .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if any companion uses it)")
   .option("--patch-rev <n>", "patch_rev to bake in — the operator's responsibility to supply (D-L2's global counter lives in hub's logic_bundles table)")
+  .option("--sync-base-url <url>", "progress-sync-shim: https:// base URL to substitute for __MJOLNIR_SYNC_BASE_URL__ (required if the shim patch or restore companion is included)")
+  .option("--sync-token <token>", "progress-sync-shim: bearer token to substitute for __MJOLNIR_SYNC_TOKEN__ (required if the shim patch or restore companion is included)")
   .action(async (baseFolder, outputBundle, opts) => {
     const patchNames = opts.patches ? opts.patches.split(",").map((s) => s.trim()).filter(Boolean) : [];
     const patchbackPairNames = opts.patchbackPairs
@@ -136,6 +142,8 @@ program
       companionFiles,
       buildId: opts.buildId,
       patchRev: opts.patchRev !== undefined ? Number(opts.patchRev) : undefined,
+      syncBaseUrl: opts.syncBaseUrl,
+      syncToken: opts.syncToken,
     });
     console.log(`assembled ${outputBundle}`);
     console.log(`  base_version  ${result.baseVersion}`);

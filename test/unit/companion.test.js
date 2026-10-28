@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appendCompanion } from "../../src/commands/companion.js";
+import { appendCompanion, substituteSyncPlaceholders } from "../../src/commands/companion.js";
 
 const PLACEHOLDER_COMPANION = "(function(){ var id='__MJOLNIR_BUILD_ID__'; })();";
 const PLAIN_COMPANION = "(function(){ /* no buildId */ })();";
@@ -109,6 +109,60 @@ test("rejects a patchRev that isn't a non-negative integer", () => {
     () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { patchRev: 1.5, name: "boot-ok" }),
     /patchRev must be/
   );
+});
+
+test("progress-sync-shim: substitutes syncBaseUrl/syncToken placeholders in an appended companion", () => {
+  const companion = "(function(){ var u='__MJOLNIR_SYNC_BASE_URL__'; var t='__MJOLNIR_SYNC_TOKEN__'; })();";
+  const out = appendCompanion(bundleWithMap(), companion, {
+    syncBaseUrl: "https://hub.example.net/mjolnir/userdata",
+    syncToken: "s3cret",
+    name: "progress-sync-restore-companion",
+  }).toString("utf8");
+  assert.ok(out.includes("u='https://hub.example.net/mjolnir/userdata'"));
+  assert.ok(out.includes("t='s3cret'"));
+  assert.ok(!out.includes("__MJOLNIR_SYNC_"));
+});
+
+test("progress-sync-shim: requires syncBaseUrl/syncToken only when their own placeholder is present, and validates syncBaseUrl is https://", () => {
+  assert.throws(
+    () => appendCompanion(bundleWithMap(), "var u='__MJOLNIR_SYNC_BASE_URL__';", { name: "restore" }),
+    /no syncBaseUrl was given/
+  );
+  assert.throws(
+    () => appendCompanion(bundleWithMap(), "var t='__MJOLNIR_SYNC_TOKEN__';", { name: "restore" }),
+    /no syncToken was given/
+  );
+  assert.throws(
+    () =>
+      appendCompanion(bundleWithMap(), "var u='__MJOLNIR_SYNC_BASE_URL__';", {
+        syncBaseUrl: "http://insecure.example.net",
+        name: "restore",
+      }),
+    /must be a bare https:\/\/ URL/
+  );
+  // Neither placeholder present — neither option is required.
+  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { name: "debug" }).toString("utf8");
+  assert.ok(out.includes("/* no buildId */"));
+});
+
+test("progress-sync-shim: substituteSyncPlaceholders bakes both placeholders across a whole assembled bundle, not just an appended companion's own text", () => {
+  const bundle = Buffer.from(
+    "var SYNC_BASE_URL = '__MJOLNIR_SYNC_BASE_URL__';\nvar SYNC_TOKEN = '__MJOLNIR_SYNC_TOKEN__';\n",
+    "utf8"
+  );
+  const out = substituteSyncPlaceholders(bundle, {
+    syncBaseUrl: "https://hub.example.net/mjolnir/userdata",
+    syncToken: "s3cret",
+  }).toString("utf8");
+  assert.ok(out.includes("'https://hub.example.net/mjolnir/userdata'"));
+  assert.ok(out.includes("'s3cret'"));
+  assert.ok(!out.includes("__MJOLNIR_SYNC_"));
+});
+
+test("progress-sync-shim: substituteSyncPlaceholders is a no-op (and needs no options) when neither placeholder is present", () => {
+  const bundle = Buffer.from("var x = 1;\n", "utf8");
+  const out = substituteSyncPlaceholders(bundle, {});
+  assert.equal(out, bundle); // same buffer, not merely equal bytes — confirms the early-return path
 });
 
 test("refuses to append the same companion twice", () => {

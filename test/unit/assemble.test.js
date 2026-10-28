@@ -248,6 +248,81 @@ test("a patch-back pair (module-id addressed, same reconciliation algorithm as J
   });
 });
 
+test("progress-sync-shim: --sync-base-url/--sync-token bake into both a patch-back-applied module and an appended companion in one assembly", async () => {
+  await withTmpDir(async (dir) => {
+    const baseFolder = makeBaseFolder(dir, "1.5.12");
+    const baseBundlePath = path.join(baseFolder, "assets", "index.android.bundle");
+    const patchesDir = path.join(dir, "patches");
+    const patchbackDir = path.join(patchesDir, "js");
+    fs.mkdirSync(patchbackDir, { recursive: true });
+
+    // Stands in for `2080-progress-sync-shim`: the real pair carries the
+    // same two placeholders inside a patch-back-applied module, which
+    // `appendCompanion`'s own per-companion substitution never reaches.
+    const m2042 = moduleSource(baseBundlePath, 2042);
+    fs.writeFileSync(path.join(patchbackDir, "2042-sync-shim.baseline.js"), m2042);
+    fs.writeFileSync(
+      path.join(patchbackDir, "2042-sync-shim.edited.js"),
+      m2042.replace("2.3.0", "__MJOLNIR_SYNC_BASE_URL__ __MJOLNIR_SYNC_TOKEN__")
+    );
+
+    const restoreCompanionPath = path.join(dir, "restore-companion.js");
+    fs.writeFileSync(
+      restoreCompanionPath,
+      "globalThis.__SYNC_URL__ = '__MJOLNIR_SYNC_BASE_URL__'; globalThis.__SYNC_TOKEN__ = '__MJOLNIR_SYNC_TOKEN__';\n"
+    );
+
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+    await assembleBundle({
+      baseFolderPath: baseFolder,
+      patchNames: [],
+      patchesDir,
+      patchbackPairNames: ["2042-sync-shim"],
+      outputPath,
+      companionFiles: [restoreCompanionPath],
+      syncBaseUrl: "https://hub.example.net/mjolnir/userdata",
+      syncToken: "s3cret",
+    });
+
+    const moduleOut = moduleSource(outputPath, 2042);
+    assert.match(moduleOut, /https:\/\/hub\.example\.net\/mjolnir\/userdata s3cret/);
+    const outBytes = fs.readFileSync(outputPath, "utf8");
+    assert.match(outBytes, /__SYNC_URL__ = 'https:\/\/hub\.example\.net\/mjolnir\/userdata'/);
+    assert.match(outBytes, /__SYNC_TOKEN__ = 's3cret'/);
+    assert.ok(!outBytes.includes("__MJOLNIR_SYNC_"));
+  });
+});
+
+test("progress-sync-shim: omitting --sync-base-url/--sync-token aborts assembly when either placeholder is present anywhere in the output", async () => {
+  await withTmpDir(async (dir) => {
+    const baseFolder = makeBaseFolder(dir, "1.5.12");
+    const baseBundlePath = path.join(baseFolder, "assets", "index.android.bundle");
+    const patchesDir = path.join(dir, "patches");
+    const patchbackDir = path.join(patchesDir, "js");
+    fs.mkdirSync(patchbackDir, { recursive: true });
+
+    const m2042 = moduleSource(baseBundlePath, 2042);
+    fs.writeFileSync(path.join(patchbackDir, "2042-sync-shim.baseline.js"), m2042);
+    fs.writeFileSync(
+      path.join(patchbackDir, "2042-sync-shim.edited.js"),
+      m2042.replace("2.3.0", "__MJOLNIR_SYNC_BASE_URL__")
+    );
+
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+    await assert.rejects(
+      () =>
+        assembleBundle({
+          baseFolderPath: baseFolder,
+          patchNames: [],
+          patchesDir,
+          patchbackPairNames: ["2042-sync-shim"],
+          outputPath,
+        }),
+      /no syncBaseUrl was given/
+    );
+  });
+});
+
 test("an unknown patch-back pair name aborts the assembly before the output path is touched", async () => {
   await withTmpDir(async (dir) => {
     const baseFolder = makeBaseFolder(dir, "1.5.12");

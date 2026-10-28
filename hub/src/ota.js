@@ -175,6 +175,8 @@ export async function assembleAndSubmit({
   patchRev,
   dataDir,
   logicBundleDir,
+  syncBaseUrl,
+  syncToken,
 }) {
   const resolvedPatchRev = patchRev === undefined || patchRev === null ? await nextPatchRev() : Number(patchRev);
   const tmpPath = path.join(dataDir, `.assemble-submit-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
@@ -189,6 +191,8 @@ export async function assembleAndSubmit({
       companionFiles: companionFiles || [],
       buildId: ASSEMBLE_PLACEHOLDER_BUILD_ID,
       patchRev: resolvedPatchRev,
+      syncBaseUrl,
+      syncToken,
     });
     const bytes = fs.readFileSync(tmpPath);
     const resolvedLabel = label || `${assembled.baseVersion}-patch${resolvedPatchRev}`;
