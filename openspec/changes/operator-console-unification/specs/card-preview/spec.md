@@ -31,3 +31,30 @@ when it is not.
 - **WHEN** the card's audio clip is not present in the audio blob cache
 - **THEN** the preview's flagged face still shows which face the audio
   belongs to, with no non-functional player presented as if it worked
+
+### Requirement: The preview is reached inline from the card's own row, not a separate page
+The system SHALL let the operator open a card's preview directly from its
+row in the Cards list, expanding in place, rather than navigating to a
+separate page — and SHALL ensure at most one card's preview is expanded at a
+time, collapsing any other already-open preview when a new one is opened.
+
+#### Scenario: Opening a preview from the Cards list
+- **WHEN** the operator selects the preview action on a card's row
+- **THEN** that card's preview expands directly under its row, with no
+  navigation away from the Cards list
+
+#### Scenario: Opening a second card's preview while one is already open
+- **WHEN** the operator opens a different card's preview while another
+  card's preview is already expanded
+- **THEN** the previously-expanded preview collapses and the newly-selected
+  one expands, so at most one is visible at a time
+
+### Requirement: The preview's three faces are arranged vertically, styled from the app's dark theme
+The system SHALL arrange a card's N/E/X preview faces in a single vertical
+column, and SHALL style them using the real app's dark-theme colors
+specifically (not its light theme).
+
+#### Scenario: Viewing a card's preview layout
+- **WHEN** the operator views a card's expanded preview
+- **THEN** its three faces (N, E, X) are stacked vertically, each styled
+  with the app's dark-theme background and text colors

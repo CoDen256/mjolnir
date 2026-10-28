@@ -15,6 +15,7 @@
         <button type="button" class="tab" data-view="editor">Editor</button>
         <button type="button" class="tab" data-view="patches">Patches</button>
         <button type="button" class="tab" data-view="assemble">Assemble</button>
+        <button type="button" class="tab" data-view="catalogue">Catalogue</button>
         <button type="button" class="tab hidden" data-view="deckcard">Deck/Card</button>
       </nav>
     </header>
@@ -23,6 +24,7 @@
       <input id="open-path-input" type="text" placeholder="Path to a bundle file..." />
       <button id="open-path-btn" type="button">Open</button>
       <div id="upload-dropzone" class="upload-dropzone">or drop a file / <label for="upload-file-input" class="upload-pick-label">choose one</label><input id="upload-file-input" type="file" class="hidden" /></div>
+      <div id="open-status" class="open-status hidden"></div>
       <div id="open-path-error" class="error hidden"></div>
       <div class="session-list" id="session-list"></div>
       <label class="active-session-label">
@@ -116,6 +118,7 @@
 
       <!-- Patches -->
       <section id="view-patches" class="view hidden">
+        <div id="patches-dir-caption" class="dir-caption"></div>
         <ul id="patches-list" class="patch-list"></ul>
         <div id="patches-preview" class="hidden">
           <h3>Preview</h3>
@@ -152,6 +155,7 @@
               </label>
             </div>
 
+            <div id="assemble-patches-dir-caption" class="dir-caption"></div>
             <h3>Patches to apply, in order</h3>
             <div class="assemble-picker">
               <div class="assemble-picker-col">
@@ -168,6 +172,19 @@
             <div id="assemble-error" class="error hidden"></div>
             <div id="assemble-result" class="success hidden"></div>
           </div>
+        </div>
+      </section>
+
+      <!-- Catalogue: every OTA build + logic bundle, one click to open
+           (D109) — fetched from hub's /mjolnir/catalogue.json when running
+           embedded; degrades to a plain message when standalone. -->
+      <section id="view-catalogue" class="view hidden">
+        <div id="catalogue-unavailable" class="empty-state hidden">Catalogue unavailable — this workbench isn't running embedded in hub.</div>
+        <div id="catalogue-content" class="hidden">
+          <h3>OTA builds</h3>
+          <ul id="catalogue-builds" class="patch-list"></ul>
+          <h3>Logic bundles</h3>
+          <ul id="catalogue-logic-bundles" class="patch-list"></ul>
         </div>
       </section>
 

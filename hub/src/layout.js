@@ -96,6 +96,38 @@ td.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabu
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field label { font-size: 12px; font-weight: 600; color: var(--text-dim); }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+/* Builder's own page bodies (buildForecastBody/buildScheduleBody/
+   buildLogsBody, imported directly — see NAV's "Builder" group comment)
+   render here, inside hub's shell — these rules are copied from
+   builder/src/layout.js's own STYLE (same --variables, so visually
+   identical) rather than shared as a package, same reasoning as the rest
+   of this file's duplication (D80). */
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); font-weight: 600; }
+.stat .value { font-size: 24px; font-weight: 700; margin-top: 4px; font-family: var(--mono); }
+.stat .sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+
+.schedule-options { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
+.radio-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); }
+.radio-row input[type="radio"] { accent-color: var(--accent); }
+.radio-row.active { border-color: var(--accent); background: var(--accent-soft); }
+.radio-row input[type="text"] { width: 70px; margin: 0 4px; }
+
+.timeline { display: flex; flex-direction: column; }
+.tl-row { display: grid; grid-template-columns: 90px 20px 1fr; gap: 10px; padding: 8px 0; }
+.tl-time { font-family: var(--mono); font-size: 12px; color: var(--text-faint); padding-top: 2px; }
+.tl-rail { display: flex; justify-content: center; }
+.tl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); margin-top: 5px; }
+.tl-dot.ok { background: var(--ok); }
+.tl-dot.err { background: var(--err); }
+.tl-title { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.tl-detail { font-size: 12.5px; color: var(--text-dim); margin-top: 2px; }
+.log-line { font-family: var(--mono); font-size: 12px; padding: 3px 0; color: var(--text-dim); }
+.log-line .lvl-ok { color: var(--ok); }
+
+details.json-toggle summary { cursor: pointer; font-size: 13px; padding: 4px 0; }
 `;
 
 function escapeHtml(s) {
@@ -111,11 +143,31 @@ const NAV = [
       { href: "/mjolnir", label: "Publish history" },
     ],
   },
+  // These three pages are actually rendered by builder's own code
+  // (`buildForecastBody`/`buildScheduleBody`/`buildLogsBody`, imported
+  // directly — same monorepo, same shared Postgres, D-P3) — hub just wraps
+  // them in its own shell so the nav/design stays one consistent place
+  // instead of a separately-styled service with its own top-bar/rail.
+  // Reversed from an earlier iframe-based "unified console" design that
+  // doubled chrome and broke the device-dark workbench look the operator
+  // preferred — see D109.
+  {
+    group: "Builder",
+    items: [
+      { href: "/mjolnir/builder/forecast", label: "Forecast & publish" },
+      { href: "/mjolnir/builder/schedule", label: "Schedule" },
+      { href: "/mjolnir/builder/logs", label: "Run log" },
+    ],
+  },
   {
     group: "Tools",
     items: [
       { href: "/mjolnir/catalogue", label: "Catalogue" },
-      { href: "/mjolnir/workbench/", label: "Bundle workbench" },
+      // The workbench is its own tabbed app (Explorer/Compare/Editor/
+      // Patches/Assemble) — opening it in a new tab, not framed inline, is
+      // the operator's stated preference and avoids nesting one tab bar
+      // inside another.
+      { href: "/mjolnir/workbench/", label: "Bundle workbench", target: "_blank" },
     ],
   },
 ];
@@ -123,28 +175,16 @@ const NAV = [
 function renderRail(activeHref) {
   return NAV.map(
     ({ group, items }) => `<div class="rail-group-label">${escapeHtml(group)}</div>
-${items.map((i) => `<a href="${i.href}" class="${i.href === activeHref ? "active" : ""}">${escapeHtml(i.label)}</a>`).join("\n")}`
+${items
+  .map(
+    (i) =>
+      `<a href="${i.href}" class="${i.href === activeHref ? "active" : ""}"${i.target ? ` target="${escapeHtml(i.target)}"` : ""}>${escapeHtml(i.label)}</a>`
+  )
+  .join("\n")}`
   ).join("\n");
 }
 
-// D-C9: `embed=1` skips this page's own top-bar/rail entirely, rendering
-// only its `body` — set by every route when the request's own query string
-// carries it, so the unified console's iframes don't show doubled chrome
-// (the console's own tab bar plus this page's full top-bar/rail again).
-export function renderShell({ title, activeHref, body, embed = false }) {
-  if (embed) {
-    return `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>${escapeHtml(title)}</title>
-<style>${STYLE}</style>
-</head>
-<body>
-<div class="content" style="padding: 16px;">${body}</div>
-</body>
-</html>`;
-  }
+export function renderShell({ title, activeHref, body }) {
   return `<!doctype html>
 <html>
 <head>
@@ -156,8 +196,6 @@ export function renderShell({ title, activeHref, body, embed = false }) {
 <div class="top-bar">
   <strong>mjølnir · hub</strong>
   <nav>
-    <a href="/mjolnir/console">← unified console</a>
-    <a href="/builder/ui">builder's forecast &amp; publish-now →</a>
     <a href="/stabbur/ui">stabbur: notes &amp; grammar →</a>
   </nav>
 </div>

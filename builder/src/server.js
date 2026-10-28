@@ -22,12 +22,6 @@ async function readJson(req) {
   return body.length ? JSON.parse(body.toString("utf8")) : {};
 }
 
-// D-C9: see `hub/src/server.js`'s identical helper — true only when the
-// unified console's iframe requested it.
-function isEmbed(url) {
-  return url.searchParams.get("embed") === "1";
-}
-
 function timeAgo(date) {
   const ms = Date.now() - new Date(date).getTime();
   const mins = Math.floor(ms / 60000);
@@ -73,7 +67,13 @@ function renderActiveLogicBundleBanner(activeLogicBundle) {
   </div>`;
 }
 
-function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle, embed = false) {
+// D109: factored out from `renderForecastPage` so hub can reuse this exact
+// markup directly (importing it, not duplicating it) when rendering
+// builder's pages inside hub's own shell — see hub/src/layout.js's "Builder"
+// nav group comment. Replaces the earlier iframe-based "unified console"
+// (D-C9), reverted: it doubled chrome and the workbench's own light theme
+// read worse than the operator wanted.
+export function buildForecastBody(forecast, jobs, batches, batchDetails, activeLogicBundle) {
   const totalEligible = forecast.byDeck.reduce((n, d) => n + d.newlyEligibleCount, 0);
   const affectedDecks = forecast.byDeck.filter((d) => d.newlyEligibleCount > 0);
   const totalQueueDepth = forecast.byDeck.reduce((n, d) => n + d.pendingQueueDepth, 0);
@@ -132,11 +132,7 @@ function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBu
     })
     .join("\n");
 
-  return renderShell({
-    title: "mjolnir / builder — forecast",
-    activeHref: "/builder",
-    embed,
-    body: `
+  return `
 <div class="page-head">
   <div><h2>Forecast &amp; publish</h2><div class="page-sub">What would ship if you published right now — no floor, every eligible note mints.</div></div>
   <button class="btn-primary" id="publish-now">Publish now</button>
@@ -216,21 +212,24 @@ document.getElementById('publish-now').addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
-</script>`,
+</script>`;
+}
+
+function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle) {
+  return renderShell({
+    title: "mjolnir / builder — forecast",
+    activeHref: "/builder",
+    body: buildForecastBody(forecast, jobs, batches, batchDetails, activeLogicBundle),
   });
 }
 
 // ---- Schedule ----
 
-function renderSchedulePage(schedule, embed = false) {
+export function buildScheduleBody(schedule) {
   const row = (kind, checked, inner) =>
     `<label class="radio-row ${checked ? "active" : ""}"><input type="radio" name="sched" value="${kind}" ${checked ? "checked" : ""}> ${inner}</label>`;
 
-  return renderShell({
-    title: "mjolnir / builder — schedule",
-    activeHref: "/builder/schedule",
-    embed,
-    body: `
+  return `
 <div class="page-head"><div><h2>Schedule</h2><div class="page-sub">Automatic publishing, independent of the button on the forecast page.</div></div></div>
 <div class="panel panel-pad">
   <div class="schedule-options">
@@ -255,13 +254,23 @@ document.getElementById('save-btn').addEventListener('click', async () => {
   const res = await fetch('/builder/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(schedule) });
   document.getElementById('result').textContent = res.ok ? 'saved — takes effect on the next scheduling check, no restart needed' : 'error saving schedule';
 });
-</script>`,
+</script>`;
+}
+
+function renderSchedulePage(schedule) {
+  return renderShell({
+    title: "mjolnir / builder — schedule",
+    activeHref: "/builder/schedule",
+    body: buildScheduleBody(schedule),
   });
 }
 
 // ---- Run log ----
 
-function renderLogsPage(jobs, selectedJob, logLines, embed = false) {
+// `basePath` lets a caller mounting this elsewhere (hub's own
+// `/mjolnir/builder/logs`) keep the job-detail links pointed at itself
+// instead of hardcoding builder's own standalone `/builder/logs` path.
+export function buildLogsBody(jobs, selectedJob, logLines, basePath = "/builder/logs") {
   const rows = jobs
     .map((j) => {
       const dotClass = j.status === "succeeded" ? "ok" : j.status === "failed" ? "err" : "";
@@ -271,7 +280,7 @@ function renderLogsPage(jobs, selectedJob, logLines, embed = false) {
         <div class="tl-time">${escapeHtml(new Date(j.requested_at).toISOString())}</div>
         <div class="tl-rail"><div class="tl-dot ${dotClass}"></div></div>
         <div class="tl-body">
-          <div class="tl-title"><a href="/builder/logs?job=${j.id}">${title}</a> <span class="pill ${pillClass}">${escapeHtml(j.status)}</span></div>
+          <div class="tl-title"><a href="${basePath}?job=${j.id}">${title}</a> <span class="pill ${pillClass}">${escapeHtml(j.status)}</span></div>
           <div class="tl-detail">${j.error ? escapeHtml(j.error) : `job #${j.id}`}</div>
         </div>
       </div>`;
@@ -285,17 +294,20 @@ function renderLogsPage(jobs, selectedJob, logLines, embed = false) {
     </div>`
     : "";
 
-  return renderShell({
-    title: "mjolnir / builder — run log",
-    activeHref: "/builder/logs",
-    embed,
-    body: `
+  return `
 <div class="page-head"><div><h2>Run log</h2></div></div>
 <div class="panel">
   <div class="panel-head"><h3>Recent runs</h3></div>
   <div class="panel-pad"><div class="timeline">${rows || "no runs yet"}</div></div>
   ${logOutput}
-</div>`,
+</div>`;
+}
+
+function renderLogsPage(jobs, selectedJob, logLines) {
+  return renderShell({
+    title: "mjolnir / builder — run log",
+    activeHref: "/builder/logs",
+    body: buildLogsBody(jobs, selectedJob, logLines),
   });
 }
 
@@ -343,7 +355,7 @@ export function createServer(pool, config) {
         const batchDetails = new Map();
         for (const b of batches) batchDetails.set(b.buildId, await occurrencesForBuild(pool, b.buildId));
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle, isEmbed(url)));
+        return res.end(renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle));
       }
       // Task 4.15: triggers 4.2-4.12 immediately, independent of the
       // schedule — a no-op if nothing is newly eligible (runPublish handles it).
@@ -355,7 +367,7 @@ export function createServer(pool, config) {
 
       if (req.method === "GET" && url.pathname === "/builder/schedule") {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderSchedulePage(await getSchedule(pool), isEmbed(url)));
+        return res.end(renderSchedulePage(await getSchedule(pool)));
       }
       if (req.method === "POST" && url.pathname === "/builder/api/schedule") {
         const schedule = await readJson(req);
@@ -368,7 +380,7 @@ export function createServer(pool, config) {
         const [jobs, selectedJob] = await Promise.all([recentBuildJobs(pool), jobId ? getBuildJob(pool, Number(jobId)) : null]);
         const logLines = selectedJob ? await jobLogLines(pool, selectedJob.id) : [];
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderLogsPage(jobs, selectedJob, logLines, isEmbed(url)));
+        return res.end(renderLogsPage(jobs, selectedJob, logLines));
       }
 
       res.writeHead(404, { "Content-Type": "text/plain" });

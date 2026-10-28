@@ -255,46 +255,61 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
       assert.equal(downloadRes.status, 200);
       assert.match(downloadRes.headers.get("content-disposition"), /filename="b900002-renamed\.js"/);
 
-      // card-preview (D-C8): styled with the extracted stock-app emphasis
-      // classes, audio face flagged, static badge when no blob is on disk.
+      // card-preview (D109): inline, expandable under the card's own row —
+      // styled with the extracted stock-app DARK-theme emphasis classes
+      // (not light), vertically stacked faces, audio face flagged, static
+      // badge when no blob is on disk. No longer a separate page.
       await pool.query(
         "INSERT INTO card_slots (id, deck_code, card_no, note_id, audio_sha256) VALUES ('C20099', 'C20', 99, 'n99', 'nosuchsha')"
       );
       await pool.query(
         "INSERT INTO card_content (card_id, n, e, x, a) VALUES ('C20099', '<b class=\"bold teal\">en</b>: hus', '<span class=\"red\">rød</span>', '', 'N')"
       );
-      const previewRes = await fetch(`http://localhost:${port}/mjolnir/cards/C20099/preview`);
-      assert.equal(previewRes.status, 200);
-      const previewHtml = await previewRes.text();
-      assert.match(previewHtml, /bold teal/);
-      assert.match(previewHtml, /#00A4BF/); // the stock "teal" color
-      assert.match(previewHtml, /#246BFD/); // the stock bold/heading-accent color
-      assert.match(previewHtml, /🔊 audio/, "the N face (card_content.a) is flagged, not E or X");
-      assert.match(previewHtml, /audio-badge static/, "no blob on disk for 'nosuchsha' — static badge, not a broken player");
+      const cardsHtml = await (await fetch(`http://localhost:${port}/mjolnir/cards`)).text();
+      assert.match(cardsHtml, /bold teal/);
+      assert.match(cardsHtml, /#00A4BF/); // the stock "teal" color, same in both themes
+      assert.match(cardsHtml, /#3F8CFF/, "the stock DARK-theme bold/heading-accent color, not the light one (#246BFD)");
+      assert.doesNotMatch(cardsHtml, /#246BFD/, "the light-theme accent color must not appear — dark theme only");
+      assert.match(cardsHtml, /card-preview-toggle/, "an inline toggle button, not a link to a separate page");
+      assert.match(cardsHtml, /card-preview-row/, "a hidden row holding the preview, not a standalone page");
+      assert.match(cardsHtml, /card-preview-faces.*flex-direction: column/s, "faces stack vertically");
+      assert.match(cardsHtml, /🔊/, "the N face (card_content.a) is flagged");
+      assert.match(cardsHtml, /card-preview-audio-badge/, "no blob on disk for 'nosuchsha' — static badge, not a broken player");
+      assert.doesNotMatch(cardsHtml, /\/mjolnir\/cards\/C20099\/preview/, "the old standalone preview route/link is gone");
 
       const missingAudioRes = await fetch(`http://localhost:${port}/mjolnir/cards/C20099/audio`);
       assert.equal(missingAudioRes.status, 404);
 
-      const missingCardRes = await fetch(`http://localhost:${port}/mjolnir/cards/NOSUCH/preview`);
-      assert.equal(missingCardRes.status, 404);
+      // D109: hub's own "Builder" pages — same monorepo, same shared
+      // Postgres, builder's exact body-builder functions imported directly
+      // and wrapped in hub's own shell (not an iframe, not a separate
+      // service's chrome). This test harness configures no
+      // STABBUR_BASE_URL/STABBUR_AUTH_TOKEN (unlike builder's own fixture
+      // suite, which runs a fake stabbur) — forecast degrades to a clear,
+      // explicit error rather than a crash or a silent blank page.
+      const forecastRes = await fetch(`http://localhost:${port}/mjolnir/builder/forecast`);
+      assert.equal(forecastRes.status, 500);
+      assert.match(await forecastRes.text(), /STABBUR_BASE_URL/);
 
-      // operator-console-shell (D-C9): one page, four iframes over
-      // already-working routes, each with embed=1.
+      const scheduleRes = await fetch(`http://localhost:${port}/mjolnir/builder/schedule`);
+      assert.equal(scheduleRes.status, 200);
+      assert.match(await scheduleRes.text(), /Schedule/);
+
+      const logsRes = await fetch(`http://localhost:${port}/mjolnir/builder/logs`);
+      assert.equal(logsRes.status, 200);
+      assert.match(await logsRes.text(), /Run log/);
+
+      // No more /mjolnir/console (iframe-based unified console, removed).
       const consoleRes = await fetch(`http://localhost:${port}/mjolnir/console`);
-      assert.equal(consoleRes.status, 200);
-      const consoleHtml = await consoleRes.text();
-      assert.match(consoleHtml, /src="\/mjolnir\/cards\?embed=1"/);
-      assert.match(consoleHtml, /src="\/builder\?embed=1"/);
-      assert.match(consoleHtml, /src="\/mjolnir\/ota\?embed=1"/);
-      assert.match(consoleHtml, /src="\/mjolnir\/workbench\/\?embed=1"/);
+      assert.equal(consoleRes.status, 404);
 
-      // embed=1 strips this page's own top-bar/rail; without it, unaffected.
-      const embeddedHtml = await (await fetch(`http://localhost:${port}/mjolnir/cards?embed=1`)).text();
-      assert.doesNotMatch(embeddedHtml, /class="top-bar"/);
-      assert.doesNotMatch(embeddedHtml, /class="rail"/);
-      const normalHtml = await (await fetch(`http://localhost:${port}/mjolnir/cards`)).text();
-      assert.match(normalHtml, /class="top-bar"/);
-      assert.match(normalHtml, /← unified console/);
+      // D109/point 5: a JSON twin of the catalogue page, fetched by the
+      // workbench's own "Catalogue" tab when running embedded.
+      const catalogueJsonRes = await fetch(`http://localhost:${port}/mjolnir/catalogue.json`);
+      assert.equal(catalogueJsonRes.status, 200);
+      const catalogueJson = await catalogueJsonRes.json();
+      assert.ok(catalogueJson.builds.some((b) => b.buildId === "b900002"));
+      assert.ok(Array.isArray(catalogueJson.logicBundles));
 
       const missingRes = await fetch(`http://localhost:${port}/nope`);
       assert.equal(missingRes.status, 404);

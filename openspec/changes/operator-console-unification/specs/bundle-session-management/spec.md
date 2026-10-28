@@ -50,6 +50,39 @@ click, without the user needing to know or type its on-disk path.
 - **WHEN** a user selects a logic bundle (active or not) from the catalogue
 - **THEN** the system opens a session for that exact logic bundle's file
 
+### Requirement: An uploaded session is identified by a readable name, not its internal storage path
+The system SHALL display an uploaded bundle's own original filename as its
+session label, rather than the internal, randomized temporary path the
+upload happened to be staged under.
+
+#### Scenario: Uploading a file with a normal filename
+- **WHEN** a user uploads a file named, for example, "my bundle.bundle"
+- **THEN** the session is labeled using that name, not the server's internal
+  temporary storage path for it
+
+### Requirement: The operator receives visible feedback while a bundle is being opened
+The system SHALL show an explicit, visible status indication while a
+dropped or selected bundle is being parsed, for as long as that parsing
+takes, rather than appearing unresponsive with no feedback.
+
+#### Scenario: Opening a large bundle that takes several seconds to parse
+- **WHEN** a user drops or selects a bundle whose parsing takes several
+  seconds
+- **THEN** the system shows a visible "working" indication for the duration,
+  rather than no feedback until it suddenly completes
+
+### Requirement: The resolved stored-patches directory is visibly diagnosable
+The system SHALL display the exact, resolved absolute directory it is
+reading stored patches from, next to the patches list, so an unexpectedly
+empty list can be diagnosed without inspecting server configuration
+directly.
+
+#### Scenario: The patches list is empty
+- **WHEN** the stored-patches directory contains no patches (including when
+  this is due to a misconfigured directory override)
+- **THEN** the operator can see, directly in the UI, which absolute
+  directory the system is reading from
+
 ### Requirement: Repeated "open" actions reuse one workbench window
 The system SHALL reuse a single, already-open workbench browser window for
 subsequent "open this bundle in the workbench" actions, rather than opening

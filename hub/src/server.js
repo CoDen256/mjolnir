@@ -6,11 +6,24 @@ import { verifyBundle, verifyLogicBundleBytes, submitBundle, activateLogicBundle
 import { findBakedBaseVersion, findBakedPatchRev } from "../../tool/src/otaPublish.js";
 import { list as listLogicBundles } from "./logicBundles.js";
 import { cardsList, stripHtml, getCardSlot } from "./cards.js";
-import { get as getCardContent } from "./cardContent.js";
 import { DECK_ALLOCATION } from "./decks.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
 import { createRequestHandler as createWorkbenchHandler } from "../../src/commands/ui.js";
+// D109: builder's own pages are rendered here directly, in-process — same
+// monorepo, same shared Postgres (D-P3) — instead of the earlier iframe-
+// based "unified console" (D-C9, reverted: doubled chrome, and the
+// workbench's own light theme read worse embedded than linked to directly).
+// hub imports builder's pure body-builder functions and data-reading
+// functions and wraps them in its own shell, so the design is genuinely
+// "hub's own," not a second stylesheet pasted alongside it.
+import { runForecast } from "../../builder/src/pipeline.js";
+import { recentBuildJobs, getBuildJob } from "../../builder/src/buildJobs.js";
+import { getSchedule } from "../../builder/src/schedulerConfig.js";
+import { jobLogLines } from "../../builder/src/jobLogs.js";
+import { recentBatches, occurrencesForBuild } from "../../builder/src/batchHistory.js";
+import { getActiveMeta } from "../../builder/src/logicBundle.js";
+import { buildForecastBody, buildScheduleBody, buildLogsBody } from "../../builder/src/server.js";
 
 const WORKBENCH_MOUNT = "/mjolnir/workbench";
 
@@ -45,13 +58,6 @@ async function readJson(req) {
   return body.length ? JSON.parse(body.toString("utf8")) : {};
 }
 
-// D-C9: every page route reads this from its own query string and threads
-// it into `renderShell` — true only when the unified console's iframe
-// requested it.
-function isEmbed(url) {
-  return url.searchParams.get("embed") === "1";
-}
-
 // D-C7: a small, local, filesystem-safe slug — lowercase, non-alphanumerics
 // collapsed to a single hyphen, trimmed to a sane length. No dependency
 // needed for something this constrained.
@@ -63,65 +69,9 @@ function slugify(text) {
     .slice(0, 40);
 }
 
-// ---- Unified console ----
-
-// D-C9: four iframes over already-working routes (`embed=1` strips each
-// one's own top-bar/rail so only the console's own tab bar shows chrome).
-// Not a merge of hub's and builder's backend processes — each iframe is a
-// normal same-origin request to whichever service already serves that path
-// (Caddy routes `/builder/*` and `/mjolnir/*` to their own containers
-// exactly as before; this page just frames both from hub).
-const CONSOLE_SECTIONS = [
-  { key: "cards", label: "Cards", src: "/mjolnir/cards?embed=1" },
-  { key: "builder", label: "Builder", src: "/builder?embed=1" },
-  { key: "ota", label: "OTA", src: "/mjolnir/ota?embed=1" },
-  { key: "tools", label: "Tools", src: "/mjolnir/workbench/?embed=1" },
-];
-
-function renderConsolePage() {
-  const tabs = CONSOLE_SECTIONS.map(
-    (s, i) => `<button type="button" class="console-tab ${i === 0 ? "active" : ""}" data-section="${s.key}">${escapeHtml(s.label)}</button>`
-  ).join("\n");
-  const frames = CONSOLE_SECTIONS.map(
-    (s, i) => `<iframe class="console-frame ${i === 0 ? "active" : ""}" data-section="${s.key}" src="${escapeHtml(s.src)}"></iframe>`
-  ).join("\n");
-
-  return `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>mjølnir · console</title>
-<style>
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; font-family: ui-sans-serif, system-ui, sans-serif; background: #14171c; }
-  .console-tabs { display: flex; gap: 4px; padding: 10px 14px; background: #0f1216; border-bottom: 1px solid #2a3039; }
-  .console-tab { font: inherit; font-weight: 600; font-size: 13px; padding: 7px 16px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: #8b94a3; cursor: pointer; }
-  .console-tab:hover { background: #1b1f26; color: #e8e6e1; }
-  .console-tab.active { background: #c6703f26; color: #f2b688; }
-  .console-frames { position: relative; height: calc(100vh - 45px); }
-  .console-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: none; display: none; background: #14171c; }
-  .console-frame.active { display: block; }
-</style>
-</head>
-<body>
-<div class="console-tabs">${tabs}</div>
-<div class="console-frames">${frames}</div>
-<script>
-document.querySelectorAll('.console-tab').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const section = btn.dataset.section;
-    document.querySelectorAll('.console-tab').forEach((b) => b.classList.toggle('active', b.dataset.section === section));
-    document.querySelectorAll('.console-frame').forEach((f) => f.classList.toggle('active', f.dataset.section === section));
-  });
-});
-</script>
-</body>
-</html>`;
-}
-
 // ---- Publish history ----
 
-function renderHistoryPage(publications, current, config, embed = false) {
+function renderHistoryPage(publications, current, config) {
   const rows = publications
     .map((p) => {
       const isCurrent = current && current.buildId === p.build_id;
@@ -150,7 +100,6 @@ function renderHistoryPage(publications, current, config, embed = false) {
   return renderShell({
     title: "mjolnir / hub — publish history",
     activeHref: "/mjolnir",
-    embed,
     body: `
 <div class="page-head"><div><h2>Publish history</h2></div></div>
 <div class="panel">
@@ -205,7 +154,7 @@ document.querySelectorAll('.delete-build-btn').forEach((btn) => {
 // database access (by design), so this is hub-rendered, not fetched by the
 // workbench; it's the same `?open=<path>` link every other inspect action
 // already uses, just gathered in one place instead of scattered per page.
-function renderCataloguePage(publications, logicBundles, config, embed = false) {
+function renderCataloguePage(publications, logicBundles, config) {
   const activeLogicBundleId = logicBundles.find((b) => b.active)?.id;
 
   const buildRows = publications
@@ -237,7 +186,6 @@ function renderCataloguePage(publications, logicBundles, config, embed = false) 
   return renderShell({
     title: "mjolnir / hub — catalogue",
     activeHref: "/mjolnir/catalogue",
-    embed,
     body: `
 <div class="page-head"><div><h2>Catalogue</h2><div class="page-sub">Every OTA build and every logic bundle, one click away from the workbench.</div></div></div>
 
@@ -276,76 +224,63 @@ function occurrenceBadge(side) {
   return `<span class="pill pill-warn">${escapeHtml(side.letter)} · ${side.remaining} to go</span>`;
 }
 
-// D-C8: colors/fonts extracted directly from the real stock app bundle
-// (`base/smali.mjolnir.merged/assets/index.android.bundle`'s own theme/
-// class-style map), not invented — light theme only (see design.md's
-// recorded non-goal on dark-mode fidelity). Poppins falls back to the
-// browser's default sans-serif when unavailable; close enough for "does
-// this look right," not pixel-perfect (an explicit non-goal).
+// card-preview: a visual preview of a card's N/E/X faces, styled from the
+// real stock app's own extracted DARK-theme colors/fonts (not the light
+// theme — the operator specifically wants the device's actual dark look,
+// `base/smali.mjolnir.merged/assets/index.android.bundle`'s own theme/
+// class-style map, dark variant). Rendered inline under the card's own row
+// in the Cards table (expand/collapse, one open at a time, D109) rather
+// than a separate page — Poppins falls back to the browser's default
+// sans-serif when unavailable; close enough for "does this look right,"
+// not pixel-perfect (an explicit non-goal).
 const CARD_PREVIEW_STYLE = `
-body { margin: 0; padding: 24px; background: #f0f0f0; font-family: system-ui, sans-serif; }
-.back-link { display: inline-block; margin-bottom: 16px; color: #246BFD; text-decoration: none; font-size: 13px; }
-.faces { display: flex; gap: 20px; flex-wrap: wrap; }
-.face-wrap { flex: 1; min-width: 220px; max-width: 320px; }
-.face-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #666; margin-bottom: 6px; font-family: system-ui, sans-serif; }
-.card-face {
-  font-family: 'Poppins', system-ui, sans-serif;
-  color: #16215B;
-  background: #fff;
+.card-preview-inline { padding: 14px 4px 18px; }
+.card-preview-faces { display: flex; flex-direction: column; gap: 12px; max-width: 380px; }
+.card-preview-face-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); margin-bottom: 6px; }
+.card-preview-face {
+  font-family: 'Poppins', ui-sans-serif, system-ui, sans-serif;
+  color: #fff;
+  background: #1B1D21;
   text-align: center;
   border-radius: 10px;
-  padding: 24px 18px;
-  min-height: 120px;
-  box-shadow: 0 1px 4px rgba(0,0,0,.12);
+  padding: 18px 16px;
+  min-height: 70px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 8px;
 }
-.card-face b { font-family: 'Poppins', system-ui, sans-serif; font-weight: 700; color: #246BFD; }
-.card-face .teal { color: #00A4BF; }
-.card-face .red { color: red; }
-.card-face .green { color: #5DD8D0; }
-.card-face .left { text-align: left; }
-.card-face i, .card-face .italic { font-style: italic; }
-.card-face:empty::after { content: "(empty)"; color: #bbb; font-style: italic; }
-.audio-badge { margin-top: 10px; font-size: 20px; }
-.audio-badge.static { opacity: .5; cursor: default; }
-audio { width: 100%; margin-top: 8px; }
+.card-preview-face b { font-family: 'Poppins', ui-sans-serif, system-ui, sans-serif; font-weight: 700; color: #3F8CFF; }
+.card-preview-face .teal { color: #00A4BF; }
+.card-preview-face .red { color: red; }
+.card-preview-face .green { color: #5DD8D0; }
+.card-preview-face .left { text-align: left; }
+.card-preview-face i, .card-preview-face .italic { font-style: italic; }
+.card-preview-face:empty::after { content: "(empty)"; color: #666; font-style: italic; }
+.card-preview-audio-badge { margin-top: 2px; font-size: 18px; opacity: .55; }
+.card-preview-face-wrap audio { width: 100%; margin-top: 6px; }
 `;
 
-function cardFaceHtml(letter, html, audioLetter, hasAudioFile, cardId) {
+function cardPreviewFaceHtml(letter, html, audioLetter, hasAudioFile, cardId) {
   const isAudioFace = letter === audioLetter;
   const audioHtml = !isAudioFace
     ? ""
     : hasAudioFile
       ? `<audio controls src="/mjolnir/cards/${encodeURIComponent(cardId)}/audio"></audio>`
-      : `<div class="audio-badge static" title="this face carries the card's audio, but no clip is on disk">🔊</div>`;
-  return `<div class="face-wrap">
-    <div class="face-label">${letter === "N" ? "Front (N)" : letter === "E" ? "Back (E)" : "Extra (X)"}${isAudioFace ? " · 🔊 audio" : ""}</div>
-    <div class="card-face">${html || ""}</div>
+      : `<div class="card-preview-audio-badge" title="this face carries the card's audio, but no clip is on disk">🔊</div>`;
+  return `<div class="card-preview-face-wrap">
+    <div class="card-preview-face-label">${letter === "N" ? "Front (N)" : letter === "E" ? "Back (E)" : "Extra (X)"}${isAudioFace ? " · 🔊" : ""}</div>
+    <div class="card-preview-face">${html || ""}</div>
     ${audioHtml}
   </div>`;
 }
 
-function renderCardPreviewPage({ cardId, deckCode, deckTitle, content, hasAudioFile }) {
-  const faces = ["N", "E", "X"].map((letter) => cardFaceHtml(letter, content[letter], content.A, hasAudioFile, cardId)).join("\n");
-  return `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>${escapeHtml(cardId)} — card preview</title>
-<style>${CARD_PREVIEW_STYLE}</style>
-</head>
-<body>
-<a class="back-link" href="/mjolnir/cards">← back to cards</a>
-<h2 style="font-family: system-ui, sans-serif;">${escapeHtml(cardId)} <span style="font-weight:400; color:#888;">— ${escapeHtml(deckCode)} · ${escapeHtml(deckTitle)}</span></h2>
-<div class="faces">${faces}</div>
-</body>
-</html>`;
+function cardPreviewInlineHtml(cardId, content, hasAudioFile) {
+  const faces = ["N", "E", "X"].map((letter) => cardPreviewFaceHtml(letter, content[letter], content.A, hasAudioFile, cardId)).join("\n");
+  return `<div class="card-preview-inline"><div class="card-preview-faces">${faces}</div></div>`;
 }
 
-function renderCardsPage(cards, { search, deckCode, statusFilter }, stabburUiBase, embed = false) {
+function renderCardsPage(cards, { search, deckCode, statusFilter }, stabburUiBase, dataDir) {
   const byDeck = new Map();
   for (const card of cards) {
     if (!byDeck.has(card.deckCode)) byDeck.set(card.deckCode, []);
@@ -367,6 +302,8 @@ function renderCardsPage(cards, { search, deckCode, statusFilter }, stabburUiBas
               : hasGrammar
                 ? "<td></td>"
                 : "";
+          const hasAudioFile = !!(c.audioSha256 && fs.existsSync(path.join(dataDir, "blob", c.audioSha256)));
+          const previewHtml = cardPreviewInlineHtml(c.id, { N: c.N, E: c.E, X: c.X, A: c.A }, hasAudioFile);
           return `<tr>
             <td class="mono">${escapeHtml(c.id)}</td>
             <td class="wrap">${escapeHtml(stripHtml(c.N))}</td>
@@ -374,7 +311,10 @@ function renderCardsPage(cards, { search, deckCode, statusFilter }, stabburUiBas
             <td>${c.sides.map(occurrenceBadge).join(" ")}</td>
             <td>${noteLink}</td>
             ${ruleLink}
-            <td><a class="btn-ghost" href="/mjolnir/cards/${encodeURIComponent(c.id)}/preview" target="_blank" rel="noopener">👁 preview</a></td>
+            <td><button type="button" class="btn-ghost card-preview-toggle" data-card="${escapeHtml(c.id)}">👁 preview</button></td>
+          </tr>
+          <tr class="card-preview-row" data-card="${escapeHtml(c.id)}" style="display:none;">
+            <td colspan="20">${previewHtml}</td>
           </tr>`;
         })
         .join("\n");
@@ -397,8 +337,8 @@ function renderCardsPage(cards, { search, deckCode, statusFilter }, stabburUiBas
   return renderShell({
     title: "mjolnir / hub — cards",
     activeHref: "/mjolnir/cards",
-    embed,
     body: `
+<style>${CARD_PREVIEW_STYLE}</style>
 <div class="page-head"><div><h2>Cards</h2><div class="page-sub">Every card ever minted — the device-side counterpart to stabbur's Notes list.</div></div></div>
 <form class="toolbar" method="GET" action="/mjolnir/cards">
   <input class="search-input" type="search" name="q" value="${escapeHtml(search)}" placeholder="Search card content…">
@@ -411,7 +351,21 @@ function renderCardsPage(cards, { search, deckCode, statusFilter }, stabburUiBas
   <button type="submit">Filter</button>
 </form>
 ${panels || `<div class="panel panel-pad">no cards match this filter</div>`}
-${!stabburUiBase ? `<div class="inline-note">STABBUR_UI_BASE is not configured — note/grammar-rule links are disabled, but the list above is unaffected.</div>` : ""}`,
+${!stabburUiBase ? `<div class="inline-note">STABBUR_UI_BASE is not configured — note/grammar-rule links are disabled, but the list above is unaffected.</div>` : ""}
+<script>
+// D109: at most one preview open at a time — opening another closes
+// whichever one was already showing, same "exclusive accordion" behavior
+// across every deck panel on the page.
+document.querySelectorAll('.card-preview-toggle').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const card = btn.dataset.card;
+    const row = document.querySelector('.card-preview-row[data-card="' + CSS.escape(card) + '"]');
+    const isOpen = row.style.display !== 'none';
+    document.querySelectorAll('.card-preview-row').forEach((r) => { r.style.display = 'none'; });
+    row.style.display = isOpen ? 'none' : 'table-row';
+  });
+});
+</script>`,
   });
 }
 
@@ -434,14 +388,13 @@ function logicBundleRow(b, isActive) {
   </tr>`;
 }
 
-function renderOtaPage(logicBundles, embed = false) {
+function renderOtaPage(logicBundles) {
   const activeId = logicBundles.find((b) => b.active)?.id;
   const rows = logicBundles.map((b) => logicBundleRow(b, b.id === activeId)).join("\n");
 
   return renderShell({
     title: "mjolnir / hub — submit bundle",
     activeHref: "/mjolnir/ota",
-    embed,
     body: `
 <div class="page-head"><div><h2>Submit bundle</h2><div class="page-sub">Submitting creates a <code>logic_bundles</code> entry — it does not touch <code>current.json</code> or run <code>builder</code> by itself. Activate the one you want <code>builder</code>'s next publish to build onto.</div></div></div>
 
@@ -734,15 +687,48 @@ export function createServer(pool, config) {
         return sendJson(res, 200, await listPublications());
       }
 
-      // D-C9: the unified console — Cards/Builder/OTA/Tools as sections of
-      // one page, each an iframe over its own already-working route with
-      // `embed=1` (same-origin, so the existing shared `operator_token`
-      // cookie/token already authenticates every iframe — see design.md's
-      // recorded risk if hub/builder are ever given different tokens).
-      if (req.method === "GET" && url.pathname === "/mjolnir/console") {
+      // D109: hub's own "Builder" nav pages — see the top-of-file import
+      // comment. All three reuse builder's exact body-builder functions and
+      // pure read-functions; only the schedule/publish POST actions stay on
+      // builder's own `/builder/api/*` routes (the pages' inline scripts
+      // already reference those as root-absolute paths, which Caddy already
+      // routes to builder's container regardless of which service rendered
+      // the surrounding page — no proxying needed for those).
+      if (req.method === "GET" && url.pathname === "/mjolnir/builder/forecast") {
+        if (!config.stabburBaseUrl || !config.stabburAuthToken) {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          return res.end("STABBUR_BASE_URL/STABBUR_AUTH_TOKEN are not set for hub — add them to .env to enable this page.");
+        }
+        const [forecast, jobs, batches, activeLogicBundle] = await Promise.all([
+          runForecast(pool, {
+            stabburBaseUrl: config.stabburBaseUrl,
+            stabburAuthToken: config.stabburAuthToken,
+            sourceLang: config.sourceLang,
+          }),
+          recentBuildJobs(pool),
+          recentBatches(pool, 5),
+          getActiveMeta(pool),
+        ]);
+        const batchDetails = new Map();
+        for (const b of batches) batchDetails.set(b.buildId, await occurrencesForBuild(pool, b.buildId));
+        const body = buildForecastBody(forecast, jobs, batches, batchDetails, activeLogicBundle);
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderConsolePage());
+        return res.end(renderShell({ title: "mjolnir / hub — forecast & publish", activeHref: "/mjolnir/builder/forecast", body }));
       }
+      if (req.method === "GET" && url.pathname === "/mjolnir/builder/schedule") {
+        const body = buildScheduleBody(await getSchedule(pool));
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end(renderShell({ title: "mjolnir / hub — schedule", activeHref: "/mjolnir/builder/schedule", body }));
+      }
+      if (req.method === "GET" && url.pathname === "/mjolnir/builder/logs") {
+        const jobId = url.searchParams.get("job");
+        const [jobs, selectedJob] = await Promise.all([recentBuildJobs(pool), jobId ? getBuildJob(pool, Number(jobId)) : null]);
+        const logLines = selectedJob ? await jobLogLines(pool, selectedJob.id) : [];
+        const body = buildLogsBody(jobs, selectedJob, logLines, "/mjolnir/builder/logs");
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end(renderShell({ title: "mjolnir / hub — run log", activeHref: "/mjolnir/builder/logs", body }));
+      }
+
       // /mjolnir/ui is the canonical entry point, matching stabbur's own
       // /stabbur/ui and builder's /builder/ui (D46: one convention across
       // services). The bare path is kept working too — existing bookmarks,
@@ -754,13 +740,38 @@ export function createServer(pool, config) {
       ) {
         const [publications, current] = [await listPublications(), readCurrent(config.dataDir)];
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderHistoryPage(publications, current, config, isEmbed(url)));
+        return res.end(renderHistoryPage(publications, current, config));
       }
 
       if (req.method === "GET" && url.pathname === "/mjolnir/catalogue") {
         const [publications, logicBundles] = [await listPublications(), await listLogicBundles()];
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderCataloguePage(publications, logicBundles, config, isEmbed(url)));
+        return res.end(renderCataloguePage(publications, logicBundles, config));
+      }
+      // Lightweight JSON twin of the human-facing catalogue page above —
+      // fetched by the workbench's own "Catalogue" tab (src/ui-assets/) when
+      // it's running embedded inside hub, so an operator can open any past
+      // OTA build or logic bundle without leaving the workbench tool to
+      // visit a separate hub page first. 404s harmlessly when the workbench
+      // runs standalone (its own tiny CLI server has no such route), which
+      // the tab's own fetch handles as "catalogue unavailable here."
+      if (req.method === "GET" && url.pathname === "/mjolnir/catalogue.json") {
+        const [publications, logicBundles] = [await listPublications(), await listLogicBundles()];
+        const activeLogicBundleId = logicBundles.find((b) => b.active)?.id;
+        return sendJson(res, 200, {
+          builds: publications.map((p) => ({
+            buildId: p.build_id,
+            label: p.label,
+            path: path.join(config.dataDir, "ota", "bundle", `${p.build_id}.js`),
+          })),
+          logicBundles: logicBundles.map((b) => ({
+            id: b.id,
+            baseVersion: b.base_version,
+            label: b.label,
+            path: b.file_path,
+            active: b.id === activeLogicBundleId,
+          })),
+        });
       }
       // Streams a historical build's exact published bytes — the operator
       // asked to be able to inspect/download a publish, not just see its
@@ -794,31 +805,11 @@ export function createServer(pool, config) {
         const statusFilter = url.searchParams.get("status") || "";
         const cards = await cardsList(pool, { search, deckCode, statusFilter });
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderCardsPage(cards, { search, deckCode, statusFilter }, config.stabburUiBase, isEmbed(url)));
+        return res.end(renderCardsPage(cards, { search, deckCode, statusFilter }, config.stabburUiBase, config.dataDir));
       }
 
-      // card-preview: a visual preview of one card's N/E/X faces, styled
-      // from the real stock app's own extracted CSS (D-C8) — not hub's own
-      // operator-console theme, deliberately a standalone page.
-      if (req.method === "GET" && url.pathname.startsWith("/mjolnir/cards/") && url.pathname.endsWith("/preview")) {
-        const cardId = decodeURIComponent(url.pathname.slice("/mjolnir/cards/".length, -"/preview".length));
-        const [slot, content] = await Promise.all([getCardSlot(pool, cardId), getCardContent(cardId)]);
-        if (!slot) {
-          res.writeHead(404, { "Content-Type": "text/plain" });
-          return res.end(`no such card "${cardId}"`);
-        }
-        const hasAudioFile = !!(slot.audio_sha256 && fs.existsSync(path.join(config.dataDir, "blob", slot.audio_sha256)));
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(
-          renderCardPreviewPage({
-            cardId,
-            deckCode: slot.deck_code,
-            deckTitle: slot.deck_title,
-            content: content || { N: "", E: "", X: "", A: "N" },
-            hasAudioFile,
-          })
-        );
-      }
+      // card-preview's audio stream — the inline preview's <audio> element
+      // src, unchanged by the move from a standalone page to an inline panel.
       if (req.method === "GET" && url.pathname.startsWith("/mjolnir/cards/") && url.pathname.endsWith("/audio")) {
         const cardId = decodeURIComponent(url.pathname.slice("/mjolnir/cards/".length, -"/audio".length));
         const slot = await getCardSlot(pool, cardId);
@@ -835,7 +826,7 @@ export function createServer(pool, config) {
       if (req.method === "GET" && url.pathname === "/mjolnir/ota") {
         const logicBundles = await listLogicBundles();
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderOtaPage(logicBundles, isEmbed(url)));
+        return res.end(renderOtaPage(logicBundles));
       }
       // D-L1/task 4.1: the default submit flow's own, narrower verification
       // — no buildId exists yet for a freshly-dropped logic bundle. Also

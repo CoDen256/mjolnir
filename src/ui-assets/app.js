@@ -34,7 +34,7 @@ function deckcardApi(method, sub, body) {
 
 // --- App shell: sessions + tabs --------------------------------------
 
-const VIEWS = ["explorer", "compare", "editor", "patches", "assemble", "deckcard"];
+const VIEWS = ["explorer", "compare", "editor", "patches", "assemble", "catalogue", "deckcard"];
 
 const app = {
   sessions: [],
@@ -63,7 +63,11 @@ function renderSessionBar() {
   for (const s of app.sessions) {
     const span = document.createElement("span");
     span.className = "session-chip" + (s.id === app.activeSessionId ? " active" : "");
-    span.textContent = s.bundlePath.split("/").pop();
+    // An uploaded session's actual on-disk path is a randomized temp
+    // filename (never meant to be shown) — `displayName` carries the
+    // operator's original filename instead; a path-opened session has none,
+    // so it falls back to the resolved path's own basename, unchanged.
+    span.textContent = s.displayName || s.bundlePath.split("/").pop();
     span.title = s.bundlePath;
     span.addEventListener("click", () => setActiveSession(s.id));
     list.appendChild(span);
@@ -116,9 +120,24 @@ async function openBundlePath() {
 // D-C4: no server-side path required — the bytes themselves are uploaded
 // and staged, then opened exactly like a path-based session. Uses `fetch`
 // directly (not the `api()` JSON helper) since the body here is raw bytes.
+//
+// Opening a large bundle genuinely takes a few seconds (parsing + exploding
+// thousands of modules is synchronous work on the server) — this can't
+// honestly report a numeric percentage (there's no streaming progress
+// signal to report), but leaving the UI silent during that time reads as
+// "frozen." `openStatus` gives immediate, explicit feedback instead, and
+// the dropzone/file-input are disabled meanwhile so a second drop can't
+// race the first.
 async function openBundleFromFile(file) {
   const errorEl = el("open-path-error");
+  const statusEl = el("open-status");
+  const dz = el("upload-dropzone");
+  const fileInput = el("upload-file-input");
   errorEl.classList.add("hidden");
+  statusEl.textContent = `Opening ${file.name || "file"}… large bundles can take several seconds to parse.`;
+  statusEl.classList.remove("hidden");
+  dz.classList.add("busy");
+  fileInput.disabled = true;
   try {
     const bytes = await file.arrayBuffer();
     const res = await fetch("api/sessions/upload", {
@@ -130,9 +149,14 @@ async function openBundleFromFile(file) {
     if (!res.ok) throw new Error(data.error || `upload failed (${res.status})`);
     if (!app.sessions.some((s) => s.id === data.id)) app.sessions.push(data);
     setActiveSession(data.id);
+    statusEl.classList.add("hidden");
   } catch (err) {
+    statusEl.classList.add("hidden");
     errorEl.textContent = err.message;
     errorEl.classList.remove("hidden");
+  } finally {
+    dz.classList.remove("busy");
+    fileInput.disabled = false;
   }
 }
 
@@ -152,7 +176,60 @@ function refreshCurrentView() {
   else if (app.currentView === "editor") loadEditorModules();
   else if (app.currentView === "patches") loadPatchesList();
   else if (app.currentView === "assemble") loadAssembleView();
+  else if (app.currentView === "catalogue") loadCatalogueView();
   else if (app.currentView === "deckcard") loadDeckCardSidebar();
+}
+
+// --- Catalogue (D109) ------------------------------------------------------
+//
+// Every OTA build + logic bundle, fetched from hub's own `/mjolnir/
+// catalogue.json` — a sibling endpoint outside this app's own mount prefix,
+// since the workbench itself has no database access by design (D108) and
+// this data only exists when running embedded inside a deployed hub. A
+// standalone CLI session (or hub simply not reachable) degrades to a plain
+// "unavailable" message, not a broken fetch.
+async function loadCatalogueView() {
+  const unavailableEl = el("catalogue-unavailable");
+  const contentEl = el("catalogue-content");
+  try {
+    const res = await fetch("/mjolnir/catalogue.json");
+    if (!res.ok) throw new Error(`catalogue fetch failed (${res.status})`);
+    const data = await res.json();
+    renderCatalogueLists(data);
+    unavailableEl.classList.add("hidden");
+    contentEl.classList.remove("hidden");
+  } catch {
+    contentEl.classList.add("hidden");
+    unavailableEl.classList.remove("hidden");
+  }
+}
+
+function renderCatalogueLists(data) {
+  const buildsEl = el("catalogue-builds");
+  buildsEl.innerHTML = "";
+  for (const b of data.builds || []) {
+    const li = document.createElement("li");
+    li.style.cursor = "pointer";
+    li.innerHTML = `<strong>${b.buildId}</strong>${b.label ? " — " + b.label : ""}`;
+    li.addEventListener("click", async () => {
+      const session = await openBundleByPath(b.path);
+      if (session) showView("explorer");
+    });
+    buildsEl.appendChild(li);
+  }
+
+  const logicEl = el("catalogue-logic-bundles");
+  logicEl.innerHTML = "";
+  for (const b of data.logicBundles || []) {
+    const li = document.createElement("li");
+    li.style.cursor = "pointer";
+    li.innerHTML = `${b.active ? "● " : ""}<strong>#${b.id}</strong> ${b.baseVersion}${b.label ? " — " + b.label : ""}`;
+    li.addEventListener("click", async () => {
+      const session = await openBundleByPath(b.path);
+      if (session) showView("explorer");
+    });
+    logicEl.appendChild(li);
+  }
 }
 
 // --- Explorer ------------------------------------------------------------
@@ -488,7 +565,22 @@ async function saveEditorPatch() {
 
 let patchesCache = [];
 
+// Shows the server's own resolved absolute directory right next to the
+// list — if it's unexpectedly empty, the operator sees exactly where it
+// looked instead of just a silent "no patches" with no way to diagnose why
+// (the common cause: a `WORKBENCH_PATCHES_DIR` override pointing at a host
+// filesystem path that doesn't exist inside the container — see DEPLOY.md).
+async function showPatchesDirCaption(elementId) {
+  try {
+    const { patchesDir } = await api("GET", "/api/patches-dir");
+    el(elementId).textContent = `Reading patches from: ${patchesDir}`;
+  } catch {
+    el(elementId).textContent = "";
+  }
+}
+
 async function loadPatchesList() {
+  showPatchesDirCaption("patches-dir-caption");
   patchesCache = await api("GET", "/api/patches");
   const list = el("patches-list");
   list.innerHTML = "";
@@ -546,6 +638,7 @@ async function applyPreviewedPatch() {
 let assembleSelected = [];
 
 async function loadAssembleView() {
+  showPatchesDirCaption("assemble-patches-dir-caption");
   patchesCache = await api("GET", "/api/patches");
   assembleSelected = assembleSelected.filter((name) => patchesCache.some((p) => p.name === name));
   renderAssemblePickers();

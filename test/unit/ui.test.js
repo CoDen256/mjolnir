@@ -892,3 +892,36 @@ test("POST /api/sessions/upload rejects unparseable bytes with a clear error, no
     assert.match(body.error, /could not parse/);
   });
 });
+
+test("POST /api/sessions/upload reports a sensible displayName, not the internal temp filename", async () => {
+  await withServer(async ({ baseUrl, bundlePath }) => {
+    const bytes = fs.readFileSync(bundlePath);
+    const res = await fetch(`${baseUrl}/api/sessions/upload`, {
+      method: "POST",
+      headers: { "X-Filename": "my cool bundle.bundle" },
+      body: bytes,
+    });
+    const session = await res.json();
+    assert.equal(session.displayName, "my_cool_bundle.bundle");
+    // The actual resolved path is a short, random temp filename — not the
+    // uploaded name re-embedded into a long, unreadable string.
+    assert.doesNotMatch(session.bundlePath, /my_cool_bundle/);
+  });
+});
+
+test("a path-opened session has no displayName (falls back to the path's own basename client-side)", async () => {
+  await withServer(async ({ baseUrl, bundlePath }) => {
+    const session = await openSession(baseUrl, bundlePath);
+    assert.equal(session.displayName, null);
+  });
+});
+
+// --- Patches directory diagnostic -----------------------------------------
+
+test("GET /api/patches-dir reports the resolved absolute patches directory", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const { data, status } = await api(baseUrl, "GET", "/api/patches-dir");
+    assert.equal(status, 200);
+    assert.ok(path.isAbsolute(data.patchesDir));
+  }, { patchesDir: "patches" });
+});

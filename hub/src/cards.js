@@ -5,7 +5,7 @@
 // occurrence semantics itself.
 export async function cardsList(pool, { search = "", deckCode = "", statusFilter = "" } = {}) {
   const { rows: slots } = await pool.query(
-    `SELECT cs.id, cs.deck_code, cs.note_id, cs.grammar_rule_id, d.title AS deck_title
+    `SELECT cs.id, cs.deck_code, cs.note_id, cs.grammar_rule_id, cs.audio_sha256, d.title AS deck_title
      FROM card_slots cs JOIN decks d ON d.code = cs.deck_code
      ORDER BY cs.id`
   );
@@ -22,7 +22,10 @@ export async function cardsList(pool, { search = "", deckCode = "", statusFilter
   );
   // D-L3: content now lives in `card_content` — durable DB state, frozen
   // once a note is tombstoned — not the (removed) persistent bundle file.
-  const { rows: contentRows } = await pool.query("SELECT card_id, n, e FROM card_content WHERE card_id = ANY($1)", [
+  // x/a included alongside n/e so the Cards page's inline card-preview
+  // (card-preview capability) has every field it needs with no per-card
+  // round trip.
+  const { rows: contentRows } = await pool.query("SELECT card_id, n, e, x, a FROM card_content WHERE card_id = ANY($1)", [
     cardIds,
   ]);
 
@@ -47,8 +50,11 @@ export async function cardsList(pool, { search = "", deckCode = "", statusFilter
       deckTitle: s.deck_title,
       noteId: s.note_id,
       grammarRuleId: s.grammar_rule_id,
+      audioSha256: s.audio_sha256,
       N: content?.n ?? "",
       E: content?.e ?? "",
+      X: content?.x ?? "",
+      A: content?.a ?? "N",
       sides: [...(shippedByCard.get(s.id) || []), ...(pendingByCard.get(s.id) || [])],
     };
   });

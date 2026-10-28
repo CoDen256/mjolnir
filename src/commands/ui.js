@@ -149,7 +149,14 @@ function sessionIdFor(resolvedPath) {
 function createSessionStore() {
   const sessions = new Map();
 
-  function openByPath(bundlePath) {
+  // `displayName` is purely cosmetic (the session chip/dropdown label) — an
+  // upload's actual on-disk path is a randomized, collision-proof temp
+  // filename that's unreadable and not meant to be shown (see the upload
+  // route below); passing the operator's original filename here keeps the
+  // UI showing something sensible instead of that temp path's basename.
+  // `null` (the path-opened case) falls back to the resolved path's own
+  // basename, unchanged from before.
+  function openByPath(bundlePath, { displayName = null } = {}) {
     if (!bundlePath || typeof bundlePath !== "string") {
       throw new Error("a bundle path is required");
     }
@@ -171,6 +178,7 @@ function createSessionStore() {
     const session = {
       id,
       bundlePath: resolvedPath,
+      displayName,
       cache,
       explodedReady: false,
       manifest: null,
@@ -215,6 +223,7 @@ function sessionSummary(session) {
   return {
     id: session.id,
     bundlePath: session.bundlePath,
+    displayName: session.displayName || null,
     moduleCount: session.cache.moduleCount,
     entryId: session.cache.entryId,
     deckCardAvailable: deckCardAvailable(session),
@@ -776,6 +785,16 @@ function createRoutes(sessions, { patchesDir, editorCmd }) {
       pattern: /^\/api\/patches$/,
       handler: () => ({ status: 200, body: listPatches(patchesDir) }),
     },
+    // Diagnostic: the Patches/Assemble tabs show this resolved absolute
+    // path next to their list so "why is this empty" has an immediate,
+    // visible answer (a wrong `WORKBENCH_PATCHES_DIR` override, most
+    // commonly a host filesystem path that doesn't exist inside the
+    // container — see DEPLOY.md) instead of a silent empty list.
+    {
+      method: "GET",
+      pattern: /^\/api\/patches-dir$/,
+      handler: () => ({ status: 200, body: { patchesDir: path.resolve(patchesDir) } }),
+    },
     {
       method: "POST",
       pattern: /^\/api\/patches$/,
@@ -888,10 +907,14 @@ export function createRequestHandler({ patchesDir = DEFAULT_PATCHES_DIR, editorC
       try {
         const bytes = await readRawBody(req);
         const rawFilename = req.headers["x-filename"] || "upload.bundle";
+        // The on-disk temp filename stays a randomized, collision-proof
+        // string (never shown) — only the *session's displayed name* uses
+        // the operator's original filename, sanitized for display but not
+        // otherwise mangled with a timestamp/hex prefix.
         const safeName = path.basename(rawFilename).replace(/[^A-Za-z0-9._-]/g, "_") || "upload.bundle";
-        const tempPath = path.join(os.tmpdir(), `bundle-tool-upload-${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safeName}`);
+        const tempPath = path.join(os.tmpdir(), `bundle-tool-upload-${crypto.randomBytes(8).toString("hex")}`);
         fs.writeFileSync(tempPath, bytes);
-        const session = sessions.openByPath(tempPath);
+        const session = sessions.openByPath(tempPath, { displayName: safeName });
         return sendJson(res, 201, sessionSummary(session));
       } catch (err) {
         return sendError(res, 400, err.message);

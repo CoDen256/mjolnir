@@ -160,4 +160,85 @@ must stay a pure function of note input, the diff just compares its output.
       during implementation, record it as an ADR amendment in
       `tun/docs/07-decisions.md`, per this project's established practice.
       Nothing contradicted a recorded decision during implementation — no
-      amendment needed.
+      amendment needed. **Superseded by task 8 below, after real operator
+      use of section 6: recorded as D109.**
+
+## 8. Operator feedback round (post-implementation corrections)
+
+Real use of sections 3/5/6 surfaced concrete problems — fixed directly,
+not re-proposed, since each is a correction to already-landed work rather
+than new scope.
+
+- [x] 8.1 **D109 (supersedes D-C9): the iframe-based unified console is
+      removed.** It doubled chrome and the workbench's own look read worse
+      framed than linked to directly. Replaced with: `hub/src/layout.js`'s
+      `NAV` gains a "Builder" group (Forecast & publish / Schedule / Run
+      log) pointing at new hub routes (`/mjolnir/builder/forecast`,
+      `/schedule`, `/logs`); `builder/src/server.js`'s three page bodies are
+      factored into exported `buildForecastBody`/`buildScheduleBody`/
+      `buildLogsBody` functions (pure markup builders, no `renderShell` call
+      baked in); hub imports these directly alongside builder's read-only
+      data functions (`runForecast`, `recentBuildJobs`, `getSchedule`,
+      `jobLogLines`, `recentBatches`, `occurrencesForBuild`, `getActiveMeta`
+      — same monorepo, same shared Postgres, D-P3) and wraps the result in
+      hub's own `renderShell`. The `embed`/`isEmbed` mechanism, `/mjolnir/
+      console`, `renderConsolePage`, and the "← unified console" nav links
+      are all removed. hub's own `STYLE` gained the handful of builder-only
+      classes (`.stat-row`, `.schedule-options`, `.radio-row`, `.timeline`/
+      `.tl-*`, `.log-line`, `.json-toggle`) these bodies use, copied
+      verbatim (same CSS variables, visually identical). The workbench nav
+      link gains `target="_blank"` — explicitly fine to open in a new tab,
+      per the operator.
+- [x] 8.2 **`card-preview` moved inline and switched to the dark theme.**
+      No longer a separate `/mjolnir/cards/:id/preview` page (removed, along
+      with its route and `renderCardPreviewPage`) — now an expandable row
+      under each card in the Cards table (`card-preview-toggle` button +
+      hidden `card-preview-row`, one open at a time, closing any other via a
+      small inline script). Faces stack vertically (`flex-direction:
+      column`), not side-by-side. Colors switched to the stock app's DARK
+      theme (`cardText #fff`, `headingAccent #3F8CFF`, background `#1B1D21`
+      — not the light-theme `#16215B`/`#246BFD`/`#fff` from the first pass).
+      `cardsList` (`hub/src/cards.js`) now also selects `x`, `a`, and
+      `audio_sha256` so the inline preview needs no extra per-card query.
+- [x] 8.3 **Workbench patches-dir confusion (not a code bug — a docs/
+      diagnosability gap).** The operator set `WORKBENCH_PATCHES_DIR`/
+      `LOGIC_BUNDLE_DIR` to host filesystem paths (e.g. `/root/mjolnir/
+      patches/js`), which are invisible inside the container unless
+      separately bind-mounted — the existing `.:/app` mount already covers
+      the defaults (`/app/patches`, `/app/data/logic`) with zero
+      configuration needed. Fixed: `DEPLOY.md` now explains this plainly and
+      warns against host-path overrides; the Patches and Assemble tabs
+      (`src/ui-assets/`) now display the server's own resolved absolute
+      directory right above the list (new `GET /api/patches-dir` route in
+      `src/commands/ui.js`), so an unexpectedly-empty list is immediately
+      diagnosable instead of silently mysterious.
+- [x] 8.4 **Upload: unreadable session name, no feedback during parse.**
+      `createSessionStore`'s `openByPath` gains an optional `displayName`
+      (the upload route now passes the operator's original, sanitized
+      filename; the temp file's own on-disk name stays a short random
+      string, never shown). `sessionSummary`/the session-bar UI prefer
+      `displayName` when present. The upload handler now shows an explicit
+      "Opening … this can take several seconds" status message and disables
+      the dropzone/file-input while working, instead of appearing to freeze
+      with zero feedback — a real numeric progress bar isn't honestly
+      possible here (module parsing/exploding is synchronous, no streaming
+      progress signal exists to report), so this is deliberately a status
+      message, not a progress bar.
+- [x] 8.5 **"No OTA bundles visible in workbench."** Added a fourth
+      workbench tab, "Catalogue", listing every OTA build and logic bundle
+      with one click to open each — fetched from a new `GET /mjolnir/
+      catalogue.json` hub route (the workbench itself still has no database
+      access, D108; this is hub-side data the embedded workbench's frontend
+      fetches, not a backend dependency). Degrades to a plain "catalogue
+      unavailable" message when the workbench runs standalone (no hub to
+      fetch from). The existing human-readable `/mjolnir/catalogue` HTML
+      page is unchanged and kept alongside this.
+- [x] 8.6 Tests updated for all of the above: `hub/test/hub.test.js`'s
+      server test rewritten (inline preview assertions replacing the old
+      `/preview`-page assertions; `/mjolnir/console` now asserted 404;
+      `/mjolnir/builder/forecast|schedule|logs` asserted; `/mjolnir/
+      catalogue.json` asserted); `builder/test/server.test.js`'s embed test
+      removed; `test/unit/ui.test.js` gained `displayName` and `/api/
+      patches-dir` tests (4/4 passing for real, no DB needed). Full main-repo
+      suite re-run: 149/150 (one pre-existing, unrelated failure). Full
+      `node --check` sweep: clean.

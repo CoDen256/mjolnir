@@ -71,23 +71,27 @@ Every such link (catalogue, publish-history inspect, logic-bundle inspect) switc
 
 `Content-Disposition: attachment; filename="${buildId}${label ? '-' + slugify(label) : ''}.js"`, where `slugify` lowercases, replaces whitespace/non-filename-safe characters with `-`, and truncates to a reasonable length (~40 chars) — small, local, no new dependency.
 
-### D-C8 — `card-preview`'s styling: real extracted stock values, light theme only
+### D-C8 — `card-preview`'s styling: real extracted stock values, **dark theme** (revised)
 
-Hardcoded stylesheet (not computed/fetched — these are fixed constants extracted once from the real bundle, not expected to change):
+Hardcoded stylesheet (not computed/fetched — these are fixed constants extracted once from the real bundle, not expected to change). **Revised after operator feedback** from the light-theme values originally shipped (`#16215B`/`#246BFD`/`#fff` background) to the stock app's own DARK theme instead — the operator specifically preferred the device's actual dark look over the lighter approximation:
 ```css
-.card-face { font-family: 'Poppins', sans-serif; color: #16215B; background: #fff; text-align: center; }
-.card-face b { font-family: 'Poppins', sans-serif; font-weight: 700; color: #246BFD; }
-.card-face .teal { color: #00A4BF; }
-.card-face .red { color: red; }
-.card-face .green { color: #5DD8D0; }
-.card-face .left { text-align: left; }
-.card-face i, .card-face .italic { font-style: italic; }
+.card-preview-face { font-family: 'Poppins', sans-serif; color: #fff; background: #1B1D21; text-align: center; }
+.card-preview-face b { font-family: 'Poppins', sans-serif; font-weight: 700; color: #3F8CFF; }
+.card-preview-face .teal { color: #00A4BF; }
+.card-preview-face .red { color: red; }
+.card-preview-face .green { color: #5DD8D0; }
+.card-preview-face .left { text-align: left; }
+.card-preview-face i, .card-preview-face .italic { font-style: italic; }
 ```
-Light theme only (not a light/dark toggle matching the device) — the operator tool itself already has its own light/dark theme (`hub/src/layout.js`'s own `STYLE`), and matching the DEVICE's theme toggle inside an operator page adds real complexity (two more palettes, a toggle control) for a preview whose job is "does this look right," not "what does it look like in dark mode." Flagged as an open question if dark-mode fidelity turns out to matter.
+Still one fixed theme, not a toggle matching the device's own light/dark setting — same reasoning as before (a preview's job is "does this look right," not full fidelity to every device setting), just the other fixed choice.
+
+**Also revised: inline, not a separate page.** Rather than a standalone `/mjolnir/cards/:id/preview` route, the preview is an expandable row directly under the card's own row in the Cards table — one toggle button per card, exclusive (opening one closes any other already open), **faces stacked vertically** (`flex-direction: column`, not side-by-side) per the operator's explicit preference. `cardsList` (`hub/src/cards.js`) now selects `x`/`a`/`audio_sha256` alongside `n`/`e` so the inline preview needs no extra per-card round trip — the whole Cards page already has everything it needs in one query.
 
 Three faces are rendered: N, E, X (the actual three content fields every card type has, per `docs/findings.md` and `tun/docs/03-data-model.md`) — not one face per occurrence letter, since occurrences are a *quiz-presentation* concept (which side shows first) while N/E/X are the *content* concept; showing all three content faces is strictly more informative for "does this look right" than showing only the occurrence set's faces. Whichever face's letter matches `card_content.a` gets a 🔊 badge; if `card_slots.audio_sha256` resolves to a real file in the blob cache (`data/blob/<sha>`), that badge is an actual `<audio controls src="...">` element via a new `GET /mjolnir/cards/:cardId/audio` streaming route (same existing-file-streaming pattern the OTA download route already established); otherwise a plain static 🔊 glyph with no player.
 
-### D-C9 — Unified shell: one new hub-rendered page, iframes over existing routes, `embed=1` bypass
+### D-C9 — ~~Unified shell: one new hub-rendered page, iframes over existing routes, `embed=1` bypass~~ **SUPERSEDED by D109 (tun/docs/07-decisions.md)**
+
+Reversed one build after shipping, per direct operator feedback: doubled chrome, and the embedded workbench's own light theme read worse nested inside hub's dark shell than linked to directly. Replaced with hub directly importing and rendering builder's page bodies (`buildForecastBody`/`buildScheduleBody`/`buildLogsBody`, exported from `builder/src/server.js`) in hub's own shell — same monorepo, same shared Postgres, no iframe, no `embed` flag, no `/mjolnir/console`. The section below is kept for the historical record of what was tried and why it didn't work, not as the current design.
 
 New route `GET /mjolnir/console` (hub) renders one page: a top-level tab bar (Cards / Builder / OTA / Tools) over four `<iframe>`s pointed at `/mjolnir/cards?embed=1`, `/builder?embed=1`, `/mjolnir/ota?embed=1`, `/mjolnir/workbench/?embed=1` respectively. `renderShell` (both `hub/src/layout.js` and `builder/src/layout.js`) gains an `embed` flag: when true, skip the `.top-bar`/`.rail` wrapper entirely and render just the page's own `body` — removing the doubled chrome an iframe-in-a-shell would otherwise show. The workbench's own chrome (tabs for Explorer/Compare/Editor/Patches/Assemble) is left as-is inside the Tools iframe — it's a tabbed app, not a top-bar+rail duplicate, so nested tabs read fine without a special embed mode there.
 

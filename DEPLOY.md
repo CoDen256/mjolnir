@@ -141,29 +141,38 @@ subsequent base/patch change is the same two clicks (submit, activate),
 independent of any Docker restart.
 
 Logic bundle files live under `LOGIC_BUNDLE_DIR` (defaults to
-`<DATA_DIR>/logic`), content-addressed by sha256 — see `.env.example`.
+`<DATA_DIR>/logic`), content-addressed by sha256.
 
 The bundle-workbench tool embedded at `/mjolnir/workbench` reads/writes its
 stored patches under `WORKBENCH_PATCHES_DIR`, which defaults to the repo's
-own `patches/` directory (resolved against hub's own install location, not
-its process `cwd`) — set this only if you want patches stored somewhere
-else. A patch saved through a locally-run `bundle-tool ui` session and one
-saved through the embedded workbench are the same directory by default, so
-either one sees what the other saved.
+own `patches/` directory.
 
-## Unified console
+**Leave both unset unless you have a specific reason not to.** `compose.yaml`
+already bind-mounts the ENTIRE repo into each container (`.:/app`) — `data/`
+and `patches/` are already part of that same mount, exactly like `DATA_DIR`
+itself (`/app/data`) already is. The defaults resolve to `/app/data/logic`
+and `/app/patches` respectively, both already inside that mount, with no
+extra configuration needed. **Do not set these to a path on your host
+machine** (e.g. `/root/mjolnir/patches/js`) — a container only sees its own
+filesystem plus whatever's explicitly bind-mounted into it; a bare host path
+set as an env var does not magically become visible inside the container.
+Concretely, this breaks two different ways depending on which var:
+- `WORKBENCH_PATCHES_DIR` pointed at a nonexistent-in-container path: the
+  Patches/Assemble tabs silently show zero patches — `listPatches` treats a
+  missing directory as "empty," not an error. The Patches and Assemble tabs
+  both display the exact resolved absolute path they're reading from, right
+  above the list, specifically so this is diagnosable rather than a silent
+  "it's just empty."
+- `LOGIC_BUNDLE_DIR` pointed the same way: writes still "succeed" (`fs.
+  mkdirSync(..., {recursive:true})` happily creates a new, empty directory
+  at that literal path **inside the container's own filesystem**), but
+  nothing lands where you think it does, and it's lost the moment the
+  container is recreated — a silent data-loss trap, not a loud failure.
 
-`https://<host>/mjolnir/console` presents Cards/Builder/OTA/Tools as
-sections of one page — each section is the exact same route as before,
-framed in, not a merge of hub's and builder's backend processes (they
-still run as separate containers, exactly as today). This relies on an
-existing, previously-implicit property: both services read
-`OPERATOR_AUTH_TOKEN` from the same `.env`, and both set/accept the same
-`operator_token` cookie at `Path=/` — so signing in on either one already
-authenticates the other. **If hub and builder are ever given different
-`OPERATOR_AUTH_TOKEN` values, the unified console's iframes will each
-need their own separate sign-in**, breaking the one-page illusion. Keep
-them equal unless you have a specific reason not to.
+If you genuinely need patches or logic bundles stored outside the repo's own
+tree, the correct fix is a real additional bind mount in `compose.yaml`
+(same pattern as `DATA_DIR`'s own volume), not an env var pointing at a path
+the container can't see.
 
 ## Publishing and rolling back
 

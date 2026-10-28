@@ -23,6 +23,16 @@ export function loadConfig() {
   // Absolute and cwd-independent by default; still overridable for a
   // deployment that genuinely wants patches somewhere else.
   const workbenchPatchesDir = process.env.WORKBENCH_PATCHES_DIR || path.join(REPO_ROOT, "patches");
+  // D109: hub's "Builder" nav pages call `runForecast` directly (same
+  // monorepo, same shared Postgres, D-P3) rather than proxying to builder's
+  // own process — this needs the exact same stabbur credentials builder
+  // itself requires. Optional here (unlike builder/src/config.js, which
+  // requires them): hub has plenty of its own pages that work fine without
+  // them, so a misconfigured/absent value degrades just the three Builder
+  // pages, not hub's whole boot.
+  const stabburBaseUrl = process.env.STABBUR_BASE_URL;
+  const stabburAuthToken = process.env.STABBUR_AUTH_TOKEN;
+  const sourceLang = process.env.SOURCE_LANG || "no";
   if (!publicBase) throw new Error("TUN_PUBLIC_BASE is required (passed through to the publish module)");
   // D-H6: not required — unset disables the operator-auth gate entirely
   // (local/dev ergonomics). Task 7.4's ordering constraint is the real
@@ -34,5 +44,15 @@ export function loadConfig() {
   // (cards-browser spec: "stabbur unreachable" tolerance extends to this
   // too, by the same logic: the ledger is always the source of truth for
   // *which* cards exist).
-  return { dataDir, publicBase, stabburUiBase, operatorAuthToken, logicBundleDir, workbenchPatchesDir };
+  return {
+    dataDir,
+    publicBase,
+    stabburUiBase,
+    operatorAuthToken,
+    logicBundleDir,
+    workbenchPatchesDir,
+    stabburBaseUrl,
+    stabburAuthToken,
+    sourceLang,
+  };
 }

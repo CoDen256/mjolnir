@@ -64,6 +64,10 @@ body {
   background: #eef2ff;
   color: #334;
 }
+.upload-dropzone.busy {
+  opacity: .6;
+  pointer-events: none;
+}
 .upload-pick-label {
   color: #448;
   cursor: pointer;
@@ -563,6 +567,17 @@ input, select {
   padding: 8px;
   border-radius: 4px;
   margin-bottom: 12px;
+}
+.open-status {
+  font-size: 12px;
+  color: #668;
+  padding: 3px 8px;
+}
+.dir-caption {
+  font-size: 12px;
+  color: #777;
+  margin-bottom: 8px;
+  font-family: monospace;
 }
 button {
   cursor: pointer;
