@@ -600,6 +600,18 @@ function createDeckCardRoutes(bundlePath) {
 
 const DECKCARD_PREFIX_PATTERN = /^\/api\/sessions\/([^/]+)\/deckcard(\/.*)?$/;
 
+// progress-sync-shim's shim/restore-companion fetch against
+// `${SYNC_BASE_URL}/<id>` directly (confirmed: `patches/js/
+// 2080-progress-sync-shim.edited.js` and `progress-sync-restore-
+// companion.js` both do `fetch(SYNC_BASE_URL + '/' + encodeURIComponent(id), ...)`)
+// — so the default needs the full `/mjolnir/userdata` path, not just the
+// host `TUN_PUBLIC_BASE` already configures.
+function defaultSyncBaseUrl() {
+  const base = process.env.TUN_PUBLIC_BASE;
+  if (!base) return undefined;
+  return `${base.replace(/\/+$/, "")}/mjolnir/userdata`;
+}
+
 // --- Route table ------------------------------------------------------
 
 function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
@@ -966,8 +978,16 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
           companionFiles: companionFiles || [],
           buildId: buildId || undefined,
           patchRev: patchRev === undefined || patchRev === null || patchRev === "" ? undefined : Number(patchRev),
-          syncBaseUrl: syncBaseUrl || undefined,
-          syncToken: syncToken || undefined,
+          // progress-sync-shim's `__MJOLNIR_SYNC_BASE_URL__`/
+          // `__MJOLNIR_SYNC_TOKEN__` are the same values this deployment
+          // already configures for the device-facing `/mjolnir/userdata/*`
+          // routes (`hub/src/server.js`'s `USERDATA_PREFIX` block, gated by
+          // the same `OPERATOR_AUTH_TOKEN` per task 4.2's decision) —
+          // default to them here so assembling via the workbench doesn't
+          // require the operator to retype values this process already
+          // has configured; an explicit request value still wins.
+          syncBaseUrl: syncBaseUrl || defaultSyncBaseUrl(),
+          syncToken: syncToken || process.env.OPERATOR_AUTH_TOKEN || undefined,
         });
         return { status: 201, body: result };
       },

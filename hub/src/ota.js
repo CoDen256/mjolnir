@@ -151,10 +151,19 @@ const ASSEMBLE_PLACEHOLDER_BUILD_ID = "unassigned";
 // they hit "Assemble" — the base version it'll read (so an empty Patch rev/
 // Label field's eventual value isn't a total surprise) and what Patch rev
 // will resolve to if left blank.
-export async function assembleDefaults({ baseFolderDir }) {
+export async function assembleDefaults({ baseFolderDir, publicBase, operatorAuthToken }) {
   const baseVersion = readBaseVersion(baseFolderDir);
   const nextRev = await nextPatchRev();
-  return { baseFolderDir, baseVersion, nextPatchRev: nextRev };
+  // Booleans only — never the token value itself — so the Assemble tab can
+  // tell the operator "leave blank, this server already has one" without
+  // echoing a secret into a GET response any page script can read.
+  return {
+    baseFolderDir,
+    baseVersion,
+    nextPatchRev: nextRev,
+    syncBaseUrlConfigured: !!publicBase,
+    syncTokenConfigured: !!operatorAuthToken,
+  };
 }
 
 // D112: the embedded Assemble tab's one-step "Assemble" action — assembles

@@ -203,6 +203,18 @@
               </label>
             </div>
 
+            <h3>progress-sync-shim placeholders <span class="field-hint">only needed if a selected patch/companion bakes __MJOLNIR_SYNC_BASE_URL__/__MJOLNIR_SYNC_TOKEN__</span></h3>
+            <div class="field-grid">
+              <label>
+                Sync base URL <span id="assemble-sync-base-url-hint" class="field-hint">blank = use this server's TUN_PUBLIC_BASE + /mjolnir/userdata</span>
+                <input id="assemble-sync-base-url" type="text" placeholder="(default from TUN_PUBLIC_BASE)" />
+              </label>
+              <label>
+                Sync token <span id="assemble-sync-token-hint" class="field-hint">blank = use this server's OPERATOR_AUTH_TOKEN</span>
+                <input id="assemble-sync-token" type="password" placeholder="(default from OPERATOR_AUTH_TOKEN)" />
+              </label>
+            </div>
+
             <div id="assemble-patches-dir-caption" class="dir-caption"></div>
             <h3>Patches to apply, in order <span class="field-hint">REPLACE-style — modifies an existing module in place</span></h3>
             <div class="assemble-picker">

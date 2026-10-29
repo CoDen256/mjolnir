@@ -50,6 +50,17 @@ const WORKBENCH_MOUNT = "/mjolnir/workbench";
 
 const MAX_BODY_BYTES = 67108864; // D48 — same ceiling the publish guards enforce anyway
 
+// progress-sync-shim's shim/restore-companion fetch against
+// `${SYNC_BASE_URL}/<id>` directly (confirmed: `patches/js/
+// 2080-progress-sync-shim.edited.js` and `progress-sync-restore-
+// companion.js` both do `fetch(SYNC_BASE_URL + '/' + encodeURIComponent(id), ...)`)
+// — the default needs the full `/mjolnir/userdata` path, not just the host
+// `publicBase` already names.
+function defaultSyncBaseUrl(publicBase) {
+  if (!publicBase) return undefined;
+  return `${publicBase.replace(/\/+$/, "")}/mjolnir/userdata`;
+}
+
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Content-Length": Buffer.byteLength(data) });
@@ -1132,7 +1143,11 @@ export function createServer(pool, config) {
       // show the operator what an empty Label/Patch rev field will resolve
       // to before they hit "Assemble".
       if (req.method === "GET" && url.pathname === "/mjolnir/ota/assemble-defaults") {
-        const defaults = await assembleDefaults({ baseFolderDir: config.baseFolderDir });
+        const defaults = await assembleDefaults({
+          baseFolderDir: config.baseFolderDir,
+          publicBase: config.publicBase,
+          operatorAuthToken: config.operatorAuthToken,
+        });
         return sendJson(res, 200, defaults);
       }
       if (req.method === "POST" && url.pathname === "/mjolnir/ota/assemble-submit") {
@@ -1147,8 +1162,15 @@ export function createServer(pool, config) {
           patchRev: body.patchRev === undefined || body.patchRev === null || body.patchRev === "" ? undefined : Number(body.patchRev),
           dataDir: config.dataDir,
           logicBundleDir: config.logicBundleDir,
-          syncBaseUrl: body.syncBaseUrl || undefined,
-          syncToken: body.syncToken || undefined,
+          // progress-sync-shim's __MJOLNIR_SYNC_BASE_URL__/
+          // __MJOLNIR_SYNC_TOKEN__ default to this deployment's own
+          // TUN_PUBLIC_BASE/OPERATOR_AUTH_TOKEN — the same values already
+          // gating the device-facing /mjolnir/userdata/* routes below
+          // (task 4.2's decision) — so assembling via the embedded
+          // workbench doesn't require retyping values hub already has
+          // configured; an explicit request value still wins.
+          syncBaseUrl: body.syncBaseUrl || defaultSyncBaseUrl(config.publicBase),
+          syncToken: body.syncToken || config.operatorAuthToken || undefined,
         });
         return sendJson(res, 200, row);
       }

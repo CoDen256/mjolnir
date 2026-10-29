@@ -997,6 +997,88 @@ test("POST /api/assemble applies multiple companions in order", async () => {
   });
 });
 
+test("POST /api/assemble defaults syncBaseUrl/syncToken from TUN_PUBLIC_BASE/OPERATOR_AUTH_TOKEN when the request omits them", async () => {
+  const prevBase = process.env.TUN_PUBLIC_BASE;
+  const prevToken = process.env.OPERATOR_AUTH_TOKEN;
+  process.env.TUN_PUBLIC_BASE = "https://example.test";
+  process.env.OPERATOR_AUTH_TOKEN = "s3cret-op-token";
+  try {
+    await withPatchSession(async ({ baseUrl, bundlePath }) => {
+      const dir = path.dirname(bundlePath);
+      const baseFolder = path.join(dir, "base-folder-sync");
+      fs.mkdirSync(path.join(baseFolder, "assets"), { recursive: true });
+      fs.copyFileSync(bundlePath, path.join(baseFolder, "assets", "index.android.bundle"));
+      fs.writeFileSync(
+        path.join(baseFolder, "apktool.yml"),
+        "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 1.5.12\n"
+      );
+
+      const companion = path.join(dir, "sync-companion.js");
+      fs.writeFileSync(
+        companion,
+        "globalThis.__SYNC_URL__ = '__MJOLNIR_SYNC_BASE_URL__'; globalThis.__SYNC_TOKEN__ = '__MJOLNIR_SYNC_TOKEN__';\n"
+      );
+
+      const outputPath = path.join(dir, "out-sync", "assembled.bundle");
+      const { status, data } = await api(baseUrl, "POST", "/api/assemble", {
+        baseFolderPath: baseFolder,
+        patchNames: [],
+        outputPath,
+        companionFiles: [companion],
+        // syncBaseUrl/syncToken deliberately omitted — must fall back to env
+      });
+      assert.equal(status, 201);
+      assert.deepEqual(data.appliedCompanions, ["sync-companion"]);
+
+      const outSource = fs.readFileSync(outputPath, "utf8");
+      assert.match(outSource, /__SYNC_URL__ = 'https:\/\/example\.test\/mjolnir\/userdata'/);
+      assert.match(outSource, /__SYNC_TOKEN__ = 's3cret-op-token'/);
+    });
+  } finally {
+    if (prevBase === undefined) delete process.env.TUN_PUBLIC_BASE;
+    else process.env.TUN_PUBLIC_BASE = prevBase;
+    if (prevToken === undefined) delete process.env.OPERATOR_AUTH_TOKEN;
+    else process.env.OPERATOR_AUTH_TOKEN = prevToken;
+  }
+});
+
+test("POST /api/assemble prefers an explicit syncBaseUrl/syncToken over the env default", async () => {
+  const prevBase = process.env.TUN_PUBLIC_BASE;
+  process.env.TUN_PUBLIC_BASE = "https://should-not-be-used.test";
+  try {
+    await withPatchSession(async ({ baseUrl, bundlePath }) => {
+      const dir = path.dirname(bundlePath);
+      const baseFolder = path.join(dir, "base-folder-sync-override");
+      fs.mkdirSync(path.join(baseFolder, "assets"), { recursive: true });
+      fs.copyFileSync(bundlePath, path.join(baseFolder, "assets", "index.android.bundle"));
+      fs.writeFileSync(
+        path.join(baseFolder, "apktool.yml"),
+        "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 1.5.12\n"
+      );
+
+      const companion = path.join(dir, "sync-companion-2.js");
+      fs.writeFileSync(companion, "globalThis.__SYNC_URL__ = '__MJOLNIR_SYNC_BASE_URL__';\n");
+
+      const outputPath = path.join(dir, "out-sync-override", "assembled.bundle");
+      const { status, data } = await api(baseUrl, "POST", "/api/assemble", {
+        baseFolderPath: baseFolder,
+        patchNames: [],
+        outputPath,
+        companionFiles: [companion],
+        syncBaseUrl: "https://explicit.test/mjolnir/userdata",
+      });
+      assert.equal(status, 201);
+      assert.deepEqual(data.appliedCompanions, ["sync-companion-2"]);
+
+      const outSource = fs.readFileSync(outputPath, "utf8");
+      assert.match(outSource, /__SYNC_URL__ = 'https:\/\/explicit\.test\/mjolnir\/userdata'/);
+    });
+  } finally {
+    if (prevBase === undefined) delete process.env.TUN_PUBLIC_BASE;
+    else process.env.TUN_PUBLIC_BASE = prevBase;
+  }
+});
+
 // D111: a third real patch kind — raw <id>-name.baseline.js/.edited.js
 // pairs, module-id addressed, same reconciliation algorithm as JSON-store
 // patches (not content-located). Lives alongside companions in the same
