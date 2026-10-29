@@ -38,6 +38,15 @@ services:
       # configure .env of both" actually resolves to: the two stacks stay
       # fully independent, this one shared network is the only coupling.
       STABBUR_UPSTREAM: ${STABBUR_UPSTREAM:?set STABBUR_UPSTREAM in .env}
+      # Where smia actually is — see caddy/Caddyfile's own comment on this
+      # var. Defaulted, not required like STABBUR_UPSTREAM above: smia's
+      # operator UI at /smia/* is a convenience route, not load-bearing for
+      # the device-facing stack (stabbur's own backend talks to smia
+      # directly via its own SMIA_BASE_URL, never through this Caddy route)
+      # — an unset/wrong value 502s only that one route, it doesn't block
+      # the stack from starting. Default matches smia's own compose's
+      # "smia-backend" network alias (D118).
+      SMIA_UPSTREAM: ${SMIA_UPSTREAM:-smia-backend:5055}
     networks:
       - default
       - tun-shared

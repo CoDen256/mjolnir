@@ -155,7 +155,32 @@
 			header_up X-Forwarded-Prefix /stabbur
 		}
 	}
-	# reverse_proxy /smia/*    smia:8000
+	# smia serves its own routes (/ui, /providers, /health, /ipa, ...)
+	# unprefixed — handle_path strips /smia before forwarding, same pattern
+	# as /stabbur above, including the X-Forwarded-Prefix hint for its own
+	# ui_index() (app.py, mirrors stabbur's exactly, D46/D118).
+	#
+	# SMIA_UPSTREAM mirrors STABBUR_UPSTREAM's own choices exactly — set it
+	# in .env to whichever applies:
+	#   - "smia-backend:5055" — RECOMMENDED. Either two independent
+	#     `docker compose up` stacks sharing the `tun-shared` external
+	#     network, or this repo + smia's own compose brought up together via
+	#     tun's `include:` (D94) — same value either way. smia's own
+	#     compose.yaml/docker-compose.yml aliases its backend service as
+	#     "smia-backend" on tun-shared specifically so this name resolves
+	#     under both modes without colliding with this repo's own "backend"
+	#     service (same collision D94 already renamed stabbur-postgres to
+	#     avoid).
+	#   - "host.docker.internal:5055" — smia's own stack, no shared network,
+	#     reached via its host-published port instead. Same caveats as
+	#     STABBUR_UPSTREAM's equivalent fallback above.
+	#   - a real hostname/IP — smia deployed elsewhere entirely.
+	redir /smia /smia/ 308
+	handle_path /smia/* {
+		reverse_proxy {$SMIA_UPSTREAM} {
+			header_up X-Forwarded-Prefix /smia
+		}
+	}
 	# reverse_proxy /phonexa/* phonexa:8000
 
 	# ---- /adminer : tun/compose.yaml's shared Adminer (D-T3) -------------
