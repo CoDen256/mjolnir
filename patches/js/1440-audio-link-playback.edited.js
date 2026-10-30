@@ -17,7 +17,7 @@ __d(function (g, r, i, a, m, e, d) {
   // D-A2: literal string, not the companion-constant mechanism and not
   // config.json (which has no JS-side reader). Re-author this file and
   // republish to change the domain.
-  var AUDIO_BASE_URL = "https://tun.example.net/audio-by-card";
+  var AUDIO_BASE_URL = "https://coden256.dev/audio-by-card";
   // D-A1: checks FOR stock, not for custom — a future rollover deck (e.g.
   // C30) isn't a stock prefix either, so it's automatically treated as
   // custom with no patch update needed.

@@ -283,7 +283,7 @@ __d(function (g, _r, _i, a, m, _e, d) {
               children: "App version"
             }), (0, S.jsx)(s.Text, {
               style: _.value,
-              children: typeof globalThis !== 'undefined' && globalThis.MJOLNIR_BUILD_ID || 'embedded'
+              children: typeof globalThis !== 'undefined' && globalThis.MJOLNIR_BUILD_ID+' base:'+globalThis.MJOLNIR_BASE_VERSION || 'embedded'
             })]
           })]
         }), (0, S.jsx)(h.default, {
