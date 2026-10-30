@@ -30,10 +30,13 @@ __d(function (g, r, i, a, m, e, d) {
   e.default = {
     playSoundFile: function (n, o) {
       if (isStockPrefix(n)) {
+        console.log("Playing local audio:", n);
         s.playSoundFile(n, o);
         return;
       }
-      s.playUrl(AUDIO_BASE_URL + "/" + n + "." + o);
+      const url = AUDIO_BASE_URL + "/" + n + "." + o;
+      console.log("Playing remote audio:", url);
+      s.playUrl(url);
     },
     playSoundFileWithDelay: function (n, o, t) {
       s.playSoundFileWithDelay(n, o, t);
