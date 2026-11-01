@@ -1,3 +1,15 @@
+> **SUPERSEDED (2026-10-29, `tun/docs/07-decisions.md` D121/D122) — not
+> completed, not archived.** Confirmed on a real device: `RNSoundPlayerModule`'s
+> `playUrl`/`loadUrl` cannot play a remote `https://` URL at all (a genuine
+> native bug, not a caching gap — see D122 for the traced root cause). This
+> change is kept on disk as a historical record, per this project's
+> never-delete-mark-superseded convention, rather than archived through the
+> normal flow — archiving would sync `audio-link-playback` into the main
+> specs as validated working behavior, which it never was. Replaced by
+> `audio-cache-prefetch`, which overwrites `patches/js/
+> 1440-audio-link-playback.edited.js` in place rather than leaving this
+> approach as a second, dead file.
+
 ## Why
 
 Every custom card (C20–C29) requires audio on reveal, with no type-based

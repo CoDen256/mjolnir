@@ -1,3 +1,9 @@
+> **SUPERSEDED (2026-10-29, D121/D122) — task 4.3 failed, not merely
+> pending.** Tested on a real device: `playUrl`/`loadUrl` cannot play a
+> remote `https://` URL at all — a genuine native bug, not a caching gap.
+> See `audio-cache-prefetch` for the replacement. Left unchecked below as an
+> honest record of what was actually verified, not completed retroactively.
+
 ## 0. Before you write any code
 
 Read `design.md` D-A3 in full — a naive new `hub` route would land behind

@@ -68,22 +68,44 @@ deck, across however many subsequent publishes that takes (see
 The system SHALL regenerate the `N`/`E`/`X`/`A` content of every
 previously-minted card from stabbur's current note state on every publish
 that runs, not only for newly-minted cards, while never altering an existing
-card's id, deck assignment, or `Cards[]` position, and SHALL record which of
-those existing cards' content actually changed as a result.
+card's id, deck assignment, or `Cards[]` position, and SHALL persist each
+regenerated card's content into `card_content` so it survives independently
+of any bundle file.
 
 #### Scenario: A note is edited after being minted
 - **WHEN** a note whose card was minted in an earlier publish is edited on
   stabbur before the next publish
 - **THEN** the next publish's bundle reflects the edited content for that
   card's existing id, with its `Cards[]` position and `card_slots` row
-  unchanged
+  unchanged, and `card_content` for that card is overwritten with the new
+  content
 
-#### Scenario: A publish records which existing cards' content changed
-- **WHEN** a publish regenerates content for previously-minted cards and one
-  or more of them differ from their previously-stored content
-- **THEN** that run's log records which card ids actually changed, distinct
-  from cards whose regenerated content was identical to what was already
-  stored
+#### Scenario: A note is tombstoned after being minted
+- **WHEN** a note whose card was minted in an earlier publish is later
+  tombstoned on stabbur (excluded from every future pull)
+- **THEN** the next publish's bundle still includes that card with its last
+  known content, read from `card_content`, not blank or missing
+
+### Requirement: The pipeline is a stateless projection onto the active logic bundle
+The system SHALL NOT depend on any single persistent, incrementally-mutated
+bundle file to carry forward deck/card state between publishes. Every
+publish run SHALL start from the currently-active `logic_bundles` entry and
+fully reconstruct the deck/card data from `card_slots`, `card_content`,
+`occurrence_shipments`, and `pending_occurrences`, before minting or
+appending anything newly eligible.
+
+#### Scenario: The active logic bundle changes between two publishes
+- **WHEN** an operator activates a different `logic_bundles` row between one
+  publish and the next
+- **THEN** the next publish builds its deck/card data onto the newly-active
+  bundle, with every previously-minted card's content and occurrence order
+  reconstructed from `hub`'s own tables, not read from any file left behind
+  by the previous publish
+
+#### Scenario: Occurrence order is reconstructed, not read from a file
+- **WHEN** a publish run reconstructs a deck's `Cards[]` array
+- **THEN** the order matches `occurrence_shipments` ordered by id for that
+  deck, exactly as it was when each occurrence actually shipped
 
 ### Requirement: Projection from note type to card shape is pure and stateless
 The system SHALL derive a card's `{N, E, X, A}` fields and its occurrence set
@@ -119,19 +141,23 @@ with both paths subject to the same eligibility rules (no floor — D91).
 
 ### Requirement: The forecast reflects the same logic as a real run, without minting
 The system SHALL expose a dry-run view that executes the same pull,
-eligibility, and deck-assignment logic as a real publish, reporting per-deck
-newly-eligible counts and each deck's current pending-occurrence queue depth
-for **every deck with a nonzero queue depth, not only decks with newly-
-eligible notes this run** (no floor to report crossing/not-crossing — D91),
-and SHALL additionally report which already-minted cards would have their
-content changed by the next publish, while performing no writes to
-`card_slots`, `decks`, `Cards[]`, `pending_occurrences`, or any card content.
+eligibility, and deck-assignment logic as a real publish, reporting the
+actual `(card, side, note)` occurrences that would ship and the occurrences
+that would be newly queued (ships in a later run, not this one) — not a
+per-deck count — while performing no writes to `card_slots`, `decks`,
+`Cards[]`, `pending_occurrences`, `occurrence_shipments`, or any card
+content.
 
 #### Scenario: Forecast after a real publish
 - **WHEN** the operator views the forecast immediately after a run that
   published everything currently eligible
-- **THEN** every deck shows 0 newly-eligible notes, matching the real run's
-  outcome
+- **THEN** no occurrences appear in the "would ship" list, matching the real
+  run's outcome
+
+#### Scenario: Forecast distinguishes shipping from queuing
+- **WHEN** the forecast includes a newly-eligible word-type note
+- **THEN** its `A` occurrence appears in the "would ship" list and its `E`
+  occurrence appears separately in the "would queue" list
 
 #### Scenario: Forecast does not mutate state
 - **WHEN** the operator views the forecast any number of times
@@ -154,3 +180,29 @@ content changed by the next publish, while performing no writes to
 - **WHEN** no already-minted note's content differs from what's currently
   projected for it
 - **THEN** the forecast's would-update list is empty
+
+### Requirement: Audio manifest entries respect a note's trim selection
+The system SHALL produce a card's audio manifest entry from the bytes
+selected by `audio_sel_ms` when present, rather than the full original blob,
+and SHALL leave the original blob in stabbur's canonical store untouched.
+
+#### Scenario: A note with a trim selection
+- **WHEN** a card's source note has `audio_sel_ms` set to a sub-range of its
+  `audio_blob`
+- **THEN** the audio manifest entry for that card references bytes trimmed
+  to that range, and the original untrimmed blob remains available and
+  unmodified
+
+#### Scenario: A note with no trim selection
+- **WHEN** a card's source note has `audio_sel_ms` null
+- **THEN** the audio manifest entry references the original blob unchanged
+
+### Requirement: Draining the occurrence queue is deterministic
+The system SHALL drain pending occurrences in a fixed, reproducible order
+(insertion order) when multiple rows reach `remaining <= 0` in the same run.
+
+#### Scenario: Two rows cross zero in the same run
+- **WHEN** two pending occurrences in the same deck both reach
+  `remaining <= 0` during one run's drain step
+- **THEN** the one queued earlier is always appended to `Cards[]` before the
+  one queued later, on every run given the same inputs
