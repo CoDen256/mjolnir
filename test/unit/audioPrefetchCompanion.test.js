@@ -54,7 +54,7 @@ async function runPrefetcher({
   };
   global.fetch = async (url) => {
     fetchCalls.push(url);
-    return { json: async () => manifest };
+    return { ok: true, status: 200, json: async () => manifest };
   };
   if (buildId) globalThis.MJOLNIR_BUILD_ID = buildId;
 

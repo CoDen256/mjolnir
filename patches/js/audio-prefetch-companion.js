@@ -29,6 +29,20 @@
   var AUDIO_BASE_URL = '__MJOLNIR_AUDIO_BASE_URL__';
   var CACHE_DIR_NAME = 'mj-audio';
   var CONCURRENCY = 3;
+  // D-P4's Open Question, resolved: the sweep is otherwise completely
+  // silent by design (a bad sweep must never crash startup) — console.log
+  // is the only observability available with no `adb run-as` access.
+  // Android routes it to logcat under `ReactNativeJS`, same as every other
+  // companion's own breadcrumbs (D63):
+  //     adb logcat -s ReactNativeJS:V | grep mjolnir-audio-prefetch
+  var TAG = '[mjolnir-audio-prefetch]';
+  function log() {
+    try {
+      var args = Array.prototype.slice.call(arguments);
+      args.unshift(TAG);
+      console.log.apply(console, args);
+    } catch (e) {}
+  }
 
   // Module ids pinned to this specific base bundle (same convention as
   // `boot-ok-companion.js`'s hardcoded 2150) — not derived, not looked up.
@@ -80,12 +94,19 @@
   function downloadOne(FS, dir, sha256) {
     var dest = dir + sha256 + '.mp3';
     var tmp = dest + '.tmp';
-    return FS.downloadAsync(AUDIO_BASE_URL + '/blob/' + sha256, tmp).then(function () {
-      // Atomic: the file is only ever addressable under its final name once
-      // fully written — a killed app mid-download leaves only the orphan
-      // `.tmp`, never a half-written `.mp3` a play attempt could pick up.
-      return FS.moveAsync({ from: tmp, to: dest });
-    });
+    return FS.downloadAsync(AUDIO_BASE_URL + '/blob/' + sha256, tmp)
+      .then(function (result) {
+        // Atomic: the file is only ever addressable under its final name once
+        // fully written — a killed app mid-download leaves only the orphan
+        // `.tmp`, never a half-written `.mp3` a play attempt could pick up.
+        return FS.moveAsync({ from: tmp, to: dest }).then(function () {
+          log('downloaded', sha256, result && result.status);
+        });
+      })
+      .catch(function (e) {
+        log('download failed', sha256, e && e.message ? e.message : String(e));
+        throw e; // still rejects — runWithConcurrency's own catch counts it
+      });
   }
 
   function prefetch(FS, manifest) {
@@ -101,9 +122,12 @@
     );
 
     return FS.makeDirectoryAsync(dir, { intermediates: true })
-      .catch(function () {}) // already exists → fine
+      .catch(function (e) {
+        log('makeDirectoryAsync note (often just "already exists"):', e && e.message ? e.message : String(e));
+      })
       .then(function () {
-        return FS.readDirectoryAsync(dir).catch(function () {
+        return FS.readDirectoryAsync(dir).catch(function (e) {
+          log('readDirectoryAsync failed:', e && e.message ? e.message : String(e));
           return [];
         });
       })
@@ -119,8 +143,19 @@
         var missing = neededShas.filter(function (sha256) {
           return !have[sha256];
         });
+        log(
+          'cache check:',
+          neededShas.length,
+          'needed,',
+          existingNames.length,
+          'dir entries,',
+          missing.length,
+          'missing'
+        );
         return runWithConcurrency(missing, CONCURRENCY, function (sha256) {
           return downloadOne(FS, dir, sha256);
+        }).then(function () {
+          log('sweep complete');
         });
       });
   }
@@ -130,27 +165,44 @@
     try {
       FS = fileSystem();
     } catch (e) {
+      log('fileSystem() threw', e && e.message ? e.message : String(e));
       return;
     }
-    if (!FS || !FS.documentDirectory) return;
+    if (!FS || !FS.documentDirectory) {
+      log('ExponentFileSystem unavailable — skipping this launch');
+      return;
+    }
 
     var buildId = typeof globalThis !== 'undefined' ? globalThis.MJOLNIR_BUILD_ID : undefined;
-    if (!buildId) return; // no OTA active (e.g. the embedded tier-4 asset) — nothing to prefetch
+    if (!buildId) {
+      log('no MJOLNIR_BUILD_ID set (e.g. the embedded tier-4 asset) — nothing to prefetch');
+      return;
+    }
+
+    var manifestUrl = AUDIO_BASE_URL + '/audio-manifest/' + buildId + '.json';
+    log('fetching manifest', manifestUrl);
 
     // D-P4: one attempt per launch — no retry loop on a failed fetch (e.g.
     // offline at launch). The next cold launch tries again naturally, since
     // MJOLNIR_BUILD_ID (and so the manifest it would fetch) never changes
     // mid-session anyway.
-    fetch(AUDIO_BASE_URL + '/audio-manifest/' + buildId + '.json')
+    fetch(manifestUrl)
       .then(function (res) {
+        if (!res.ok) throw new Error('manifest fetch returned HTTP ' + res.status);
         return res.json();
       })
       .then(function (manifest) {
-        if (!manifest || typeof manifest !== 'object') return;
+        if (!manifest || typeof manifest !== 'object') {
+          log('manifest response was not an object — nothing to prefetch');
+          return;
+        }
+        log('manifest ok:', Object.keys(manifest).length, 'cards');
         if (typeof globalThis !== 'undefined') globalThis.MJOLNIR_AUDIO_MANIFEST = manifest;
         return prefetch(FS, manifest);
       })
-      .catch(function () {}); // never throw into startup
+      .catch(function (e) {
+        log('sweep aborted:', e && e.message ? e.message : String(e)); // never throw into startup
+      });
   }
 
   try {
