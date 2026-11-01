@@ -15,11 +15,19 @@ const BASE_BUNDLE = path.resolve("base/smali.mjolnir.merged/assets/index.android
 const PAIR_BASELINE = path.resolve("patches/js/1440-audio-link-playback.baseline.js");
 const PAIR_EDITED = path.resolve("patches/js/1440-audio-link-playback.edited.js");
 
+const MOD_EXPO_MODULES_CORE = 2150;
+const DOCUMENT_DIR = "file:///fake/documents/";
+
 // Loads module 1440's exports with a minimal native-module stub recording
 // every call made through `RNSoundPlayer`, so each assertion below can
 // check exactly which native method (and with what arguments) the patched
-// `playSoundFile` actually invoked.
-function loadPatchedModule1440(patchedSource) {
+// `playSoundFile` actually invoked. `existingFiles` is the set of
+// `<sha256>.mp3` paths `FS.getInfoAsync` should report as present —
+// audio-cache-prefetch's mod 1440 reaches `ExponentFileSystem` via `__r`
+// directly (same pattern every companion in this repo already uses), so
+// this installs `global.__r` as a real global rather than a module
+// dependency.
+function loadPatchedModule1440(patchedSource, { existingFiles = new Set() } = {}) {
   const ast = parse(patchedSource, { sourceType: "script", allowReturnOutsideFunction: true });
   const { factory } = extractFactoryBody(ast);
   const fnSrc = generate(factory, { comments: false }).code;
@@ -49,10 +57,24 @@ function loadPatchedModule1440(patchedSource) {
   ];
   const requireStub = (idx) => deps[idx];
 
+  const FS = {
+    documentDirectory: DOCUMENT_DIR,
+    getInfoAsync: async (uri) => ({ exists: existingFiles.has(uri) }),
+  };
+  global.__r = (id) => {
+    if (id !== MOD_EXPO_MODULES_CORE) throw new Error(`unexpected __r(${id}) in test`);
+    return { requireNativeModule: (name) => (name === "ExponentFileSystem" ? FS : undefined) };
+  };
+
   const mod = { exports: {} };
   fn({}, requireStub, (x) => x, (x) => x, mod, mod.exports, [0, 1, 2, 3]);
 
   return { exports: mod.exports.default, calls };
+}
+
+function cleanup() {
+  delete global.__r;
+  delete globalThis.MJOLNIR_AUDIO_MANIFEST;
 }
 
 async function patchedModule1440Source() {
@@ -67,33 +89,66 @@ async function patchedModule1440Source() {
   }
 }
 
-test("1440-audio-link-playback: a stock-prefixed id still calls playSoundFile unchanged", async () => {
+test("1440-audio-link-playback: a stock-prefixed id still calls playSoundFile unchanged, regardless of manifest/cache contents", async () => {
   const source = await patchedModule1440Source();
   const stockIds = ["a001", "b014", "c01007", "c17099", "z003"];
   for (const id of stockIds) {
+    globalThis.MJOLNIR_AUDIO_MANIFEST = { [id]: "deadbeef" }; // present in the manifest — must still be ignored
     const { exports, calls } = loadPatchedModule1440(source);
     exports.playSoundFile(id, "mp3");
     assert.deepEqual(calls, [{ method: "playSoundFile", args: [id, "mp3"] }], `expected ${id} to play locally`);
   }
+  cleanup();
 });
 
-test("1440-audio-link-playback: a non-stock id calls playUrl with the expected URL shape", async () => {
+test("audio-cache-prefetch: a non-stock id with a cached file plays via playUrl('file://...'), never a remote URL", async () => {
   const source = await patchedModule1440Source();
-  const { exports, calls } = loadPatchedModule1440(source);
+  const sha256 = "a".repeat(64);
+  const cachedPath = `${DOCUMENT_DIR}mj-audio/${sha256}.mp3`;
+  globalThis.MJOLNIR_AUDIO_MANIFEST = { c20001: sha256 };
+  const { exports, calls } = loadPatchedModule1440(source, { existingFiles: new Set([cachedPath]) });
+
   exports.playSoundFile("c20001", "mp3");
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].method, "playUrl");
-  // D120: AUDIO_BASE_URL is now `__MJOLNIR_AUDIO_BASE_URL__`, a placeholder
-  // substituted at assemble time (not baked by raw patch-back, which is all
-  // this test exercises) — only the card-id/extension suffix is stable here.
-  assert.match(calls[0].args[0], /__MJOLNIR_AUDIO_BASE_URL__\/c20001\.mp3$/);
+  await new Promise((resolve) => setTimeout(resolve, 10)); // getInfoAsync resolves asynchronously
+
+  assert.deepEqual(calls, [{ method: "playUrl", args: [cachedPath] }]);
+  cleanup();
 });
 
-test("1440-audio-link-playback: a future-rollover id (e.g. c30xxx) is treated as non-stock", async () => {
+test("audio-cache-prefetch: a non-stock id with no manifest entry silently does nothing — no exception, no URL attempted", async () => {
   const source = await patchedModule1440Source();
+  globalThis.MJOLNIR_AUDIO_MANIFEST = {}; // no entry for this card at all
   const { exports, calls } = loadPatchedModule1440(source);
+
+  assert.doesNotThrow(() => exports.playSoundFile("c20001", "mp3"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(calls.length, 0);
+  cleanup();
+});
+
+test("audio-cache-prefetch: a non-stock id with a manifest entry but no cached file on disk silently does nothing (D-P3)", async () => {
+  const source = await patchedModule1440Source();
+  globalThis.MJOLNIR_AUDIO_MANIFEST = { c20001: "a".repeat(64) }; // resolvable, but never downloaded
+  const { exports, calls } = loadPatchedModule1440(source, { existingFiles: new Set() });
+
+  exports.playSoundFile("c20001", "mp3");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(calls.length, 0); // never falls back to a direct URL play
+  cleanup();
+});
+
+test("audio-cache-prefetch: a future-rollover id (e.g. c30xxx) is treated as non-stock", async () => {
+  const source = await patchedModule1440Source();
+  const sha256 = "b".repeat(64);
+  const cachedPath = `${DOCUMENT_DIR}mj-audio/${sha256}.mp3`;
+  globalThis.MJOLNIR_AUDIO_MANIFEST = { c30001: sha256 };
+  const { exports, calls } = loadPatchedModule1440(source, { existingFiles: new Set([cachedPath]) });
+
   exports.playSoundFile("c30001", "mp3");
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].method, "playUrl");
-  assert.match(calls[0].args[0], /c30001\.mp3$/);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.deepEqual(calls, [{ method: "playUrl", args: [cachedPath] }]);
+  cleanup();
 });

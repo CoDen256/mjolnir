@@ -14,13 +14,6 @@ __d(function (g, r, i, a, m, e, d) {
     c = new l.NativeEventEmitter(s),
     p = null,
     y = null;
-  // D120: `__MJOLNIR_AUDIO_BASE_URL__` is a placeholder substituted at
-  // assemble time (`src/commands/companion.js`'s `substituteBakedPlaceholders`,
-  // wired into `assembleBundle`/`bundle-tool assemble`'s `--audio-base-url`
-  // — same mechanism and same whole-bundle substitution pass as
-  // progress-sync-shim's `__MJOLNIR_SYNC_BASE_URL__`), not a hand-edited
-  // literal string — supersedes D-A2's original choice.
-  var AUDIO_BASE_URL = "__MJOLNIR_AUDIO_BASE_URL__";
   // D-A1: checks FOR stock, not for custom — a future rollover deck (e.g.
   // C30) isn't a stock prefix either, so it's automatically treated as
   // custom with no patch update needed.
@@ -30,13 +23,55 @@ __d(function (g, r, i, a, m, e, d) {
     var match = /^c(\d{2})/.exec(cardId);
     return !!match && Number(match[1]) >= 1 && Number(match[1]) <= 17;
   }
+  // D122/audio-cache-prefetch: `playUrl`/`loadUrl` cannot play a remote
+  // `https://` URL at all (confirmed on a real device, traced to the
+  // compiled smali) — only a local `file://` path ever works. A non-stock
+  // card therefore only ever plays from the local cache the
+  // `audio-prefetch-companion.js` companion populates ahead of time, never
+  // via a direct URL. `__r`/`ExponentFileSystem` are reachable the same way
+  // every other companion in this repo already reaches them — no dependency
+  // array edit needed, `__r` is a genuine bundle-wide global keyed by
+  // absolute module id (confirmed, docs/findings.md §4).
+  var MOD_EXPO_MODULES_CORE = 2150;
+  function fileSystem() {
+    try {
+      if (typeof __r === "function") {
+        var mod = __r(MOD_EXPO_MODULES_CORE);
+        if (mod && typeof mod.requireNativeModule === "function") {
+          var viaApp = mod.requireNativeModule("ExponentFileSystem");
+          if (viaApp) return viaApp;
+        }
+      }
+    } catch (ex) {}
+    var g2 = typeof globalThis !== "undefined" ? globalThis : null;
+    return g2 && g2.expo && g2.expo.modules && g2.expo.modules.ExponentFileSystem;
+  }
   e.default = {
     playSoundFile: function (n, o) {
       if (isStockPrefix(n)) {
         s.playSoundFile(n, o);
         return;
       }
-      s.playUrl(AUDIO_BASE_URL + "/" + n + "." + o);
+      // D-P2: the manifest is an in-memory global the prefetcher companion
+      // already populated — no fetch here, this lookup is synchronous.
+      var manifest = typeof globalThis !== "undefined" ? globalThis.MJOLNIR_AUDIO_MANIFEST : null;
+      var sha256 = manifest && manifest[n];
+      if (!sha256) return; // D-P3: no manifest entry — silent skip, never a URL attempt
+      var FS;
+      try {
+        FS = fileSystem();
+      } catch (ex) {
+        return;
+      }
+      if (!FS || !FS.documentDirectory) return;
+      // documentDirectory is already a `file://…/` URI (D56) — do not
+      // prepend another `file://` scheme on top of it.
+      var path = FS.documentDirectory + "mj-audio/" + sha256 + ".mp3";
+      FS.getInfoAsync(path)
+        .then(function (info) {
+          if (info && info.exists) s.playUrl(path); // D-P3: cache hit only, never a remote URL
+        })
+        .catch(function () {});
     },
     playSoundFileWithDelay: function (n, o, t) {
       s.playSoundFileWithDelay(n, o, t);

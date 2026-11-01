@@ -59,14 +59,19 @@
 		file_server
 	}
 
-	# ---- /audio-by-card/<cardId>.mp3 : card-id-keyed, immutable ----------
-	# A plain static copy of the same bytes already at /blob/<sha256>
-	# (builder's audio-snapshot step writes both), so the device can play a
-	# custom card's audio with a predictable, name-based URL and no
-	# manifest fetch of its own — no auth, same reasoning as /blob/* above:
-	# this is deliberately never a route in hub's Node process, where
-	# requireAuth runs unconditionally (D-A3).
-	handle /audio-by-card/* {
+	# ---- /audio-manifest/<buildId>.json : unauthenticated, immutable -----
+	# D-P1 (audio-cache-prefetch): a second, plain copy of the same content
+	# as /ota/<buildId>/audio.json (builder's audio-snapshot step writes
+	# both) — the prefetcher companion has no way to read the OTA bearer
+	# token back, so it fetches this unauthenticated copy instead. Same
+	# "the content isn't sensitive, the buildId that selects it is already
+	# baked into the bundle in plaintext" reasoning /blob/* already relies
+	# on. A given buildId's manifest never changes once published, so this
+	# is immutable the same way /blob/* and /ota/bundle/* already are.
+	# Replaces the retired /audio-by-card/* block (D121/D122, D-P6) — the
+	# device now resolves cardId → sha256 itself from this manifest instead
+	# of hitting a name-based static file.
+	handle /audio-manifest/* {
 		@not_read not method GET HEAD
 		respond @not_read "method not allowed" 405 {
 			close

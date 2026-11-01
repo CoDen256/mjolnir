@@ -612,14 +612,15 @@ function defaultSyncBaseUrl() {
   return `${base.replace(/\/+$/, "")}/mjolnir/userdata`;
 }
 
-// D120: audio-link-playback-minimal's mod 1440 patch does
-// `s.playUrl(AUDIO_BASE_URL + "/" + n + "." + o)` against the Caddy static
-// `/audio-by-card/*` block — same "default from this process's own
-// TUN_PUBLIC_BASE" reasoning as `defaultSyncBaseUrl`.
+// audio-cache-prefetch: the prefetcher companion and the rewritten mod 1440
+// patch both build their own `/audio-manifest/...` and `/blob/...` paths
+// off this one base — a single fixed sub-path default no longer makes
+// sense now that the device resolves cardId → sha256 itself (D-P6 retires
+// `/audio-by-card/*`), so this defaults to the bare `TUN_PUBLIC_BASE`.
 function defaultAudioBaseUrl() {
   const base = process.env.TUN_PUBLIC_BASE;
   if (!base) return undefined;
-  return `${base.replace(/\/+$/, "")}/audio-by-card`;
+  return base.replace(/\/+$/, "");
 }
 
 // --- Route table ------------------------------------------------------

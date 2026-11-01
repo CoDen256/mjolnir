@@ -163,9 +163,10 @@ export async function assembleDefaults({ baseFolderDir, publicBase, operatorAuth
     nextPatchRev: nextRev,
     syncBaseUrlConfigured: !!publicBase,
     syncTokenConfigured: !!operatorAuthToken,
-    // D120: audio-link-playback-minimal's base URL has no token of its own
-    // (the Caddy `/audio-by-card/*` route is plain static, unauthenticated
-    // by design) — only the URL needs a configured default to report.
+    // D120/audio-cache-prefetch: this base URL has no token of its own
+    // (the Caddy `/audio-manifest/*` and `/blob/*` routes are plain static,
+    // unauthenticated by design) — only the URL needs a configured default
+    // to report.
     audioBaseUrlConfigured: !!publicBase,
   };
 }

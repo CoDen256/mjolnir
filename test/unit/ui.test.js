@@ -1107,8 +1107,11 @@ test("POST /api/assemble defaults audioBaseUrl from TUN_PUBLIC_BASE when the req
       assert.equal(status, 201);
       assert.deepEqual(data.appliedCompanions, ["audio-companion"]);
 
+      // audio-cache-prefetch: defaults to the bare public base, not a
+      // `/audio-by-card`-suffixed one — the device builds its own
+      // `/audio-manifest/...`/`/blob/...` paths off this now.
       const outSource = fs.readFileSync(outputPath, "utf8");
-      assert.match(outSource, /__AUDIO_URL__ = 'https:\/\/example\.test\/audio-by-card'/);
+      assert.match(outSource, /__AUDIO_URL__ = 'https:\/\/example\.test'/);
     });
   } finally {
     if (prevBase === undefined) delete process.env.TUN_PUBLIC_BASE;
@@ -1139,13 +1142,13 @@ test("POST /api/assemble prefers an explicit audioBaseUrl over the env default (
         patchNames: [],
         outputPath,
         companionFiles: [companion],
-        audioBaseUrl: "https://explicit.test/audio-by-card",
+        audioBaseUrl: "https://explicit.test",
       });
       assert.equal(status, 201);
       assert.deepEqual(data.appliedCompanions, ["audio-companion-2"]);
 
       const outSource = fs.readFileSync(outputPath, "utf8");
-      assert.match(outSource, /__AUDIO_URL__ = 'https:\/\/explicit\.test\/audio-by-card'/);
+      assert.match(outSource, /__AUDIO_URL__ = 'https:\/\/explicit\.test'/);
     });
   } finally {
     if (prevBase === undefined) delete process.env.TUN_PUBLIC_BASE;

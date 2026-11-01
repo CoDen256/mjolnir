@@ -109,34 +109,28 @@ export async function ensureBlobsPresent(cardAudio, { stabburBaseUrl, dataDir, s
   return finalCardAudio;
 }
 
-// D-A3: a second, card-id-keyed static copy of the same bytes already at
-// `/blob/<sha256>`, so the device can hit a predictable, name-based URL
-// with no manifest fetch and no sha256 lookup of its own — a plain file
-// Caddy serves directly (see `caddy/Caddyfile`'s `/audio-by-card/*` block),
-// never touching hub's Node process. Takes `finalCardAudio` (the
-// already-trimmed-where-applicable result of `ensureBlobsPresent`), not the
-// raw `cardAudio`, so the copy matches whatever was actually snapshotted to
-// `/blob/<sha256>`. Idempotent: skips a card whose file already has the
-// right bytes, so republishing unchanged audio is a no-op.
-export function writeAudioByCardFiles(finalCardAudio, { dataDir }) {
-  const blobDir = path.join(dataDir, "blob");
-  const audioByCardDir = path.join(dataDir, "audio-by-card");
-  fs.mkdirSync(audioByCardDir, { recursive: true });
-
-  for (const [cardId, sha256] of Object.entries(finalCardAudio)) {
-    const src = path.join(blobDir, sha256);
-    const dest = path.join(audioByCardDir, `${cardId}.mp3`);
-    if (fs.existsSync(dest) && sha256OfFile(dest) === sha256) continue;
-    const tmp = `${dest}.tmp`;
-    fs.copyFileSync(src, tmp);
-    fs.renameSync(tmp, dest);
-  }
-}
-
 export function writeAudioManifest(cardAudio, { dataDir, buildId }) {
   const dir = path.join(dataDir, "ota", buildId);
   fs.mkdirSync(dir, { recursive: true });
   const manifestPath = path.join(dir, "audio.json");
+  const tmp = `${manifestPath}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(cardAudio, null, 2) + "\n");
+  fs.renameSync(tmp, manifestPath);
+  return manifestPath;
+}
+
+// D-P1 (audio-cache-prefetch): a second, unauthenticated copy of the same
+// manifest `writeAudioManifest` writes to the token-gated `/ota/<buildId>/
+// audio.json` — the prefetcher companion has no way to read the OTA bearer
+// token back (nothing on the JS side ever has), so it fetches this plain
+// copy instead. Same "the content isn't sensitive, the buildId that
+// selects it already is baked into the bundle in plaintext" reasoning
+// `/blob/*` already relies on. Content is identical; only the path/auth
+// requirement differs.
+export function writePublicAudioManifest(cardAudio, { dataDir, buildId }) {
+  const dir = path.join(dataDir, "audio-manifest");
+  fs.mkdirSync(dir, { recursive: true });
+  const manifestPath = path.join(dir, `${buildId}.json`);
   const tmp = `${manifestPath}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(cardAudio, null, 2) + "\n");
   fs.renameSync(tmp, manifestPath);
