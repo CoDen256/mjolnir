@@ -61,6 +61,16 @@ function defaultSyncBaseUrl(publicBase) {
   return `${publicBase.replace(/\/+$/, "")}/mjolnir/userdata`;
 }
 
+// D120: audio-link-playback-minimal's mod 1440 patch does
+// `s.playUrl(AUDIO_BASE_URL + "/" + n + "." + o)` against the Caddy static
+// `/audio-by-card/*` block (builder/src/audioSnapshot.js's own write
+// target) — same "default from this deployment's own public base" reasoning
+// as `defaultSyncBaseUrl`.
+function defaultAudioBaseUrl(publicBase) {
+  if (!publicBase) return undefined;
+  return `${publicBase.replace(/\/+$/, "")}/audio-by-card`;
+}
+
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Content-Length": Buffer.byteLength(data) });
@@ -1171,6 +1181,10 @@ export function createServer(pool, config) {
           // configured; an explicit request value still wins.
           syncBaseUrl: body.syncBaseUrl || defaultSyncBaseUrl(config.publicBase),
           syncToken: body.syncToken || config.operatorAuthToken || undefined,
+          // D120: same reasoning as syncBaseUrl above — defaults to this
+          // deployment's own public base, no token involved (the route is
+          // plain static/unauthenticated by design).
+          audioBaseUrl: body.audioBaseUrl || defaultAudioBaseUrl(config.publicBase),
         });
         return sendJson(res, 200, row);
       }

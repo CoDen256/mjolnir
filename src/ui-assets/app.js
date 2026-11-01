@@ -767,6 +767,9 @@ async function loadAssembleView() {
     el("assemble-sync-token-hint").textContent = defaults.syncTokenConfigured
       ? "configured on this server — leave blank to use it"
       : "not configured on this server (OPERATOR_AUTH_TOKEN unset) — required here if a selected patch/companion bakes __MJOLNIR_SYNC_TOKEN__";
+    el("assemble-audio-base-url-hint").textContent = defaults.audioBaseUrlConfigured
+      ? "configured on this server — leave blank to use it"
+      : "not configured on this server (TUN_PUBLIC_BASE unset) — required here if a selected patch/companion bakes __MJOLNIR_AUDIO_BASE_URL__";
   } else {
     el("assemble-mode-caption").textContent =
       "Running standalone (no hub reachable) — base folder and output bundle path are required below.";
@@ -776,6 +779,8 @@ async function loadAssembleView() {
       "blank = use this process's own TUN_PUBLIC_BASE env var, if set — otherwise required if a selected patch/companion bakes __MJOLNIR_SYNC_BASE_URL__";
     el("assemble-sync-token-hint").textContent =
       "blank = use this process's own OPERATOR_AUTH_TOKEN env var, if set — otherwise required if a selected patch/companion bakes __MJOLNIR_SYNC_TOKEN__";
+    el("assemble-audio-base-url-hint").textContent =
+      "blank = use this process's own TUN_PUBLIC_BASE env var, if set — otherwise required if a selected patch/companion bakes __MJOLNIR_AUDIO_BASE_URL__";
   }
 
   showPatchesDirCaption("assemble-patches-dir-caption");
@@ -908,6 +913,7 @@ async function runAssemble() {
   // at all when the operator explicitly typed an override.
   const syncBaseUrl = el("assemble-sync-base-url").value.trim() || undefined;
   const syncToken = el("assemble-sync-token").value.trim() || undefined;
+  const audioBaseUrl = el("assemble-audio-base-url").value.trim() || undefined;
 
   if (assembleEmbedded) {
     try {
@@ -922,6 +928,7 @@ async function runAssemble() {
           patchRev: patchRevRaw ? Number(patchRevRaw) : undefined,
           syncBaseUrl,
           syncToken,
+          audioBaseUrl,
         }),
       });
       const result = await res.json();
@@ -954,6 +961,7 @@ async function runAssemble() {
       patchRev: patchRevRaw ? Number(patchRevRaw) : undefined,
       syncBaseUrl,
       syncToken,
+      audioBaseUrl,
     });
     resultEl.innerHTML = `Assembled <code>${result.outputPath}</code> — base_version <strong>${result.baseVersion}</strong>, patch_rev <strong>${result.patchRev ?? "(not baked)"}</strong>, ${result.appliedPatches.length} patch(es) applied, ${result.appliedPatchbackPairs.length} patch-back pair(s) applied, ${result.appliedCompanions.length} companion(s) appended.<br>Submit it to hub's OTA console (<code>/mjolnir/ota</code>) when ready, or drag-drop it there by hand.`;
     resultEl.classList.remove("hidden");

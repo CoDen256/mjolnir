@@ -323,6 +323,71 @@ test("progress-sync-shim: omitting --sync-base-url/--sync-token aborts assembly 
   });
 });
 
+test("audio-link-playback-minimal: --audio-base-url bakes into a patch-back-applied module during assembly (D120)", async () => {
+  await withTmpDir(async (dir) => {
+    const baseFolder = makeBaseFolder(dir, "1.5.12");
+    const baseBundlePath = path.join(baseFolder, "assets", "index.android.bundle");
+    const patchesDir = path.join(dir, "patches");
+    const patchbackDir = path.join(patchesDir, "js");
+    fs.mkdirSync(patchbackDir, { recursive: true });
+
+    // Stands in for `1440-audio-link-playback`: the real pair carries this
+    // placeholder inside a patch-back-applied module, which
+    // `appendCompanion`'s own per-companion substitution never reaches.
+    const m2042 = moduleSource(baseBundlePath, 2042);
+    fs.writeFileSync(path.join(patchbackDir, "2042-audio-link.baseline.js"), m2042);
+    fs.writeFileSync(
+      path.join(patchbackDir, "2042-audio-link.edited.js"),
+      m2042.replace("2.3.0", "__MJOLNIR_AUDIO_BASE_URL__")
+    );
+
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+    await assembleBundle({
+      baseFolderPath: baseFolder,
+      patchNames: [],
+      patchesDir,
+      patchbackPairNames: ["2042-audio-link"],
+      outputPath,
+      audioBaseUrl: "https://hub.example.net/audio-by-card",
+    });
+
+    const moduleOut = moduleSource(outputPath, 2042);
+    assert.match(moduleOut, /https:\/\/hub\.example\.net\/audio-by-card/);
+    const outBytes = fs.readFileSync(outputPath, "utf8");
+    assert.ok(!outBytes.includes("__MJOLNIR_AUDIO_BASE_URL__"));
+  });
+});
+
+test("audio-link-playback-minimal: omitting --audio-base-url aborts assembly when the placeholder is present anywhere in the output", async () => {
+  await withTmpDir(async (dir) => {
+    const baseFolder = makeBaseFolder(dir, "1.5.12");
+    const baseBundlePath = path.join(baseFolder, "assets", "index.android.bundle");
+    const patchesDir = path.join(dir, "patches");
+    const patchbackDir = path.join(patchesDir, "js");
+    fs.mkdirSync(patchbackDir, { recursive: true });
+
+    const m2042 = moduleSource(baseBundlePath, 2042);
+    fs.writeFileSync(path.join(patchbackDir, "2042-audio-link.baseline.js"), m2042);
+    fs.writeFileSync(
+      path.join(patchbackDir, "2042-audio-link.edited.js"),
+      m2042.replace("2.3.0", "__MJOLNIR_AUDIO_BASE_URL__")
+    );
+
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+    await assert.rejects(
+      () =>
+        assembleBundle({
+          baseFolderPath: baseFolder,
+          patchNames: [],
+          patchesDir,
+          patchbackPairNames: ["2042-audio-link"],
+          outputPath,
+        }),
+      /no audioBaseUrl was given/
+    );
+  });
+});
+
 test("an unknown patch-back pair name aborts the assembly before the output path is touched", async () => {
   await withTmpDir(async (dir) => {
     const baseFolder = makeBaseFolder(dir, "1.5.12");

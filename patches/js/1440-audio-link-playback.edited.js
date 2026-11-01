@@ -14,10 +14,13 @@ __d(function (g, r, i, a, m, e, d) {
     c = new l.NativeEventEmitter(s),
     p = null,
     y = null;
-  // D-A2: literal string, not the companion-constant mechanism and not
-  // config.json (which has no JS-side reader). Re-author this file and
-  // republish to change the domain.
-  var AUDIO_BASE_URL = "https://tun.example.net/audio-by-card";
+  // D120: `__MJOLNIR_AUDIO_BASE_URL__` is a placeholder substituted at
+  // assemble time (`src/commands/companion.js`'s `substituteBakedPlaceholders`,
+  // wired into `assembleBundle`/`bundle-tool assemble`'s `--audio-base-url`
+  // — same mechanism and same whole-bundle substitution pass as
+  // progress-sync-shim's `__MJOLNIR_SYNC_BASE_URL__`), not a hand-edited
+  // literal string — supersedes D-A2's original choice.
+  var AUDIO_BASE_URL = "__MJOLNIR_AUDIO_BASE_URL__";
   // D-A1: checks FOR stock, not for custom — a future rollover deck (e.g.
   // C30) isn't a stock prefix either, so it's automatically treated as
   // custom with no patch update needed.

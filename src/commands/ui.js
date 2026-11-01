@@ -612,6 +612,16 @@ function defaultSyncBaseUrl() {
   return `${base.replace(/\/+$/, "")}/mjolnir/userdata`;
 }
 
+// D120: audio-link-playback-minimal's mod 1440 patch does
+// `s.playUrl(AUDIO_BASE_URL + "/" + n + "." + o)` against the Caddy static
+// `/audio-by-card/*` block — same "default from this process's own
+// TUN_PUBLIC_BASE" reasoning as `defaultSyncBaseUrl`.
+function defaultAudioBaseUrl() {
+  const base = process.env.TUN_PUBLIC_BASE;
+  if (!base) return undefined;
+  return `${base.replace(/\/+$/, "")}/audio-by-card`;
+}
+
 // --- Route table ------------------------------------------------------
 
 function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
@@ -965,6 +975,7 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
           patchRev,
           syncBaseUrl,
           syncToken,
+          audioBaseUrl,
         } = body || {};
         if (!baseFolderPath) throw new Error("baseFolderPath is required");
         if (!outputPath) throw new Error("outputPath is required");
@@ -988,6 +999,9 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
           // has configured; an explicit request value still wins.
           syncBaseUrl: syncBaseUrl || defaultSyncBaseUrl(),
           syncToken: syncToken || process.env.OPERATOR_AUTH_TOKEN || undefined,
+          // D120: same reasoning as syncBaseUrl above — no token involved
+          // (the route is plain static/unauthenticated by design).
+          audioBaseUrl: audioBaseUrl || defaultAudioBaseUrl(),
         });
         return { status: 201, body: result };
       },

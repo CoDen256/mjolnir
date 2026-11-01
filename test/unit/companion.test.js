@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appendCompanion, substituteSyncPlaceholders } from "../../src/commands/companion.js";
+import { appendCompanion, substituteBakedPlaceholders } from "../../src/commands/companion.js";
 
 const PLACEHOLDER_COMPANION = "(function(){ var id='__MJOLNIR_BUILD_ID__'; })();";
 const PLAIN_COMPANION = "(function(){ /* no buildId */ })();";
@@ -145,12 +145,12 @@ test("progress-sync-shim: requires syncBaseUrl/syncToken only when their own pla
   assert.ok(out.includes("/* no buildId */"));
 });
 
-test("progress-sync-shim: substituteSyncPlaceholders bakes both placeholders across a whole assembled bundle, not just an appended companion's own text", () => {
+test("progress-sync-shim: substituteBakedPlaceholders bakes both placeholders across a whole assembled bundle, not just an appended companion's own text", () => {
   const bundle = Buffer.from(
     "var SYNC_BASE_URL = '__MJOLNIR_SYNC_BASE_URL__';\nvar SYNC_TOKEN = '__MJOLNIR_SYNC_TOKEN__';\n",
     "utf8"
   );
-  const out = substituteSyncPlaceholders(bundle, {
+  const out = substituteBakedPlaceholders(bundle, {
     syncBaseUrl: "https://hub.example.net/mjolnir/userdata",
     syncToken: "s3cret",
   }).toString("utf8");
@@ -159,10 +159,44 @@ test("progress-sync-shim: substituteSyncPlaceholders bakes both placeholders acr
   assert.ok(!out.includes("__MJOLNIR_SYNC_"));
 });
 
-test("progress-sync-shim: substituteSyncPlaceholders is a no-op (and needs no options) when neither placeholder is present", () => {
+test("progress-sync-shim: substituteBakedPlaceholders is a no-op (and needs no options) when none of its placeholders are present", () => {
   const bundle = Buffer.from("var x = 1;\n", "utf8");
-  const out = substituteSyncPlaceholders(bundle, {});
+  const out = substituteBakedPlaceholders(bundle, {});
   assert.equal(out, bundle); // same buffer, not merely equal bytes — confirms the early-return path
+});
+
+test("audio-link-playback-minimal: substitutes the audioBaseUrl placeholder in an appended companion, and across a whole bundle via substituteBakedPlaceholders (D120)", () => {
+  const companion = "(function(){ var u='__MJOLNIR_AUDIO_BASE_URL__'; })();";
+  const out = appendCompanion(bundleWithMap(), companion, {
+    audioBaseUrl: "https://hub.example.net/audio-by-card",
+    name: "audio-companion",
+  }).toString("utf8");
+  assert.ok(out.includes("u='https://hub.example.net/audio-by-card'"));
+  assert.ok(!out.includes("__MJOLNIR_AUDIO_BASE_URL__"));
+
+  const bundle = Buffer.from("var AUDIO_BASE_URL = '__MJOLNIR_AUDIO_BASE_URL__';\n", "utf8");
+  const whole = substituteBakedPlaceholders(bundle, { audioBaseUrl: "https://hub.example.net/audio-by-card" }).toString(
+    "utf8"
+  );
+  assert.ok(whole.includes("'https://hub.example.net/audio-by-card'"));
+});
+
+test("audio-link-playback-minimal: requires audioBaseUrl only when its own placeholder is present, and validates it's https://", () => {
+  assert.throws(
+    () => appendCompanion(bundleWithMap(), "var u='__MJOLNIR_AUDIO_BASE_URL__';", { name: "audio-companion" }),
+    /no audioBaseUrl was given/
+  );
+  assert.throws(
+    () =>
+      appendCompanion(bundleWithMap(), "var u='__MJOLNIR_AUDIO_BASE_URL__';", {
+        audioBaseUrl: "http://insecure.example.net",
+        name: "audio-companion",
+      }),
+    /must be a bare https:\/\/ URL/
+  );
+  // Neither placeholder present — the option is not required.
+  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { name: "debug" }).toString("utf8");
+  assert.ok(out.includes("/* no buildId */"));
 });
 
 test("refuses to append the same companion twice", () => {

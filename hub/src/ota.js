@@ -163,6 +163,10 @@ export async function assembleDefaults({ baseFolderDir, publicBase, operatorAuth
     nextPatchRev: nextRev,
     syncBaseUrlConfigured: !!publicBase,
     syncTokenConfigured: !!operatorAuthToken,
+    // D120: audio-link-playback-minimal's base URL has no token of its own
+    // (the Caddy `/audio-by-card/*` route is plain static, unauthenticated
+    // by design) — only the URL needs a configured default to report.
+    audioBaseUrlConfigured: !!publicBase,
   };
 }
 
@@ -186,6 +190,7 @@ export async function assembleAndSubmit({
   logicBundleDir,
   syncBaseUrl,
   syncToken,
+  audioBaseUrl,
 }) {
   const resolvedPatchRev = patchRev === undefined || patchRev === null ? await nextPatchRev() : Number(patchRev);
   const tmpPath = path.join(dataDir, `.assemble-submit-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
@@ -202,6 +207,7 @@ export async function assembleAndSubmit({
       patchRev: resolvedPatchRev,
       syncBaseUrl,
       syncToken,
+      audioBaseUrl,
     });
     const bytes = fs.readFileSync(tmpPath);
     const resolvedLabel = label || `${assembled.baseVersion}-patch${resolvedPatchRev}`;

@@ -215,6 +215,14 @@
               </label>
             </div>
 
+            <h3>audio-link-playback-minimal placeholder <span class="field-hint">only needed if a selected patch/companion bakes __MJOLNIR_AUDIO_BASE_URL__</span></h3>
+            <div class="field-grid">
+              <label>
+                Audio base URL <span id="assemble-audio-base-url-hint" class="field-hint">blank = use this server's TUN_PUBLIC_BASE + /audio-by-card</span>
+                <input id="assemble-audio-base-url" type="text" placeholder="(default from TUN_PUBLIC_BASE)" />
+              </label>
+            </div>
+
             <div id="assemble-patches-dir-caption" class="dir-caption"></div>
             <h3>Patches to apply, in order <span class="field-hint">REPLACE-style — modifies an existing module in place</span></h3>
             <div class="assemble-picker">

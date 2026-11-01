@@ -83,7 +83,10 @@ test("1440-audio-link-playback: a non-stock id calls playUrl with the expected U
   exports.playSoundFile("c20001", "mp3");
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "playUrl");
-  assert.match(calls[0].args[0], /^https:\/\/.+\/audio-by-card\/c20001\.mp3$/);
+  // D120: AUDIO_BASE_URL is now `__MJOLNIR_AUDIO_BASE_URL__`, a placeholder
+  // substituted at assemble time (not baked by raw patch-back, which is all
+  // this test exercises) — only the card-id/extension suffix is stable here.
+  assert.match(calls[0].args[0], /__MJOLNIR_AUDIO_BASE_URL__\/c20001\.mp3$/);
 });
 
 test("1440-audio-link-playback: a future-rollover id (e.g. c30xxx) is treated as non-stock", async () => {

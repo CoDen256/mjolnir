@@ -94,6 +94,7 @@ program
   .option("--patch-rev <n>", "patch_rev to substitute for __MJOLNIR_PATCH_REV__ (required if the companion uses it)")
   .option("--sync-base-url <url>", "progress-sync-shim: https:// base URL to substitute for __MJOLNIR_SYNC_BASE_URL__ (required if the companion uses it)")
   .option("--sync-token <token>", "progress-sync-shim: bearer token to substitute for __MJOLNIR_SYNC_TOKEN__ (required if the companion uses it)")
+  .option("--audio-base-url <url>", "audio-link-playback-minimal: https:// base URL to substitute for __MJOLNIR_AUDIO_BASE_URL__ (required if the companion uses it)")
   .action(async (bundle, outputBundle, companionFile, opts) => {
     runCompanion(bundle, outputBundle, companionFile, {
       buildId: opts.buildId,
@@ -101,6 +102,7 @@ program
       patchRev: opts.patchRev !== undefined ? Number(opts.patchRev) : undefined,
       syncBaseUrl: opts.syncBaseUrl,
       syncToken: opts.syncToken,
+      audioBaseUrl: opts.audioBaseUrl,
     });
   });
 
@@ -127,6 +129,7 @@ program
   .option("--patch-rev <n>", "patch_rev to bake in — the operator's responsibility to supply (D-L2's global counter lives in hub's logic_bundles table)")
   .option("--sync-base-url <url>", "progress-sync-shim: https:// base URL to substitute for __MJOLNIR_SYNC_BASE_URL__ (required if the shim patch or restore companion is included)")
   .option("--sync-token <token>", "progress-sync-shim: bearer token to substitute for __MJOLNIR_SYNC_TOKEN__ (required if the shim patch or restore companion is included)")
+  .option("--audio-base-url <url>", "audio-link-playback-minimal: https:// base URL to substitute for __MJOLNIR_AUDIO_BASE_URL__ (required if the 1440 patch is included)")
   .action(async (baseFolder, outputBundle, opts) => {
     const patchNames = opts.patches ? opts.patches.split(",").map((s) => s.trim()).filter(Boolean) : [];
     const patchbackPairNames = opts.patchbackPairs
@@ -144,6 +147,7 @@ program
       patchRev: opts.patchRev !== undefined ? Number(opts.patchRev) : undefined,
       syncBaseUrl: opts.syncBaseUrl,
       syncToken: opts.syncToken,
+      audioBaseUrl: opts.audioBaseUrl,
     });
     console.log(`assembled ${outputBundle}`);
     console.log(`  base_version  ${result.baseVersion}`);

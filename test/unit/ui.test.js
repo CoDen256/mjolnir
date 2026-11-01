@@ -1079,6 +1079,80 @@ test("POST /api/assemble prefers an explicit syncBaseUrl/syncToken over the env 
   }
 });
 
+test("POST /api/assemble defaults audioBaseUrl from TUN_PUBLIC_BASE when the request omits it (D120)", async () => {
+  const prevBase = process.env.TUN_PUBLIC_BASE;
+  process.env.TUN_PUBLIC_BASE = "https://example.test";
+  try {
+    await withPatchSession(async ({ baseUrl, bundlePath }) => {
+      const dir = path.dirname(bundlePath);
+      const baseFolder = path.join(dir, "base-folder-audio");
+      fs.mkdirSync(path.join(baseFolder, "assets"), { recursive: true });
+      fs.copyFileSync(bundlePath, path.join(baseFolder, "assets", "index.android.bundle"));
+      fs.writeFileSync(
+        path.join(baseFolder, "apktool.yml"),
+        "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 1.5.12\n"
+      );
+
+      const companion = path.join(dir, "audio-companion.js");
+      fs.writeFileSync(companion, "globalThis.__AUDIO_URL__ = '__MJOLNIR_AUDIO_BASE_URL__';\n");
+
+      const outputPath = path.join(dir, "out-audio", "assembled.bundle");
+      const { status, data } = await api(baseUrl, "POST", "/api/assemble", {
+        baseFolderPath: baseFolder,
+        patchNames: [],
+        outputPath,
+        companionFiles: [companion],
+        // audioBaseUrl deliberately omitted — must fall back to env
+      });
+      assert.equal(status, 201);
+      assert.deepEqual(data.appliedCompanions, ["audio-companion"]);
+
+      const outSource = fs.readFileSync(outputPath, "utf8");
+      assert.match(outSource, /__AUDIO_URL__ = 'https:\/\/example\.test\/audio-by-card'/);
+    });
+  } finally {
+    if (prevBase === undefined) delete process.env.TUN_PUBLIC_BASE;
+    else process.env.TUN_PUBLIC_BASE = prevBase;
+  }
+});
+
+test("POST /api/assemble prefers an explicit audioBaseUrl over the env default (D120)", async () => {
+  const prevBase = process.env.TUN_PUBLIC_BASE;
+  process.env.TUN_PUBLIC_BASE = "https://should-not-be-used.test";
+  try {
+    await withPatchSession(async ({ baseUrl, bundlePath }) => {
+      const dir = path.dirname(bundlePath);
+      const baseFolder = path.join(dir, "base-folder-audio-override");
+      fs.mkdirSync(path.join(baseFolder, "assets"), { recursive: true });
+      fs.copyFileSync(bundlePath, path.join(baseFolder, "assets", "index.android.bundle"));
+      fs.writeFileSync(
+        path.join(baseFolder, "apktool.yml"),
+        "version: 2.12.1\nversionInfo:\n  versionCode: 1\n  versionName: 1.5.12\n"
+      );
+
+      const companion = path.join(dir, "audio-companion-2.js");
+      fs.writeFileSync(companion, "globalThis.__AUDIO_URL__ = '__MJOLNIR_AUDIO_BASE_URL__';\n");
+
+      const outputPath = path.join(dir, "out-audio-override", "assembled.bundle");
+      const { status, data } = await api(baseUrl, "POST", "/api/assemble", {
+        baseFolderPath: baseFolder,
+        patchNames: [],
+        outputPath,
+        companionFiles: [companion],
+        audioBaseUrl: "https://explicit.test/audio-by-card",
+      });
+      assert.equal(status, 201);
+      assert.deepEqual(data.appliedCompanions, ["audio-companion-2"]);
+
+      const outSource = fs.readFileSync(outputPath, "utf8");
+      assert.match(outSource, /__AUDIO_URL__ = 'https:\/\/explicit\.test\/audio-by-card'/);
+    });
+  } finally {
+    if (prevBase === undefined) delete process.env.TUN_PUBLIC_BASE;
+    else process.env.TUN_PUBLIC_BASE = prevBase;
+  }
+});
+
 // D111: a third real patch kind — raw <id>-name.baseline.js/.edited.js
 // pairs, module-id addressed, same reconciliation algorithm as JSON-store
 // patches (not content-located). Lives alongside companions in the same
