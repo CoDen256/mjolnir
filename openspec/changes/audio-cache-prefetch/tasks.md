@@ -94,7 +94,7 @@ operator's own steps, done outside this change.**
 - [x] 6.1 If anything here contradicts or refines `design.md` during
       implementation, record it as an ADR amendment in
       `tun/docs/07-decisions.md`, per this project's established practice.
-- [ ] 6.2 **(Operator, outside this change)** Assemble/install a bundle
+- [x] 6.2 **(Operator, outside this change)** Assemble/install a bundle
       with the rewritten mod 1440 patch and the new prefetcher companion;
       confirm on-device: app launch triggers the prefetch sweep (observable
       via `mj-audio/` populating without opening any card); a real
