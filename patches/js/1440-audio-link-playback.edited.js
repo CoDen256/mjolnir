@@ -32,6 +32,34 @@ __d(function (g, r, i, a, m, e, d) {
   // every other companion in this repo already reaches them — no dependency
   // array edit needed, `__r` is a genuine bundle-wide global keyed by
   // absolute module id (confirmed, docs/findings.md §4).
+  // Same logcat convention every companion in this repo uses (D63):
+  //     adb logcat -s ReactNativeJS:V | grep mjolnir-audio-playback
+  var TAG = "[mjolnir-audio-playback]";
+  function log() {
+    try {
+      var args = Array.prototype.slice.call(arguments);
+      args.unshift(TAG);
+      console.log.apply(console, args);
+    } catch (ex) {}
+  }
+  // Unconditional listener, independent of whatever the app itself wires up
+  // via onFinishedPlaying/onFinishedLoading — lets logcat show native
+  // playback lifecycle events even when nothing in the app is listening.
+  try {
+    c.addListener("FinishedPlaying", function (evt) {
+      log("native event (unconditional): FinishedPlaying", evt && JSON.stringify(evt));
+    });
+    c.addListener("FinishedLoading", function (evt) {
+      log("native event (unconditional): FinishedLoading", evt && JSON.stringify(evt));
+    });
+    // RNSoundPlayerModule's prepareUrl/mountSoundFile catch IOException
+    // internally and emit this instead of throwing — the only visible sign
+    // of a failed setDataSource()/prepare() (e.g. a file the player's own
+    // process can't read). Nothing in this module listened for it before.
+    c.addListener("OnSetupError", function (evt) {
+      log("native event (unconditional): OnSetupError", evt && JSON.stringify(evt));
+    });
+  } catch (ex) {}
   var MOD_EXPO_MODULES_CORE = 2150;
   function fileSystem() {
     try {
@@ -48,30 +76,79 @@ __d(function (g, r, i, a, m, e, d) {
   }
   e.default = {
     playSoundFile: function (n, o) {
+      log("playSoundFile called:", n, o);
       if (isStockPrefix(n)) {
+        log("stock prefix — delegating to native RNSoundPlayer.playSoundFile:", n);
         s.playSoundFile(n, o);
         return;
       }
       // D-P2: the manifest is an in-memory global the prefetcher companion
       // already populated — no fetch here, this lookup is synchronous.
       var manifest = typeof globalThis !== "undefined" ? globalThis.MJOLNIR_AUDIO_MANIFEST : null;
-      var sha256 = manifest && manifest[n];
-      if (!sha256) return; // D-P3: no manifest entry — silent skip, never a URL attempt
+      if (!manifest) {
+        log("no MJOLNIR_AUDIO_MANIFEST yet (prefetch sweep may still be running) — skipping:", n);
+        return;
+      }
+      var sha256 = manifest[n];
+      if (!sha256) {
+        log("no manifest entry for card — skipping:", n);
+        return; // D-P3: no manifest entry — silent skip, never a URL attempt
+      }
       var FS;
       try {
         FS = fileSystem();
       } catch (ex) {
+        log("fileSystem() threw:", ex && ex.message ? ex.message : String(ex));
         return;
       }
-      if (!FS || !FS.documentDirectory) return;
+      if (!FS || !FS.documentDirectory) {
+        log("ExponentFileSystem unavailable — skipping:", n);
+        return;
+      }
       // documentDirectory is already a `file://…/` URI (D56) — do not
       // prepend another `file://` scheme on top of it.
       var path = FS.documentDirectory + "mj-audio/" + sha256 + ".mp3";
+      log("resolved", n, "->", sha256, "checking cache at", path);
       FS.getInfoAsync(path)
         .then(function (info) {
-          if (info && info.exists) s.playUrl(path); // D-P3: cache hit only, never a remote URL
+          log("getInfoAsync result for", path, ":", info && JSON.stringify(info));
+          if (info && info.exists) {
+            // D-P6 (new): a file written by ExponentFileSystem.downloadAsync
+            // has default (owner-only) Android file permissions — unlike the
+            // stock asset-extraction path, which explicitly calls
+            // File.setReadable(true, false) before building its own
+            // file:// URI, nothing here widens this file's permissions.
+            // RNSoundPlayerModule's prepareUrl (unlike the stock
+            // playSoundFile path) has no such step either, so handing it a
+            // raw file:// path here fails MediaPlayer.setDataSource() with a
+            // silently-caught IOException, surfaced only as a native
+            // "OnSetupError" event nothing was listening for (confirmed via
+            // the decompiled smali). getContentUriAsync hands back a
+            // content:// URI backed by a real FileProvider instead — those
+            // use Binder permission grants, not raw file bits, and
+            // RNSoundPlayerModule's setDataSource(Context, Uri) call is
+            // scheme-agnostic, so no native change is needed.
+            FS.getContentUriAsync(path)
+              .then(function (contentUri) {
+                log("resolved content:// URI — calling RNSoundPlayer.playUrl with", contentUri);
+                s.playUrl(contentUri);
+              })
+              .catch(function (ex) {
+                log(
+                  "getContentUriAsync failed for",
+                  path,
+                  "— falling back to the raw file:// path (may silently fail to play):",
+                  ex && ex.message ? ex.message : String(ex)
+                );
+                s.playUrl(path);
+              });
+          } else {
+            log("cache miss — file does not exist on disk, skipping:", path);
+          }
         })
-        .catch(function () {});
+        .catch(function (ex) {
+          log("getInfoAsync failed for", path, ":", ex && ex.message ? ex.message : String(ex));
+        });
     },
     playSoundFileWithDelay: function (n, o, t) {
       s.playSoundFileWithDelay(n, o, t);
@@ -83,9 +160,11 @@ __d(function (g, r, i, a, m, e, d) {
       s.setNumberOfLoops(n);
     },
     playUrl: function (n) {
+      log("playUrl called directly:", n);
       s.playUrl(n);
     },
     loadUrl: function (n) {
+      log("loadUrl called directly:", n);
       s.loadUrl(n);
     },
     playAsset: (t = (0, u.default)(function* (n) {
@@ -97,10 +176,18 @@ __d(function (g, r, i, a, m, e, d) {
       __DEV__ || "android" !== l.Platform.OS ? s.loadUrl((0, f.default)(n).uri) : s.loadSoundFile((0, f.default)(n).uri, '');
     },
     onFinishedPlaying: function (n) {
-      p && (p.remove(), p = void 0), p = c.addListener("FinishedPlaying", n);
+      p && (p.remove(), p = void 0);
+      p = c.addListener("FinishedPlaying", function (evt) {
+        log("native event: FinishedPlaying", evt && JSON.stringify(evt));
+        n(evt);
+      });
     },
     onFinishedLoading: function (n) {
-      y && (y.remove(), y = void 0), y = c.addListener("FinishedLoading", n);
+      y && (y.remove(), y = void 0);
+      y = c.addListener("FinishedLoading", function (evt) {
+        log("native event: FinishedLoading", evt && JSON.stringify(evt));
+        n(evt);
+      });
     },
     addEventListener: function (n, o) {
       return c.addListener(n, o);

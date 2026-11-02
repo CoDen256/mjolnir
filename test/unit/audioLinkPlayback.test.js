@@ -27,7 +27,7 @@ const DOCUMENT_DIR = "file:///fake/documents/";
 // directly (same pattern every companion in this repo already uses), so
 // this installs `global.__r` as a real global rather than a module
 // dependency.
-function loadPatchedModule1440(patchedSource, { existingFiles = new Set() } = {}) {
+function loadPatchedModule1440(patchedSource, { existingFiles = new Set(), contentUriBehavior } = {}) {
   const ast = parse(patchedSource, { sourceType: "script", allowReturnOutsideFunction: true });
   const { factory } = extractFactoryBody(ast);
   const fnSrc = generate(factory, { comments: false }).code;
@@ -60,6 +60,11 @@ function loadPatchedModule1440(patchedSource, { existingFiles = new Set() } = {}
   const FS = {
     documentDirectory: DOCUMENT_DIR,
     getInfoAsync: async (uri) => ({ exists: existingFiles.has(uri) }),
+    // D-P6: default behavior mirrors the real FileProvider-backed method —
+    // a deterministic content:// URI derived from the file:// path. Tests
+    // that need to exercise the getContentUriAsync-failure fallback pass
+    // their own `contentUriBehavior` (e.g. a rejecting promise).
+    getContentUriAsync: contentUriBehavior || (async (uri) => `content://fake.FileSystemFileProvider/${encodeURIComponent(uri)}`),
   };
   global.__r = (id) => {
     if (id !== MOD_EXPO_MODULES_CORE) throw new Error(`unexpected __r(${id}) in test`);
@@ -101,7 +106,7 @@ test("1440-audio-link-playback: a stock-prefixed id still calls playSoundFile un
   cleanup();
 });
 
-test("audio-cache-prefetch: a non-stock id with a cached file plays via playUrl('file://...'), never a remote URL", async () => {
+test("audio-cache-prefetch: a non-stock id with a cached file plays via playUrl(content://...), never a raw file:// path or remote URL (D-P6)", async () => {
   const source = await patchedModule1440Source();
   const sha256 = "a".repeat(64);
   const cachedPath = `${DOCUMENT_DIR}mj-audio/${sha256}.mp3`;
@@ -109,7 +114,32 @@ test("audio-cache-prefetch: a non-stock id with a cached file plays via playUrl(
   const { exports, calls } = loadPatchedModule1440(source, { existingFiles: new Set([cachedPath]) });
 
   exports.playSoundFile("c20001", "mp3");
-  await new Promise((resolve) => setTimeout(resolve, 10)); // getInfoAsync resolves asynchronously
+  await new Promise((resolve) => setTimeout(resolve, 10)); // getInfoAsync/getContentUriAsync resolve asynchronously
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "playUrl");
+  // D-P6: a raw file:// path can silently fail native MediaPlayer setup
+  // (permission bits ExponentFileSystem.downloadAsync doesn't set) — must
+  // always go through getContentUriAsync's content:// URI instead.
+  assert.ok(calls[0].args[0].startsWith("content://"), `expected a content:// URI, got ${calls[0].args[0]}`);
+  assert.ok(!calls[0].args[0].startsWith("file://"));
+  cleanup();
+});
+
+test("audio-cache-prefetch: if getContentUriAsync fails, falls back to the raw file:// path rather than giving up (D-P6)", async () => {
+  const source = await patchedModule1440Source();
+  const sha256 = "a".repeat(64);
+  const cachedPath = `${DOCUMENT_DIR}mj-audio/${sha256}.mp3`;
+  globalThis.MJOLNIR_AUDIO_MANIFEST = { c20001: sha256 };
+  const { exports, calls } = loadPatchedModule1440(source, {
+    existingFiles: new Set([cachedPath]),
+    contentUriBehavior: async () => {
+      throw new Error("FileProvider not configured");
+    },
+  });
+
+  exports.playSoundFile("c20001", "mp3");
+  await new Promise((resolve) => setTimeout(resolve, 10));
 
   assert.deepEqual(calls, [{ method: "playUrl", args: [cachedPath] }]);
   cleanup();
@@ -149,6 +179,8 @@ test("audio-cache-prefetch: a future-rollover id (e.g. c30xxx) is treated as non
   exports.playSoundFile("c30001", "mp3");
   await new Promise((resolve) => setTimeout(resolve, 10));
 
-  assert.deepEqual(calls, [{ method: "playUrl", args: [cachedPath] }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "playUrl");
+  assert.ok(calls[0].args[0].startsWith("content://"));
   cleanup();
 });
