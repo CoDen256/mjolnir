@@ -12,19 +12,19 @@ exploration, not confirmed-stable identifiers).
 
 ## 1. Author the patch-back pair
 
-- [ ] 1.1 Create `patches/js/2119-deck-completion-display.baseline.js` /
+- [x] 1.1 Create `patches/js/2119-deck-completion-display.baseline.js` /
       `.edited.js` (same `patch-back` mechanism as every other raw
       module-id-located patch in this project — D111).
-- [ ] 1.2 Edit: the `Completion` assignment gains `Math.min(100, ...)`
+- [x] 1.2 Edit: the `Completion` assignment gains `Math.min(100, ...)`
       around the existing (otherwise unchanged) calculation.
-- [ ] 1.3 Edit: the session-start button handler's early-return branch
+- [x] 1.3 Edit: the session-start button handler's early-return branch
       (`if (Vt() && !alreadyShown) return showPopup(...)`) is removed —
       execution always falls through to the real draw attempt. Confirm
       whether `Vt()` (or its real name) is used ANYWHERE else in this
       module before removing it outright — if it has another caller,
       leave the function itself defined and only remove this one call
       site's gating use of it.
-- [ ] 1.4 Confirm no other behavior in this module reads `Completion` in a
+- [x] 1.4 Confirm no other behavior in this module reads `Completion` in a
       way that would be affected by the clamp (e.g. sorting decks by
       completion, analytics, anything comparing against a raw un-clamped
       value) — if found, note it in this task and decide whether the
@@ -33,25 +33,25 @@ exploration, not confirmed-stable identifiers).
 
 ## 2. Tests
 
-- [ ] 2.1 Test harness (same `patch-back` + `indirectEval` pattern this
+- [x] 2.1 Test harness (same `patch-back` + `indirectEval` pattern this
       project's other module-id-located patches use): a deck with
       `Cards.length` not a multiple of 5, fully exhausted (`PullCounter`
       at its ceiling), displays exactly 100, not the unclamped overshoot.
-- [ ] 2.2 Test: a partially-drawn deck's displayed completion is unchanged
+- [x] 2.2 Test: a partially-drawn deck's displayed completion is unchanged
       from the unpatched calculation (the clamp only ever engages at/above
       100, never alters an in-progress value).
-- [ ] 2.3 Test: pressing "Start today's session" with a deck whose
+- [x] 2.3 Test: pressing "Start today's session" with a deck whose
       (possibly-overshooting) `Completion` reads `>= 100` but whose
       `Cards[]` still has undrawn entries — the draw is attempted
       immediately, no interstitial, and the undrawn cards are returned.
-- [ ] 2.4 Test: pressing "Start today's session" with every selected deck
+- [x] 2.4 Test: pressing "Start today's session" with every selected deck
       genuinely fully exhausted — the real "No new cards for today!" alert
       still fires exactly as before (confirm this path is untouched by the
       gate's removal).
 
 ## 3. Sign-off
 
-- [ ] 3.1 If anything here contradicts or refines `design.md` during
+- [x] 3.1 If anything here contradicts or refines `design.md` during
       implementation (e.g. task 1.3's/1.4's "confirm against the real
       file" turns up something different from what design.md assumed),
       record it as an ADR amendment in `tun/docs/07-decisions.md`, per this
