@@ -73,7 +73,7 @@ services:
     container_name: mjolnir-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_PASSWORD: mjolnir
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_USER: mjolnir
       POSTGRES_DB: mjolnir
     volumes:
