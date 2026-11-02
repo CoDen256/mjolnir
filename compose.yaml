@@ -68,14 +68,14 @@ services:
       - caddy_data:/data                 # TLS certs — LOSING THIS MEANS RE-ISSUING CERTS
       - caddy_config:/config
 
-  postgres:
+  mjolnir-postgres:
     image: postgres:17-alpine
     container_name: mjolnir-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: mjolnir
       POSTGRES_USER: mjolnir
-      POSTGRES_DB: postgres
+      POSTGRES_DB: mjolnir
     volumes:
       - postgres_data:/var/lib/postgresql/data
     # Deliberately NOT published to the host: only sibling containers reach it.
@@ -108,7 +108,7 @@ services:
     container_name: mjolnir-hub
     restart: unless-stopped
     depends_on:
-      postgres:
+      mjolnir-postgres:
         condition: service_healthy
     # `.env` passes through most config as-is (STABBUR_UI_BASE,
     # OPERATOR_AUTH_TOKEN, TUN_PUBLIC_BASE, ALLOW_HTTP, …) — only the
@@ -129,7 +129,7 @@ services:
     container_name: mjolnir-builder
     restart: unless-stopped
     depends_on:
-      postgres:
+      mjolnir-postgres:
         condition: service_healthy
     env_file: .env
     environment:
