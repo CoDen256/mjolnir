@@ -110,7 +110,11 @@ test("audio-cache-prefetch: a non-stock id with a cached file plays via playUrl(
   const source = await patchedModule1440Source();
   const sha256 = "a".repeat(64);
   const cachedPath = `${DOCUMENT_DIR}mj-audio/${sha256}.mp3`;
-  globalThis.MJOLNIR_AUDIO_MANIFEST = { c20001: sha256 };
+  // D123: manifests are keyed with the builder's own uppercase card ids
+  // (confirmed live, "C20001") — the runtime id passed to playSoundFile is
+  // lowercase ("c20001"). Keying the fixture uppercase here, same as
+  // production, is what makes this test actually exercise that lookup.
+  globalThis.MJOLNIR_AUDIO_MANIFEST = { C20001: sha256 };
   const { exports, calls } = loadPatchedModule1440(source, { existingFiles: new Set([cachedPath]) });
 
   exports.playSoundFile("c20001", "mp3");
@@ -123,6 +127,21 @@ test("audio-cache-prefetch: a non-stock id with a cached file plays via playUrl(
   // always go through getContentUriAsync's content:// URI instead.
   assert.ok(calls[0].args[0].startsWith("content://"), `expected a content:// URI, got ${calls[0].args[0]}`);
   assert.ok(!calls[0].args[0].startsWith("file://"));
+  cleanup();
+});
+
+test("audio-cache-prefetch: an uppercase-keyed manifest entry (the real builder shape) resolves against the app's lowercase runtime id (D123)", async () => {
+  const source = await patchedModule1440Source();
+  const sha256 = "c".repeat(64);
+  const cachedPath = `${DOCUMENT_DIR}mj-audio/${sha256}.mp3`;
+  globalThis.MJOLNIR_AUDIO_MANIFEST = { C22001: sha256 }; // uppercase key, as the builder actually writes it
+  const { exports, calls } = loadPatchedModule1440(source, { existingFiles: new Set([cachedPath]) });
+
+  exports.playSoundFile("c22001", "mp3"); // lowercase, as the app actually calls it
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(calls.length, 1, "expected the case-mismatched manifest entry to still resolve, not be treated as a cache miss");
+  assert.equal(calls[0].method, "playUrl");
   cleanup();
 });
 

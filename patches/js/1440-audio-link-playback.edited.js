@@ -89,9 +89,17 @@ __d(function (g, r, i, a, m, e, d) {
         log("no MJOLNIR_AUDIO_MANIFEST yet (prefetch sweep may still be running) — skipping:", n);
         return;
       }
-      var sha256 = manifest[n];
+      // D123 addendum: the manifest's keys are the card ids as the builder's
+      // content DB stores them (uppercase, e.g. "C20001"), but playSoundFile
+      // is invoked with the app's own lowercase runtime id ("c20001") — a
+      // bare `manifest[n]` always missed, which read as "working" (silent
+      // skip, D-P3's own intended behavior for a genuine cache miss) even
+      // though every file was actually cached. Confirmed live: the
+      // prefetch sweep logs showed "0 missing" while playback logged "no
+      // manifest entry" for the exact same card, every single time.
+      var sha256 = manifest[n] || manifest[String(n).toUpperCase()];
       if (!sha256) {
-        log("no manifest entry for card — skipping:", n);
+        log("no manifest entry for card (checked as-is and uppercased) — skipping:", n);
         return; // D-P3: no manifest entry — silent skip, never a URL attempt
       }
       var FS;
