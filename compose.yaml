@@ -75,7 +75,7 @@ services:
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_USER: mjolnir
-      POSTGRES_DB: mjolnir
+      POSTGRES_DB: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
     # Deliberately NOT published to the host: only sibling containers reach it.
@@ -87,7 +87,7 @@ services:
       # when the probed database doesn't exist) but spams
       # `FATAL: database "mjolnir" does not exist` into the logs forever,
       # every 10s, drowning out real problems.
-      test: ["CMD-SHELL", "pg_isready -U mjolnir -d mjolnir"]
+      test: ["CMD-SHELL", "pg_isready -U mjolnir -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -115,7 +115,7 @@ services:
     # container-specific, computed values are overridden below.
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://mjolnir:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@mjolnir-postgres:5432/mjolnir
+      DATABASE_URL: postgresql://mjolnir:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@mjolnir-postgres:5432/postgres
       DATA_DIR: /app/data
     volumes:
       - .:/app
@@ -133,7 +133,7 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://mjolnir:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@mjolnir-postgres:5432/mjolnir
+      DATABASE_URL: postgresql://mjolnir:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@mjolnir-postgres:5432/postgres
       DATA_DIR: /app/data
     volumes:
       - .:/app
