@@ -130,41 +130,6 @@ export async function remove(deviceId) {
   }
 }
 
-// D-S5/D-C1: device status piggybacks on the same PATCH payload as progress
-// sync (D31) — a separate table, overwritten in place (this is live
-// status, not a history to preserve), keyed by `deviceId` (a real,
-// locally-generated per-device id — never the uid). `uid` rides along as a
-// non-key column so the console can list every device an account has ever
-// synced from (`listDevicesForAccount`). Two devices signed into the same
-// `uid` get two independent rows; a device that stops syncing keeps its
-// last-written row untouched by a different device's later sync, since
-// each is a separate `deviceId`.
-export async function updateDeviceState(deviceId, uid, status) {
-  const fields = ["activeBuildId", "pendingBuildId", "audioCached", "audioTotal", "lastFetchError"];
-  if (!fields.some((f) => status[f] !== undefined)) return;
-  await query(
-    `INSERT INTO device_state (device_id, uid, active_build_id, pending_build_id, audio_cached, audio_total, last_error, seen_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-     ON CONFLICT (device_id) DO UPDATE SET
-       uid = $2,
-       active_build_id = COALESCE($3, device_state.active_build_id),
-       pending_build_id = COALESCE($4, device_state.pending_build_id),
-       audio_cached = COALESCE($5, device_state.audio_cached),
-       audio_total = COALESCE($6, device_state.audio_total),
-       last_error = COALESCE($7, device_state.last_error),
-       seen_at = now()`,
-    [
-      deviceId,
-      uid,
-      status.activeBuildId ?? null,
-      status.pendingBuildId ?? null,
-      status.audioCached ?? null,
-      status.audioTotal ?? null,
-      status.lastFetchError ?? null,
-    ]
-  );
-}
-
 // ---- userdata-console: read-only queries for the Device sync page ----
 
 // Every distinct account (uid) ever seen — `userdata.device_id` is the uid
@@ -173,29 +138,6 @@ export async function updateDeviceState(deviceId, uid, status) {
 export async function listAccounts() {
   const { rows } = await query("SELECT device_id AS uid FROM userdata ORDER BY device_id");
   return rows.map((r) => r.uid);
-}
-
-// Every device `device_state` has ever recorded for this uid, most-recently
-// -seen first — including a device that has stopped syncing (D-C1's Open
-// Question: "yes, this is useful information, not noise"). A device with
-// OTA/audio activity but zero study sessions still shows up here, since
-// `device_state` is independent of whether `userdata` has any content for
-// this uid at all.
-export async function listDevicesForAccount(uid) {
-  const { rows } = await query(
-    `SELECT device_id, active_build_id, pending_build_id, audio_cached, audio_total, last_error, seen_at
-     FROM device_state WHERE uid = $1 ORDER BY seen_at DESC`,
-    [uid]
-  );
-  return rows.map((r) => ({
-    deviceId: r.device_id,
-    activeBuildId: r.active_build_id,
-    pendingBuildId: r.pending_build_id,
-    audioCached: r.audio_cached,
-    audioTotal: r.audio_total,
-    lastError: r.last_error,
-    seenAt: r.seen_at,
-  }));
 }
 
 // D-C3: the account's `totalCards` joined against `card_content` — same

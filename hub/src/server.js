@@ -19,17 +19,7 @@ import { DECK_ALLOCATION } from "./decks.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
 import { slugify } from "./slug.js";
-import {
-  getOrCreate,
-  merge,
-  replace,
-  remove,
-  updateDeviceState,
-  listAccounts,
-  listDevicesForAccount,
-  perCardProgress,
-  historyDeltas,
-} from "./userdata.js";
+import { getOrCreate, merge, replace, remove, listAccounts, perCardProgress, historyDeltas } from "./userdata.js";
 import { createRequestHandler as createWorkbenchHandler } from "../../src/commands/ui.js";
 // D109: builder's own pages are rendered here directly, in-process — same
 // monorepo, same shared Postgres (D-P3) — instead of the earlier iframe-
@@ -494,35 +484,20 @@ function historyRowHtml(entry) {
   </div>`;
 }
 
-function renderDevicePage({ accounts, selectedUid, devices, selectedDeviceId, doc, perCard, history, activePublication }) {
+function renderDevicePage({ accounts, selectedUid, doc, perCard, history }) {
   if (accounts.length === 0) {
     return renderShell({
       title: "mjolnir / hub — device sync",
       activeHref: "/mjolnir/device",
       body: `<style>${DEVICE_PAGE_STYLE}</style>
-<div class="page-head"><div><h2>Device sync</h2><div class="page-sub">Progress and OTA state reported by the signed-in device, kept as a mirror — this view is read-only.</div></div></div>
+<div class="page-head"><div><h2>Device sync</h2><div class="page-sub">Progress reported by the signed-in account, kept as a mirror — this view is read-only.</div></div></div>
 <div class="panel panel-pad">No accounts have synced yet.</div>`,
     });
   }
 
-  const selectedDevice = devices.find((d) => d.deviceId === selectedDeviceId) || devices[0] || null;
   const accountOptions = accounts
     .map((uid) => `<option value="${escapeHtml(uid)}" ${uid === selectedUid ? "selected" : ""}>${escapeHtml(uid)}${accounts.length === 1 ? " — only account on record" : ""}</option>`)
     .join("");
-  const deviceOptions = devices.length
-    ? devices
-        .map(
-          (d) =>
-            `<option value="${escapeHtml(d.deviceId)}" ${d.deviceId === selectedDeviceId ? "selected" : ""}>${escapeHtml(d.deviceId)} — last seen ${timeAgo(d.seenAt)}</option>`
-        )
-        .join("")
-    : `<option disabled selected>no devices yet</option>`;
-
-  const audioPending = selectedDevice && selectedDevice.audioTotal != null ? selectedDevice.audioTotal - (selectedDevice.audioCached ?? 0) : null;
-  const buildSub = (buildId, pub) => {
-    if (!buildId) return "";
-    return pub ? `base ${escapeHtml(pub.base_version)} · logic ${pub.patch_rev} · data ${pub.data_rev}` : "";
-  };
 
   const snapGrid = doc
     ? `<div class="snap-grid">
@@ -545,9 +520,9 @@ function renderDevicePage({ accounts, selectedUid, devices, selectedDeviceId, do
 <div class="page-head">
   <div>
     <h2>Device sync</h2>
-    <div class="page-sub">Progress and OTA state reported by the signed-in device, kept as a mirror — this view is read-only.</div>
+    <div class="page-sub">Progress reported by the signed-in account, kept as a mirror — this view is read-only.</div>
   </div>
-  <a class="btn btn-ghost" href="/mjolnir/device?uid=${encodeURIComponent(selectedUid)}${selectedDeviceId ? `&device=${encodeURIComponent(selectedDeviceId)}` : ""}">↻ Refresh</a>
+  <a class="btn btn-ghost" href="/mjolnir/device?uid=${encodeURIComponent(selectedUid)}">↻ Refresh</a>
 </div>
 
 <form method="GET" action="/mjolnir/device">
@@ -556,36 +531,8 @@ function renderDevicePage({ accounts, selectedUid, devices, selectedDeviceId, do
       <label>Account (uid)</label>
       <select name="uid" onchange="this.form.submit()">${accountOptions}</select>
     </div>
-    <div class="field">
-      <label>Device ID</label>
-      <select name="device" onchange="this.form.submit()" ${devices.length === 0 ? "disabled" : ""}>${deviceOptions}</select>
-    </div>
-    <div class="hint">Progress (below) follows the account across devices; OTA/audio state above is reported by whichever device is selected here.</div>
   </div>
 </form>
-
-<div class="stat-row">
-  <div class="stat">
-    <div class="label">Last synced</div>
-    <div class="value">${selectedDevice ? timeAgo(selectedDevice.seenAt) : "—"}</div>
-    <div class="sub mono">${selectedDevice ? escapeHtml(new Date(selectedDevice.seenAt).toISOString()) : ""}</div>
-  </div>
-  <div class="stat">
-    <div class="label">Active build</div>
-    <div class="value mono">${selectedDevice && selectedDevice.activeBuildId ? escapeHtml(selectedDevice.activeBuildId) : "—"}</div>
-    <div class="sub">${selectedDevice ? buildSub(selectedDevice.activeBuildId, activePublication) : ""}</div>
-  </div>
-  <div class="stat">
-    <div class="label">Audio cached</div>
-    <div class="value">${selectedDevice && selectedDevice.audioTotal != null ? `${selectedDevice.audioCached ?? 0}<span class="unit">/ ${selectedDevice.audioTotal}</span>` : "—"}</div>
-    <div class="sub">${audioPending ? `<span class="pill pill-warn">${audioPending} pending</span>` : audioPending === 0 ? `<span class="pill pill-ok">complete</span>` : ""}</div>
-  </div>
-  <div class="stat">
-    <div class="label">Last fetch error</div>
-    <div class="value" style="font-size:15px; font-family: var(--sans);">${selectedDevice && selectedDevice.lastError ? `<span class="pill pill-err">error</span>` : `<span class="pill pill-ok">none</span>`}</div>
-    <div class="sub">${selectedDevice && selectedDevice.lastError ? escapeHtml(selectedDevice.lastError) : "checked every sync"}</div>
-  </div>
-</div>
 
 <div class="panel">
   <div class="panel-head">
@@ -1086,29 +1033,21 @@ export function createServer(pool, config) {
         // merely being viewed.
         const requestedUid = url.searchParams.get("uid") || "";
         const selectedUid = accounts.includes(requestedUid) ? requestedUid : accounts[0] || "";
-        const devices = selectedUid ? await listDevicesForAccount(selectedUid) : [];
-        const selectedDeviceId = url.searchParams.get("device") || (devices[0] && devices[0].deviceId) || "";
-        const selectedDevice = devices.find((d) => d.deviceId === selectedDeviceId);
-        const [{ doc } = {}, perCard, history, publications] = accounts.length
+        const [{ doc } = {}, perCard, history] = accounts.length
           ? await Promise.all([
               selectedUid ? getOrCreate(selectedUid) : null,
               selectedUid ? perCardProgress(selectedUid) : [],
               selectedUid ? historyDeltas(selectedUid, { limit: 20 }) : [],
-              listPublications(),
             ])
           : [];
-        const activePublication = selectedDevice && publications ? publications.find((p) => p.build_id === selectedDevice.activeBuildId) : null;
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         return res.end(
           renderDevicePage({
             accounts,
             selectedUid,
-            devices,
-            selectedDeviceId,
             doc: doc || null,
             perCard: perCard || [],
             history: history || [],
-            activePublication,
           })
         );
       }
@@ -1254,21 +1193,19 @@ export function createServer(pool, config) {
           return sendJson(res, 200, created ? { ...doc, _justCreated: true } : doc);
         }
         if (req.method === "PATCH") {
-          // D31/D-S5/D-C1: device-status fields piggyback on the same PATCH
-          // body as progress fields — split them off into device_state
-          // rather than merging them into the synced userdata doc itself.
-          // `deviceId` (also in the body, not the path) is device_state's
-          // real key; its absence simply skips that write, same as today's
-          // behavior when no device-status fields are present at all.
-          const STATUS_FIELDS = ["activeBuildId", "pendingBuildId", "audioCached", "audioTotal", "lastFetchError"];
-          const { deviceId, ...body } = await readJson(req);
+          // `deviceId` (D-C1/D-C2's now-removed device_state mechanism) and
+          // the device-status fields it used to ride alongside
+          // (activeBuildId/pendingBuildId/audioCached/audioTotal/
+          // lastFetchError) are stripped rather than merged into the synced
+          // doc — an older installed build may still send them, and they
+          // must never pollute the userdata document itself.
+          const STATUS_FIELDS = ["deviceId", "activeBuildId", "pendingBuildId", "audioCached", "audioTotal", "lastFetchError"];
+          const body = await readJson(req);
           const patch = {};
-          const status = {};
           for (const [key, value] of Object.entries(body)) {
-            (STATUS_FIELDS.includes(key) ? status : patch)[key] = value;
+            if (!STATUS_FIELDS.includes(key)) patch[key] = value;
           }
           const doc = await merge(uid, patch);
-          if (deviceId) await updateDeviceState(deviceId, uid, status);
           return sendJson(res, 200, doc);
         }
         if (req.method === "POST") {

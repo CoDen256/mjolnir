@@ -141,32 +141,16 @@ test("progress-sync-shim (mod 2080): initUserData — GET only, no write, since 
   assert.match(calls[0].url, /\/test-uid$/);
 });
 
-test("userdata-console/D-C2: update() piggybacks globalThis.MJOLNIR_DEVICE_ID onto the PATCH body when the restore companion has set it", async () => {
-  const source = await patchedModule2080Source();
-  const { exports } = loadPatchedModule2080(source);
-  const calls = installFetchMock([{ completedSessions: 3 }]);
-
-  globalThis.MJOLNIR_DEVICE_ID = "device-xyz";
-  try {
-    await exports.updateSetting("dailyCards", 20);
-  } finally {
-    delete globalThis.MJOLNIR_DEVICE_ID;
-  }
-
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1].method, "PATCH");
-  assert.deepEqual(calls[1].body, { dailyCards: 20, deviceId: "device-xyz" });
-});
-
-test("userdata-console/D-C2: update() sends no deviceId at all when the global is unset (benign startup race)", async () => {
+test("progress-sync-shim (mod 2080): update() sends the plain patch body, with no device-id field attached (device_state was removed — D125)", async () => {
   const source = await patchedModule2080Source();
   const { exports } = loadPatchedModule2080(source);
   const calls = installFetchMock([{ completedSessions: 3 }]);
 
   await exports.updateSetting("dailyCards", 20);
 
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].method, "PATCH");
   assert.deepEqual(calls[1].body, { dailyCards: 20 });
-  assert.ok(!("deviceId" in calls[1].body));
 });
 
 test("progress-sync-shim (mod 2080): updateUserData — GET then PATCH with the full field set", async () => {

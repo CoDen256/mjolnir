@@ -83,8 +83,15 @@ layout, not a sketch to improve on.
 - [x] 4.2 If anything here contradicts or refines `design.md` during
       implementation, record it as an ADR amendment in
       `tun/docs/07-decisions.md`, per this project's established practice.
-- [ ] 4.3 **(Operator, outside this change)** Apply the updated
-      `patches/js/progress-sync-restore-companion.js`, assemble/install,
-      and confirm on-device: the device id persists across app restarts;
-      `hub`'s new page shows this device under the right account with
-      live OTA/audio state.
+- [ ] 4.3 **(Operator, outside this change)** Confirm on-device/on-page
+      (post-D126 simplification): `hub`'s `/mjolnir/device` page shows the
+      correct account's progress snapshot/per-card progress/sync history
+      under the right uid. Note: this task's original device-id/device-
+      selector scope (tasks 1.*/2.*/3.1's `listDevicesForAccount`/3.2's
+      device selector+stat row/3.4's retired-device test) was later removed
+      entirely — `device_state` turned out to be permanently empty in
+      production (nothing on the device ever sent the status fields it
+      needed) and was dropped rather than finished, per the operator's
+      explicit call. See `tun/docs/07-decisions.md` D126. The page today
+      shows only the account picker plus the three uid-scoped panels —
+      this is the (smaller) remaining thing to verify.

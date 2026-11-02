@@ -91,9 +91,13 @@ automate or perform as part of these tasks.
       implementation, record it as an ADR amendment in
       `tun/docs/07-decisions.md`, per this project's established practice.
 - [ ] 4.4 **(Operator, outside this change)** Apply
-      `patches/js/2080-progress-sync-shim.js` and
+      `patches/js/2080-progress-sync-shim.edited.js` and
       `patches/js/progress-sync-restore-companion.js`, assemble/install, and
       sign off on-device: completing one study session pushes the device's
       full existing `totalCards` history to `hub` (check
       `userdata`/`userdata_history` directly); a subsequent sign-in still
-      completes normally.
+      completes normally. (Note: `device_state`/`deviceId`, originally part
+      of this change's own schema per task 1.1/1.4, was later removed
+      entirely — see `tun/docs/07-decisions.md` D126. Neither patch file
+      attaches or reads a device id anymore; this sign-off step is about
+      progress sync only.)
