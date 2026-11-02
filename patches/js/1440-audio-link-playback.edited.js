@@ -117,7 +117,11 @@ __d(function (g, r, i, a, m, e, d) {
       // prepend another `file://` scheme on top of it.
       var path = FS.documentDirectory + "mj-audio/" + sha256 + ".mp3";
       log("resolved", n, "->", sha256, "checking cache at", path);
-      FS.getInfoAsync(path)
+      // Same class of bug as D-P5's downloadAsync fix: native
+      // ExponentFileSystem.getInfoAsync also takes 2 args — (path,
+      // InfoOptions) — confirmed from the decompiled smali; both of
+      // InfoOptions' fields (md5, size) are nullable, so {} is valid.
+      FS.getInfoAsync(path, {})
         .then(function (info) {
           log("getInfoAsync result for", path, ":", info && JSON.stringify(info));
           if (info && info.exists) {

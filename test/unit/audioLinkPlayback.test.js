@@ -59,7 +59,14 @@ function loadPatchedModule1440(patchedSource, { existingFiles = new Set(), conte
 
   const FS = {
     documentDirectory: DOCUMENT_DIR,
-    getInfoAsync: async (uri) => ({ exists: existingFiles.has(uri) }),
+    getInfoAsync: async function (uri, options) {
+      // Native ExponentFileSystem.getInfoAsync is a 2-arg call — (path,
+      // InfoOptions) — asserting arguments.length here would have caught
+      // the real "1 arg, 2 expected" bug (found live on-device) before it
+      // ever shipped, same class as downloadAsync's own arg-count bug.
+      assert.equal(arguments.length, 2, "getInfoAsync must be called with (path, options)");
+      return { exists: existingFiles.has(uri) };
+    },
     // D-P6: default behavior mirrors the real FileProvider-backed method —
     // a deterministic content:// URI derived from the file:// path. Tests
     // that need to exercise the getContentUriAsync-failure fallback pass
