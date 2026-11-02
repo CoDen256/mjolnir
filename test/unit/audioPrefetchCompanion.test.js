@@ -32,10 +32,14 @@ async function runPrefetcher({
     documentDirectory: DOCUMENT_DIR,
     makeDirectoryAsync: async () => {},
     readDirectoryAsync: async () => existingFiles,
-    downloadAsync: async (url, dest) => {
+    downloadAsync: async function (url, dest, options) {
+      // Native `ExponentFileSystem.downloadAsync` is a 3-arg call — asserting
+      // on `arguments.length` here would have caught the real "2 args, 3
+      // expected" bug (found live on-device) before it ever shipped.
+      assert.equal(arguments.length, 3, "downloadAsync must be called with (url, dest, options)");
       inFlight++;
       maxConcurrent = Math.max(maxConcurrent, inFlight);
-      downloadCalls.push({ url, dest });
+      downloadCalls.push({ url, dest, options });
       const sha256 = path.basename(dest).replace(/\.mp3\.tmp$/, "");
       try {
         return await downloadBehavior(sha256);

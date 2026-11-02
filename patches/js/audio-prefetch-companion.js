@@ -94,7 +94,14 @@
   function downloadOne(FS, dir, sha256) {
     var dest = dir + sha256 + '.mp3';
     var tmp = dest + '.tmp';
-    return FS.downloadAsync(AUDIO_BASE_URL + '/blob/' + sha256, tmp)
+    // D-P5 addendum: native `ExponentFileSystem.downloadAsync` requires 3 args
+    // — `(url, path, options)`, an `expo.modules.filesystem.DownloadOptions`
+    // record (confirmed from the decompiled smali; every field has a Kotlin
+    // default, so `{}` is valid and sufficient — no md5/headers/sessionType
+    // requirement). Calling with only 2 args rejects with "Received 2
+    // arguments, but 3 was expected" (found via the logcat diagnostics added
+    // just before this fix).
+    return FS.downloadAsync(AUDIO_BASE_URL + '/blob/' + sha256, tmp, {})
       .then(function (result) {
         // Atomic: the file is only ever addressable under its final name once
         // fully written — a killed app mid-download leaves only the orphan
