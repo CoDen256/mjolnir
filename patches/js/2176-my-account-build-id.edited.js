@@ -129,6 +129,38 @@ __d(function (g, _r, _i, a, m, _e, d) {
       I = (0, n.default)(F, 2),
       N = I[0],
       W = I[1],
+      Q = (0, l.useState)(!1),
+      R = (0, n.default)(Q, 2),
+      pullConfirmOpen = R[0],
+      setPullConfirmOpen = R[1],
+      X = (0, l.useState)(!1),
+      Y = (0, n.default)(X, 2),
+      pulling = Y[0],
+      setPulling = Y[1],
+      // progress-sync-manual-pull: replaces the deleted progress-sync-
+      // restore-companion.js's one-shot auto-restore (D-S4, removed per
+      // D127) with a user-triggered pull, reached via
+      // globalThis.MJOLNIR_PULL_CLOUD_PROGRESS (progress-sync-pull-
+      // companion.js, D-M1 — no shared scope between a companion and a
+      // patched module otherwise, same convention as MJOLNIR_BUILD_ID).
+      pullCloudProgress = function () {
+        if (pulling) return;
+        setPulling(!0);
+        (typeof globalThis !== 'undefined' && globalThis.MJOLNIR_PULL_CLOUD_PROGRESS
+          ? globalThis.MJOLNIR_PULL_CLOUD_PROGRESS()
+          : Promise.reject(Object.assign(new Error('pull unavailable'), { code: 'unavailable' }))
+        ).then(function (result) {
+          setPulling(!1);
+          'restored' === result.status
+            ? s.Alert.alert('Progress restored', 'Your cloud progress has been pulled and applied to this device.')
+            : s.Alert.alert('Nothing to restore', 'No cloud progress was found for this account yet.');
+        }).catch(function (e) {
+          setPulling(!1);
+          'not-signed-in' === e.code
+            ? s.Alert.alert('Not signed in', 'Sign in with your account first, then try again.')
+            : s.Alert.alert('Pull failed', e && e.message ? e.message : 'Something went wrong pulling your progress.');
+        });
+      },
       B = O.filter(function (e) {
         return 1 == e.Park;
       }).length,
@@ -204,6 +236,30 @@ __d(function (g, _r, _i, a, m, _e, d) {
               title: 'No',
               onPress: function () {
                 W(!1);
+              }
+            })]
+          })
+        }), (0, S.jsx)(x.default, {
+          isActive: pullConfirmOpen,
+          onClose: function () {
+            return setPullConfirmOpen(!1);
+          },
+          title: 'Pull cloud progress?',
+          icon: o.default.getTheme().exclamation,
+          description: 'This will overwrite this device\'s local progress with whatever is currently saved for your account in the cloud. This cannot be undone.',
+          buttons: (0, S.jsxs)(S.Fragment, {
+            children: [(0, S.jsx)(y.default, {
+              title: 'Yes',
+              styles: {
+                marginRight: (0, c.normalize)(24)
+              },
+              onPress: function () {
+                setPullConfirmOpen(!1), pullCloudProgress();
+              }
+            }), (0, S.jsx)(y.default, {
+              title: 'No',
+              onPress: function () {
+                setPullConfirmOpen(!1);
               }
             })]
           })
@@ -286,6 +342,14 @@ __d(function (g, _r, _i, a, m, _e, d) {
               children: typeof globalThis !== 'undefined' && globalThis.MJOLNIR_BUILD_ID+' base:'+globalThis.MJOLNIR_BASE_VERSION || 'embedded'
             })]
           })]
+        }), (0, S.jsx)(h.default, {
+          title: pulling ? 'Pulling…' : 'Pull cloud progress',
+          disabled: pulling,
+          styles: _.btn,
+          paddingHorizontal: (0, c.normalize)(16),
+          onPress: function () {
+            return setPullConfirmOpen(!0);
+          }
         }), (0, S.jsx)(h.default, {
           title: 'Delete account',
           color: '#FF5050',
