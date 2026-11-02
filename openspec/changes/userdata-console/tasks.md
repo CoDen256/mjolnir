@@ -83,7 +83,7 @@ layout, not a sketch to improve on.
 - [x] 4.2 If anything here contradicts or refines `design.md` during
       implementation, record it as an ADR amendment in
       `tun/docs/07-decisions.md`, per this project's established practice.
-- [ ] 4.3 **(Operator, outside this change)** Confirm on-device/on-page
+- [x] 4.3 **(Operator, outside this change)** Confirm on-device/on-page
       (post-D126 simplification): `hub`'s `/mjolnir/device` page shows the
       correct account's progress snapshot/per-card progress/sync history
       under the right uid. Note: this task's original device-id/device-
