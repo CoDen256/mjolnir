@@ -2,14 +2,15 @@
 
 ### Requirement: Device-facing userdata endpoints
 The system SHALL expose `GET`, `PATCH`, `POST`, and `DELETE` at
-`/mjolnir/userdata/{deviceId}`, mirroring the document shape a Firestore
-`userData/{uid}` document would have had.
+`/mjolnir/userdata/{uid}`, keyed by the real Firebase Auth uid (D-S1),
+mirroring the document shape a Firestore `userData/{uid}` document would
+have had.
 
-#### Scenario: Reading a device's progress
-- **WHEN** a `GET` request is made for a given device id
-- **THEN** the system returns that device's stored document
+#### Scenario: Reading an account's progress
+- **WHEN** a `GET` request is made for a given uid
+- **THEN** the system returns that account's stored document
 
-#### Scenario: Updating a device's progress
+#### Scenario: Updating an account's progress
 - **WHEN** a `PATCH` request is made with a partial document
 - **THEN** the system merges the provided fields into the existing stored
   document rather than replacing it
@@ -37,14 +38,21 @@ addition to updating the current `userdata` row.
   document and when it happened, and the previous history rows are never
   modified or removed
 
-### Requirement: Device status piggybacks on the same PATCH payload
-The system SHALL accept `activeBuildId`, `pendingBuildId`, `audioCached`,
-`audioTotal`, and `lastFetchError` fields on the same `PATCH` request used
-for progress sync, and SHALL store them in `device_state` rather than
-requiring a separate request.
+### Requirement: Stray device-status fields are stripped, never merged into the synced document
+The system SHALL NOT merge `deviceId`, `activeBuildId`, `pendingBuildId`,
+`audioCached`, `audioTotal`, or `lastFetchError` — if present on a `PATCH`
+body — into the stored `userdata` document; these keys are discarded
+rather than treated as progress content.
 
-#### Scenario: A sync request carrying device status
-- **WHEN** a `PATCH` request includes `activeBuildId`/`audioCached`/etc.
+Note (D126): an earlier version of this requirement described these fields
+being written to a `device_state` table, keyed by a separate per-device id,
+on the same `PATCH`. That mechanism never actually populated in production
+(the device side never sent the fields it needed) and was removed entirely
+— see `tun/docs/07-decisions.md` D126. The fields are now stripped purely
+for backward compatibility with an older installed build that might still
+send them, not written anywhere.
+
+#### Scenario: A PATCH carrying a stray device-status field
+- **WHEN** a `PATCH` request includes `activeBuildId`/`audioCached`/`deviceId`/etc.
   alongside progress fields
-- **THEN** `device_state` for that device is updated from the same request,
-  with no second endpoint call required
+- **THEN** the resulting stored document contains none of those keys

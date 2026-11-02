@@ -1,34 +1,22 @@
 ## ADDED Requirements
 
-### Requirement: A read-only operator page for progress and device state
+### Requirement: A read-only operator page for progress
 The system SHALL provide an operator-facing `hub` page showing an account's
-progress and a device's OTA/audio state, with no write actions — the page
-only ever reads `userdata`, `userdata_history`, `device_state`, and
-`card_content`.
+progress, with no write actions — the page only ever reads `userdata`,
+`userdata_history`, and `card_content`.
+
+Note (D126): this requirement originally also covered a device's OTA/audio
+state, read from a `device_state` table keyed by a separate, locally-
+generated device id. That table and its data never actually populated in
+production (the device side never sent the fields it needed) and was
+removed entirely rather than finished — see `tun/docs/07-decisions.md`
+D126. The page today is account-only: one selector (`uid`), no device
+concept.
 
 #### Scenario: Viewing the page
 - **WHEN** the operator opens the page
-- **THEN** they see the currently-selected account's progress and the
-  currently-selected device's OTA/audio state, with no controls that modify
-  either
-
-### Requirement: Account and device are selected independently
-The system SHALL provide two independent selectors — one for the account
-(`uid`), one for the device (`deviceId`) — rather than one combined picker,
-and SHALL continue to list a device that has stopped syncing alongside
-currently-active ones.
-
-#### Scenario: Selecting a different device under the same account
-- **WHEN** the operator changes the Device ID selector while leaving the
-  Account selector unchanged
-- **THEN** the progress panels (sourced from `userdata`) do not change, and
-  only the device/OTA panels (sourced from `device_state`) update
-
-#### Scenario: A retired device remains selectable
-- **WHEN** the operator opens the Device ID selector
-- **THEN** every device ever seen for the selected account is listed,
-  including ones that have stopped syncing, each showing its own last-seen
-  time
+- **THEN** they see the currently-selected account's progress, with no
+  controls that modify it
 
 ### Requirement: The per-card progress table shows each card's N content, never E
 The system SHALL display, for each entry in the account's per-card progress
