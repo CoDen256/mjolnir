@@ -236,10 +236,20 @@ The `caddy_data` volume holds the TLS certificates. Losing it is survivable
 3. `pg_dump` of the `postgres` container's `postgres` database — this is
    hub's and builder's entire ledger (decks, card_slots, card_content,
    publications, logic_bundles, build_jobs, pending_occurrences,
-   occurrence_shipments, builder_config, job_logs). Losing it without a
-   backup means hub's bookkeeping no longer agrees with what's actually
-   on-device, with no way to reconcile — and `builder` has no bundle to
-   build onto until a `logic_bundles` row is re-submitted (see above).
+   occurrence_shipments, builder_config, job_logs, **userdata,
+   userdata_history, device_state** — progress-sync-shim's tables, added
+   after this list was first written). Losing it without a backup means
+   hub's bookkeeping no longer agrees with what's actually on-device, with
+   no way to reconcile — and `builder` has no bundle to build onto until a
+   `logic_bundles` row is re-submitted (see above).
+
+**This is no longer manual.** `tun/bin/backup.sh` (the `git-backup` change)
+automates all three — plus the equivalent for `stabbur`'s own Postgres and
+blob store, which had no backup story of any kind before it — via a host
+`cron` entry pushing to a plain private git repo. See that script's own
+header and `tun/openspec/changes/git-backup/design.md` for the full
+reasoning (notably: no encryption, by informed choice — the data is
+personal learning content, not credentials).
 
 ## Operational notes
 
