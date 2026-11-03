@@ -235,21 +235,26 @@ The `caddy_data` volume holds the TLS certificates. Losing it is survivable
 
 3. `pg_dump` of the `postgres` container's `postgres` database — this is
    hub's and builder's entire ledger (decks, card_slots, card_content,
-   publications, logic_bundles, build_jobs, pending_occurrences,
-   occurrence_shipments, builder_config, job_logs, **userdata,
-   userdata_history, device_state** — progress-sync-shim's tables, added
-   after this list was first written). Losing it without a backup means
-   hub's bookkeeping no longer agrees with what's actually on-device, with
-   no way to reconcile — and `builder` has no bundle to build onto until a
-   `logic_bundles` row is re-submitted (see above).
+   publications, logic_bundles, pending_occurrences, occurrence_shipments,
+   builder_config, **userdata, userdata_history** — progress-sync-shim's
+   tables, added after this list was first written). Losing it without a
+   backup means hub's bookkeeping no longer agrees with what's actually
+   on-device, with no way to reconcile — and `builder` has no bundle to
+   build onto until a `logic_bundles` row is re-submitted (see above).
+   `job_logs`/`build_jobs` are deliberately excluded from the backup itself
+   (pure run-history bookkeeping, no FK tie to anything that matters — see
+   D-B4b); `device_state` no longer exists at all (dropped entirely, D126).
 
-**This is no longer manual.** `tun/bin/backup.sh` (the `git-backup` change)
-automates all three — plus the equivalent for `stabbur`'s own Postgres and
-blob store, which had no backup story of any kind before it — via a host
-`cron` entry pushing to a plain private git repo. See that script's own
-header and `tun/openspec/changes/git-backup/design.md` for the full
+**This is no longer manual.** `tun`'s `backup` compose service (the
+`compose-backup-service` change, superseding `git-backup`'s original host
+script + `cron` entry) automates all three — plus the equivalent for
+`stabbur`'s own Postgres and blob store, which had no backup story of any
+kind before it — as one more service in `tun/compose.yaml`: `docker compose
+up` and nothing else, no host-level step. See `tun/backup/entrypoint.sh`
+and `tun/openspec/changes/compose-backup-service/design.md` for the full
 reasoning (notably: no encryption, by informed choice — the data is
-personal learning content, not credentials).
+personal learning content, not credentials; no Docker socket mount —
+connects over the network with a real password instead).
 
 ## Operational notes
 
