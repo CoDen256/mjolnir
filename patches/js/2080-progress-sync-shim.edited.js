@@ -57,6 +57,15 @@ __d(function (g, _r, _i, a, m, _e, d) {
         var SYNC_TOKEN = '__MJOLNIR_SYNC_TOKEN__';
 
         function req(id, method, body) {
+          // One compact, single-line breadcrumb per sync call — the
+          // operator's own debugging aid, not gated behind __DEV__: a
+          // plain `console.log(body)` here would pretty-print the whole
+          // deckStats-shaped payload across many indented lines in
+          // logcat; JSON.stringify keeps it to one line per call.
+          //     adb logcat -s ReactNativeJS:V | grep mjolnir-progress-sync
+          try {
+            console.log('[mjolnir-progress-sync]', method, id, body !== undefined ? JSON.stringify(body) : '');
+          } catch (e) {}
           var opts = {
             method: method,
             headers: {
