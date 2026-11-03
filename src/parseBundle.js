@@ -74,8 +74,25 @@ function charToByteOffsets(source, charPositions) {
   return byteOffsetFor;
 }
 
-export function parseBundle(bundlePath) {
-  const source = fs.readFileSync(bundlePath, "utf8");
+// Test-only instrumentation (assemble-performance-fix): counts real calls
+// to the expensive step (Babel's own `parse`) this module performs, so a
+// test can assert "parsed once per assemble, not once per patch applied"
+// directly, rather than inferring it from wall-clock timing (hardware-
+// dependent, flaky in CI). Not used by any non-test code path.
+let parseCallCountForTests = 0;
+export function resetParseCallCountForTests() {
+  parseCallCountForTests = 0;
+}
+export function getParseCallCountForTests() {
+  return parseCallCountForTests;
+}
+
+// Pure: parses already-in-memory bundle source text, no file I/O. Factored
+// out of `parseBundle` so an in-memory-first caller (`assembleBundle`,
+// assemble-performance-fix) can parse a buffer it already has without a
+// round-trip through disk.
+export function parseBundleSource(source) {
+  parseCallCountForTests++;
   const ast = parse(source, {
     sourceType: "script",
     allowReturnOutsideFunction: true,
@@ -165,7 +182,6 @@ export function parseBundle(bundlePath) {
   }
 
   return {
-    bundlePath,
     sourceLength: source.length,
     entryId,
     moduleCount: modules.size,
@@ -175,6 +191,35 @@ export function parseBundle(bundlePath) {
     ),
     modules,
   };
+}
+
+export function parseBundle(bundlePath) {
+  const source = fs.readFileSync(bundlePath, "utf8");
+  return { bundlePath, ...parseBundleSource(source) };
+}
+
+// Shared by `buildAndCacheIndex` (file-path, persisted-cache case) and
+// `buildIndexFromBuffer` (in-memory, throwaway case, assemble-performance-fix)
+// — the shaping into a plain-object `modules` map, keyed by id, is identical
+// either way; only whether the result gets written to a cache file differs.
+function shapeModules(parsedModules) {
+  return Object.fromEntries(
+    [...parsedModules.values()].map((m) => [
+      m.id,
+      {
+        start: m.start,
+        end: m.end,
+        factoryStart: m.factoryStart,
+        factoryEnd: m.factoryEnd,
+        size: m.size,
+        deps: m.deps,
+        dependents: m.dependents,
+        verboseName: m.verboseName,
+        looksMinified: m.looksMinified,
+        newlineCount: m.newlineCount,
+      },
+    ])
+  );
 }
 
 export function buildAndCacheIndex(bundlePath) {
@@ -188,27 +233,61 @@ export function buildAndCacheIndex(bundlePath) {
     entryId: result.entryId,
     moduleCount: result.moduleCount,
     preludeByteCount: result.preludeByteCount,
-    modules: Object.fromEntries(
-      [...result.modules.values()].map((m) => [
-        m.id,
-        {
-          start: m.start,
-          end: m.end,
-          factoryStart: m.factoryStart,
-          factoryEnd: m.factoryEnd,
-          size: m.size,
-          deps: m.deps,
-          dependents: m.dependents,
-          verboseName: m.verboseName,
-          looksMinified: m.looksMinified,
-          newlineCount: m.newlineCount,
-        },
-      ])
-    ),
+    modules: shapeModules(result.modules),
   };
 
   fs.writeFileSync(cachePathFor(bundlePath), JSON.stringify(cache));
   return cache;
+}
+
+// In-memory counterpart to `buildAndCacheIndex` — same module index shape,
+// built from a `Buffer` already held in memory, with no file read and no
+// cache file written. This is what lets `assembleBundle` parse the bundle
+// exactly once and keep applying patches against its own in-memory state
+// (assemble-performance-fix/D-P1), instead of writing to disk and calling
+// `loadIndex` again each iteration (which re-parses the whole bundle every
+// time, since the write invalidates `loadIndex`'s own mtime-keyed cache).
+export function buildIndexFromBuffer(buffer) {
+  const result = parseBundleSource(buffer.toString("utf8"));
+  return {
+    entryId: result.entryId,
+    moduleCount: result.moduleCount,
+    preludeByteCount: result.preludeByteCount,
+    modules: shapeModules(result.modules),
+  };
+}
+
+// After replacing one module's bytes with a different-length buffer, every
+// module that started at or after the replaced module's ORIGINAL end must
+// shift by the resulting byte delta — the replaced module's own `end`
+// (and `size`) also changes, but its `start` doesn't. `factoryStart`/
+// `factoryEnd` are intentionally left stale on the replaced module itself
+// (nothing in the assemble loop re-reads them after a replace — every
+// consumer re-parses a module's own source fresh via `extractFactoryBody`
+// rather than trusting cached factory offsets); every OTHER module's
+// `factoryStart`/`factoryEnd` still shift correctly, since they're just as
+// valid as `start`/`end` for byte-offset purposes. Returns a NEW modules
+// map — does not mutate the input, so a caller holding the old `cache`
+// elsewhere (there shouldn't be one mid-assemble, but this keeps the
+// function itself honestly pure) is unaffected.
+export function shiftModulesAfterReplace(modules, replacedModuleId, replacedOriginalEnd, delta) {
+  const result = {};
+  for (const [id, mod] of Object.entries(modules)) {
+    if (String(id) === String(replacedModuleId)) {
+      result[id] = { ...mod, end: mod.end + delta, size: mod.size + delta };
+    } else if (mod.start >= replacedOriginalEnd) {
+      result[id] = {
+        ...mod,
+        start: mod.start + delta,
+        end: mod.end + delta,
+        factoryStart: mod.factoryStart + delta,
+        factoryEnd: mod.factoryEnd + delta,
+      };
+    } else {
+      result[id] = mod;
+    }
+  }
+  return result;
 }
 
 export function loadIndex(bundlePath, { rebuildIfStale = true } = {}) {
@@ -240,4 +319,10 @@ export function readModuleSource(bundlePath, moduleEntry) {
   fs.readSync(fd, buf, 0, length, moduleEntry.start);
   fs.closeSync(fd);
   return buf.toString("utf8");
+}
+
+// In-memory counterpart — a single-module slice out of a buffer already
+// held in memory, no file descriptor needed.
+export function readModuleSourceFromBuffer(buffer, moduleEntry) {
+  return buffer.subarray(moduleEntry.start, moduleEntry.end).toString("utf8");
 }

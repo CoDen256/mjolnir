@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { loadIndex } from "../parseBundle.js";
-import { loadPatch, applyPatch, computePatchedModuleSource } from "../patches.js";
+import { buildIndexFromBuffer, shiftModulesAfterReplace } from "../parseBundle.js";
+import { loadPatch, applyPatchInBuffer, computePatchedModuleSourceInBuffer } from "../patches.js";
 import { loadPatchbackPair } from "../patchbackPairs.js";
-import { reassembleBundle } from "../reassemble.js";
+import { reassembleBundleFromBuffer } from "../reassemble.js";
 import { readBaseVersion } from "../apktoolYml.js";
 import { appendCompanion, substituteBakedPlaceholders } from "./companion.js";
 
@@ -82,42 +82,61 @@ export async function assembleBundle({
 
   const outDir = path.dirname(outputPath);
   if (outDir && outDir !== ".") fs.mkdirSync(outDir, { recursive: true });
-  fs.copyFileSync(baseBundlePath, outputPath);
+
+  const startedAt = Date.now();
+
+  // D-P1 (assemble-performance-fix): parse the bundle exactly once, here,
+  // then apply every patch/patch-back pair against this in-memory buffer
+  // and index — never writing to `outputPath` until the very end. The
+  // previous implementation wrote to `outputPath` after every single step
+  // and called `loadIndex(outputPath)` again on the next one; since that
+  // write changes the file's size/mtime, `loadIndex`'s own cache was
+  // invalidated every iteration, forcing a full re-parse of the whole
+  // bundle once per patch applied — a cost that scaled with patch count
+  // instead of being paid once per assemble.
+  let buffer = fs.readFileSync(baseBundlePath);
+  let modules = buildIndexFromBuffer(buffer).modules;
 
   try {
     for (const patch of patches) {
       // A patch's own locator may still fail to resolve unambiguously
       // against this particular base (D-L7's "fails to locate" case) —
-      // `applyPatch`/`locatePatchTarget` already throw a clear error for
-      // that; propagating it here (instead of swallowing) is what makes the
-      // catch below discard the partial output rather than leaving it.
-      const cache = loadIndex(outputPath);
-      await applyPatch({ bundlePath: outputPath, cache, patch });
+      // `applyPatchInBuffer`/`locatePatchTargetInBuffer` already throw a
+      // clear error for that; propagating it here (instead of swallowing)
+      // is what makes the catch below discard the partial output rather
+      // than leaving one.
+      const result = await applyPatchInBuffer({ buffer, cache: { modules }, patch });
+      buffer = result.buffer;
+      modules = result.modules;
     }
 
     for (const pair of patchbackPairs) {
-      const cache = loadIndex(outputPath);
-      if (!cache.modules[pair.moduleId]) {
+      const mod = modules[pair.moduleId];
+      if (!mod) {
         throw new Error(`patch-back pair "${pair.name}": module ${pair.moduleId} not found in this bundle`);
       }
       const patch = {
         baseline: fs.readFileSync(pair.baselinePath, "utf8"),
         modified: fs.readFileSync(pair.editedPath, "utf8"),
       };
-      const newSource = await computePatchedModuleSource({
-        bundlePath: outputPath,
-        cache,
+      const newSource = await computePatchedModuleSourceInBuffer({
+        buffer,
+        cache: { modules },
         targetModuleId: pair.moduleId,
         patch,
       });
-      const outBuffer = reassembleBundle(outputPath, cache.modules, [{ moduleId: pair.moduleId, newSource }]);
-      fs.writeFileSync(outputPath, outBuffer);
+      const outBuffer = reassembleBundleFromBuffer(buffer, modules, [{ moduleId: pair.moduleId, newSource }]);
+      const delta = Buffer.byteLength(newSource, "utf8") - (mod.end - mod.start);
+      modules = shiftModulesAfterReplace(modules, pair.moduleId, mod.end, delta);
+      buffer = outBuffer;
     }
 
     for (const { name, source } of companionSources) {
-      const bundle = fs.readFileSync(outputPath);
-      const out = appendCompanion(bundle, source, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken, audioBaseUrl, name });
-      fs.writeFileSync(outputPath, out);
+      // Companions are appended after the last module's own trailer (the
+      // entry calls / sourcemap comments) — strictly outside every
+      // module's [start, end) range, so `modules`' offsets stay valid with
+      // no shift needed here.
+      buffer = appendCompanion(buffer, source, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken, audioBaseUrl, name });
     }
 
     // progress-sync-shim's `__MJOLNIR_SYNC_BASE_URL__`/`__MJOLNIR_SYNC_TOKEN__`
@@ -128,16 +147,26 @@ export async function assembleBundle({
     // substitution step of its own, so this final pass over the whole
     // assembled bundle is where those patches' placeholders actually get
     // baked. A no-op when none of the three placeholders appear anywhere.
-    fs.writeFileSync(
-      outputPath,
-      substituteBakedPlaceholders(fs.readFileSync(outputPath), { syncBaseUrl, syncToken, audioBaseUrl })
-    );
+    buffer = substituteBakedPlaceholders(buffer, { syncBaseUrl, syncToken, audioBaseUrl });
+
+    // The only disk write in the whole assemble — everything above ran
+    // against `buffer` in memory.
+    fs.writeFileSync(outputPath, buffer);
   } catch (err) {
-    // No partial output survives a failed assembly (task 5.3) — the base
-    // itself was never touched (it was only ever read, to seed the copy).
+    // No partial output survives a failed assembly (task 5.3) — nothing
+    // was ever written to `outputPath` until the line above, so there's
+    // nothing to clean up here now; kept as a no-op guard in case a
+    // future edit reintroduces an intermediate write.
     fs.rmSync(outputPath, { force: true });
     throw err;
   }
+
+  // D-P2: operator-visible, not gated behind a debug flag — the original
+  // performance diagnosis (repeated full-bundle re-parse) was made by
+  // reading this code plus a local benchmark that couldn't reproduce the
+  // reported ~90s production figure; this is what lets that be checked
+  // directly against real hardware instead of trusted on faith.
+  console.log(`[mjolnir-assemble] completed in ${Date.now() - startedAt}ms`);
 
   return {
     outputPath,

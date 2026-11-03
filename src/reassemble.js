@@ -1,12 +1,11 @@
 import fs from "node:fs";
 
 // Byte-copies every module not in `patches` from its original offsets in
-// `bundlePath`, splicing in the already-re-minified patched modules in
-// their place. The prelude (before the first module) and trailer (the
-// __r(...) entry call and anything after the last module) are untouched
-// since they fall outside every manifest entry's [start, end) range.
-export function reassembleBundle(bundlePath, manifest, patches) {
-  const original = fs.readFileSync(bundlePath);
+// `original`, splicing in the already-re-minified patched modules in their
+// place. The prelude (before the first module) and trailer (the __r(...)
+// entry call and anything after the last module) are untouched since they
+// fall outside every manifest entry's [start, end) range.
+export function reassembleBundleFromBuffer(original, manifest, patches) {
   const patchByModuleId = new Map(patches.map((p) => [String(p.moduleId), p.newSource]));
 
   const entries = Object.entries(manifest)
@@ -32,4 +31,12 @@ export function reassembleBundle(bundlePath, manifest, patches) {
   }
 
   return Buffer.concat(chunks);
+}
+
+// File-path convenience wrapper — reads the file once, delegates to the
+// in-memory version above. assemble-performance-fix: `assembleBundle`
+// calls `reassembleBundleFromBuffer` directly, on a buffer it already
+// holds, instead of going through this file-reading path once per patch.
+export function reassembleBundle(bundlePath, manifest, patches) {
+  return reassembleBundleFromBuffer(fs.readFileSync(bundlePath), manifest, patches);
 }
