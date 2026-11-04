@@ -56,15 +56,33 @@ __d(function (g, _r, _i, a, m, _e, d) {
         var SYNC_BASE_URL = '__MJOLNIR_SYNC_BASE_URL__';
         var SYNC_TOKEN = '__MJOLNIR_SYNC_TOKEN__';
 
-        function req(id, method, body) {
-          // One compact, single-line breadcrumb per sync call — the
-          // operator's own debugging aid, not gated behind __DEV__: a
-          // plain `console.log(body)` here would pretty-print the whole
-          // deckStats-shaped payload across many indented lines in
-          // logcat; JSON.stringify keeps it to one line per call.
-          //     adb logcat -s ReactNativeJS:V | grep mjolnir-progress-sync
+        // One compact breadcrumb per sync call — the operator's own
+        // debugging aid, not gated behind __DEV__. A single-line
+        // `JSON.stringify(body)` is technically one line, but `totalCards`
+        // routinely holds hundreds of card objects — that one line is long
+        // enough to wrap across dozens of terminal rows in `adb logcat`,
+        // just as unreadable as pretty-printing in practice. Arrays are
+        // summarized to their length; every other field logs as-is —
+        // readable at a glance, no spam.
+        //     adb logcat -s ReactNativeJS:V | grep mjolnir-progress-sync
+        function summarizeForLog(body) {
+          if (body === undefined) return '';
           try {
-            console.log('[mjolnir-progress-sync]', method, id, body !== undefined ? JSON.stringify(body) : '');
+            var summary = {};
+            for (var key in body) {
+              if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+              var value = body[key];
+              summary[key] = Array.isArray(value) ? '[' + value.length + ' items]' : value;
+            }
+            return JSON.stringify(summary);
+          } catch (e) {
+            return '(unserializable)';
+          }
+        }
+
+        function req(id, method, body) {
+          try {
+            console.log('[mjolnir-progress-sync]', method, id, summarizeForLog(body));
           } catch (e) {}
           var opts = {
             method: method,

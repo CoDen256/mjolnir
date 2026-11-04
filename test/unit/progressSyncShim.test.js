@@ -153,6 +153,31 @@ test("progress-sync-shim (mod 2080): update() sends the plain patch body, with n
   assert.deepEqual(calls[1].body, { dailyCards: 20 });
 });
 
+test("progress-sync-shim (mod 2080): req()'s log breadcrumb summarizes array fields to their length, not a full dump (D63)", async () => {
+  const source = await patchedModule2080Source();
+  const { exports } = loadPatchedModule2080(source);
+  installFetchMock([{ completedSessions: 3 }]);
+
+  const totalCards = Array.from({ length: 50 }, (_, i) => ({ ID: `C200${i}`, N: "n", E: "e", X: "x", Park: 0 }));
+  const logs = [];
+  const realLog = console.log;
+  console.log = (...args) => logs.push(args);
+  try {
+    await exports.updateUserData(totalCards, ["C20"], 0, [], 15, [], 4, [], [], {}, null, false);
+  } finally {
+    console.log = realLog;
+  }
+
+  const patchLog = logs.find((args) => args[1] === "PATCH");
+  assert.ok(patchLog, "expected a logged breadcrumb for the PATCH call");
+  const summary = JSON.parse(patchLog[3]);
+  assert.equal(summary.totalCards, "[50 items]", "a 50-card array must summarize to its length, not 50 full objects");
+  assert.equal(summary.completedSessions, 4, "non-array fields still log as-is");
+  // The whole point: a 50-card payload's breadcrumb must stay short, not
+  // balloon into an unreadable multi-row logcat line.
+  assert.ok(patchLog[3].length < 500, `summarized log line should be compact, got ${patchLog[3].length} chars`);
+});
+
 test("progress-sync-shim (mod 2080): updateUserData — GET then PATCH with the full field set", async () => {
   const source = await patchedModule2080Source();
   const { exports } = loadPatchedModule2080(source);

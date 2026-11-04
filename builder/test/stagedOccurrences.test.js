@@ -7,7 +7,7 @@ import { stageOccurrence, stagedCount, flushShippable, peekStaged } from "../src
 const DATABASE_URL = process.env.DATABASE_URL;
 const describe = DATABASE_URL ? test : test.skip;
 
-describe("stagedOccurrences: D-W2 flushes floor(count/5)*5, FIFO by insertion order", async (t) => {
+describe("stagedOccurrences: D-W2 flushes to the next multiple of 5 of the deck's REAL total, FIFO by insertion order", async (t) => {
   const pool = getPool();
   await migrate();
   await pool.query("TRUNCATE card_slots, decks, staged_occurrences CASCADE");
@@ -32,7 +32,7 @@ describe("stagedOccurrences: D-W2 flushes floor(count/5)*5, FIFO by insertion or
     }
     assert.equal(await stagedCount(pool, "C20"), 11);
 
-    const shipped = await flushShippable(pool, "C20");
+    const shipped = await flushShippable(pool, "C20", 0);
     assert.equal(shipped.length, 10);
     assert.deepEqual(
       shipped.map((s) => s.cardId),
@@ -52,7 +52,7 @@ describe("stagedOccurrences: D-W2 flushes floor(count/5)*5, FIFO by insertion or
       await stageOccurrence(pool, { deckCode: "C20", cardId: `C20${String(i).padStart(3, "0")}`, letter: "A" });
     }
 
-    const shipped = await flushShippable(pool, "C20");
+    const shipped = await flushShippable(pool, "C20", 0);
     assert.equal(shipped.length, 5);
     assert.equal(await stagedCount(pool, "C20"), 4);
   });
@@ -63,7 +63,7 @@ describe("stagedOccurrences: D-W2 flushes floor(count/5)*5, FIFO by insertion or
       await stageOccurrence(pool, { deckCode: "C20", cardId: `C20${String(i).padStart(3, "0")}`, letter: "A" });
     }
 
-    const shipped = await flushShippable(pool, "C20");
+    const shipped = await flushShippable(pool, "C20", 0);
     assert.deepEqual(shipped, []);
     assert.equal(await stagedCount(pool, "C20"), 4, "nothing popped — a no-op, not a partial flush");
   });
@@ -73,16 +73,16 @@ describe("stagedOccurrences: D-W2 flushes floor(count/5)*5, FIFO by insertion or
     // "Run 1": stage 2.
     await stageOccurrence(pool, { deckCode: "C20", cardId: "C20001", letter: "A" });
     await stageOccurrence(pool, { deckCode: "C20", cardId: "C20002", letter: "A" });
-    assert.deepEqual(await flushShippable(pool, "C20"), [], "2 staged, nothing flushes");
+    assert.deepEqual(await flushShippable(pool, "C20", 0), [], "2 staged, nothing flushes");
 
     // "Run 2": stage 2 more — 4 total, still short.
     await stageOccurrence(pool, { deckCode: "C20", cardId: "C20003", letter: "A" });
     await stageOccurrence(pool, { deckCode: "C20", cardId: "C20004", letter: "A" });
-    assert.deepEqual(await flushShippable(pool, "C20"), [], "4 staged, still short of 5");
+    assert.deepEqual(await flushShippable(pool, "C20", 0), [], "4 staged, still short of 5");
 
     // "Run 3": stage 1 more, crossing 5 — the original 5, oldest-first, ship.
     await stageOccurrence(pool, { deckCode: "C20", cardId: "C20005", letter: "A" });
-    const shipped = await flushShippable(pool, "C20");
+    const shipped = await flushShippable(pool, "C20", 0);
     assert.deepEqual(
       shipped.map((s) => s.cardId),
       ["C20001", "C20002", "C20003", "C20004", "C20005"],
@@ -107,8 +107,34 @@ describe("stagedOccurrences: D-W2 flushes floor(count/5)*5, FIFO by insertion or
     await stageOccurrence(pool, { deckCode: "C21", cardId: "C21001", letter: "A" });
     await stageOccurrence(pool, { deckCode: "C21", cardId: "C21002", letter: "A" });
 
-    assert.deepEqual(await flushShippable(pool, "C21"), [], "C21 has only 2, short of 5");
+    assert.deepEqual(await flushShippable(pool, "C21", 0), [], "C21 has only 2, short of 5");
     assert.equal(await stagedCount(pool, "C20"), 3, "C20's rows must be untouched by C21's flush attempt");
+  });
+
+  await t.test("a deck already off the 5-grid (pre-existing irregular total) realigns onto it, not just flushes multiples on top", async () => {
+    // Simulates a real deck that accumulated occurrences the OLD way before
+    // this mechanism existed — 83 already shipped, an irregular total.
+    // Staging 5 more must NOT just ship all 5 (83+5=88, still irregular) —
+    // it must ship only enough to reach the next multiple of 5 (85),
+    // holding the rest until more arrives.
+    await pool.query("TRUNCATE staged_occurrences");
+    for (let i = 1; i <= 5; i++) {
+      await stageOccurrence(pool, { deckCode: "C20", cardId: `C20${String(i).padStart(3, "0")}`, letter: "A" });
+    }
+    const shipped = await flushShippable(pool, "C20", 83);
+    assert.equal(shipped.length, 2, "83 + 2 = 85, the next multiple of 5 — only 2 of the 5 staged ship");
+    assert.deepEqual(shipped.map((s) => s.cardId), ["C20001", "C20002"], "the 2 oldest ship");
+    assert.equal(await stagedCount(pool, "C20"), 3, "the other 3 stay staged until more arrives");
+  });
+
+  await t.test("a deck already ON the 5-grid behaves exactly like the floor(staged/5)*5 case", async () => {
+    await pool.query("TRUNCATE staged_occurrences");
+    for (let i = 1; i <= 11; i++) {
+      await stageOccurrence(pool, { deckCode: "C20", cardId: `C20${String(i).padStart(3, "0")}`, letter: "A" });
+    }
+    const shipped = await flushShippable(pool, "C20", 50);
+    assert.equal(shipped.length, 10, "50 is already a multiple of 5 — behaves the same as alreadyShipped=0");
+    assert.equal(await stagedCount(pool, "C20"), 1);
   });
 
   await t.test("peekStaged is read-only — never deletes", async () => {

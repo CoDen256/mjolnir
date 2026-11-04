@@ -838,6 +838,12 @@ async function loadAssembleView() {
       `activate it from /mjolnir/ota when ready.`;
     el("assemble-patch-rev-hint").textContent =
       `optional — auto-incremented to ${defaults.nextPatchRev} (the next global patch_rev) if left blank`;
+    // The hint text alone isn't enough — write the actual suggested value
+    // into the field so the operator sees a real, already-filled number
+    // they can accept or override, not just a number mentioned in grey text
+    // next to an empty box.
+    if (!el("assemble-patch-rev").value) el("assemble-patch-rev").value = defaults.nextPatchRev;
+    if (!el("assemble-label").value) el("assemble-label").value = `${defaults.baseVersion}-patch${defaults.nextPatchRev}`;
     el("assemble-placeholders-hint").textContent =
       `BUILD_ID is ignored here (hub assigns its own at submit time). SYNC_BASE_URL/SYNC_TOKEN/AUDIO_BASE_URL: ` +
       `${defaults.syncBaseUrlConfigured ? "configured on this server — leave blank to use it" : "not configured (TUN_PUBLIC_BASE unset)"}; ` +
@@ -854,12 +860,20 @@ async function loadAssembleView() {
   }
   if (!assemblePlaceholdersInitialized) {
     assemblePlaceholdersInitialized = true;
-    // D-L3: pre-fill DATA_VERSION from hub's own most recent data_rev —
+    // D-L3: pre-fill DATA_VERSION/LABEL from hub's own suggested values —
     // only meaningful in embedded mode, since standalone has no publications
-    // table to read from.
-    if (assembleEmbedded && defaults.dataRev !== undefined && defaults.dataRev !== null) {
-      const dataVersionRow = assemblePlaceholders.find((r) => r.key === "DATA_VERSION");
-      if (dataVersionRow && !dataVersionRow.value) dataVersionRow.value = String(defaults.dataRev);
+    // table (or dedicated Label field) to read from. LABEL's row mirrors the
+    // same suggested default just written into the dedicated Label field
+    // above, so the generic placeholder list visibly shows what will
+    // actually be baked, not a blank row that silently resolves to
+    // something else at submit time.
+    if (assembleEmbedded) {
+      if (defaults.dataRev !== undefined && defaults.dataRev !== null) {
+        const dataVersionRow = assemblePlaceholders.find((r) => r.key === "DATA_VERSION");
+        if (dataVersionRow && !dataVersionRow.value) dataVersionRow.value = String(defaults.dataRev);
+      }
+      const labelRow = assemblePlaceholders.find((r) => r.key === "LABEL");
+      if (labelRow && !labelRow.value) labelRow.value = el("assemble-label").value;
     }
     renderAssemblePlaceholders();
   }

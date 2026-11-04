@@ -94,21 +94,29 @@ async function drainThenQueue(pool, deckCode, newACount, toQueue) {
 // action, when the deck has staged occurrences but not enough to reach the
 // next multiple of 5 yet.
 async function flushDeck(pool, model, deckCode, deckTitleCache, shipments, log, buildJobId) {
-  const shippable = await flushShippable(pool, deckCode);
+  if (!deckTitleCache.has(deckCode)) deckTitleCache.set(deckCode, await deckTitle(pool, deckCode));
+  const deck = ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
+  // The deck's REAL current total matters, not just what's sitting staged —
+  // see stagedOccurrences.js's flushShippable for why (a deck that was
+  // already off the 5-grid before this mechanism existed needs the target
+  // computed against its true total to ever land back on the grid).
+  const alreadyShipped = deck.Cards.length;
+  const shippable = await flushShippable(pool, deckCode, alreadyShipped);
   if (shippable.length === 0) {
     const staged = await stagedCount(pool, deckCode);
     if (staged > 0) {
-      await log(buildJobId, `ship: ${deckCode} — ${staged} occurrence(s) staged, short of the next multiple of 5, held`);
+      await log(
+        buildJobId,
+        `ship: ${deckCode} — ${staged} occurrence(s) staged (${alreadyShipped} already shipped), short of the next multiple of 5, held`
+      );
     }
     return;
   }
-  if (!deckTitleCache.has(deckCode)) deckTitleCache.set(deckCode, await deckTitle(pool, deckCode));
-  const deck = ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
   for (const { cardId, letter } of shippable) {
     addOccurrence(deck, cardId, letter);
     shipments.push({ cardId, letter });
   }
-  await log(buildJobId, `ship: ${deckCode} — ${shippable.length} occurrence(s) flushed`);
+  await log(buildJobId, `ship: ${deckCode} — ${shippable.length} occurrence(s) flushed (${alreadyShipped} -> ${deck.Cards.length})`);
 }
 
 // Task 4.14/3.2 (modified builder-pipeline spec): dry run of steps 1-4 only —
@@ -187,10 +195,20 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
     // D-W2 simulated: existing staged rows ship first (FIFO), then whatever
     // this run would newly stage, in the same order the real pipeline
     // stages it (fresh immediate letters before queue-drained ones — matches
-    // `deckEligible`'s own push order above).
+    // `deckEligible`'s own push order above). The flush target is computed
+    // against the deck's REAL current total (already-shipped + staged), not
+    // just the staged count in isolation — same fix as `flushShippable`
+    // itself, so the forecast never shows a deck "flushing" an amount that
+    // wouldn't actually land it on the next multiple of 5.
     const existingStaged = await peekStaged(pool, deckCode);
-    const combinedLength = existingStaged.length + deckEligible.length;
-    const shipCount = Math.floor(combinedLength / 5) * 5;
+    const { rows: shippedRows } = await pool.query(
+      "SELECT count(*) AS count FROM occurrence_shipments os JOIN card_slots cs ON cs.id = os.card_id WHERE cs.deck_code = $1",
+      [deckCode]
+    );
+    const alreadyShipped = Number(shippedRows[0].count);
+    const stagedTotal = existingStaged.length + deckEligible.length;
+    const target = Math.floor((alreadyShipped + stagedTotal) / 5) * 5;
+    const shipCount = Math.max(0, Math.min(stagedTotal, target - alreadyShipped));
     const newlyStagedShipCount = Math.max(0, shipCount - existingStaged.length);
     deckEligible.forEach((entry, i) => {
       wouldShip.push({ ...entry, willShipThisRun: i < newlyStagedShipCount });
@@ -202,9 +220,10 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
       newlyEligibleCount: notes.length,
       pendingQueueDepth: queue ? queue.depth : 0,
       pendingOldestRemaining: queue ? queue.oldestRemaining : null,
+      alreadyShipped,
       stagedBeforeThisRun: existingStaged.length,
       wouldFlushCount: shipCount,
-      wouldHoldCount: combinedLength - shipCount,
+      wouldHoldCount: stagedTotal - shipCount,
     });
   }
 
