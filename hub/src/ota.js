@@ -154,6 +154,11 @@ const ASSEMBLE_PLACEHOLDER_BUILD_ID = "unassigned";
 export async function assembleDefaults({ baseFolderDir, publicBase, operatorAuthToken }) {
   const baseVersion = readBaseVersion(baseFolderDir);
   const nextRev = await nextPatchRev();
+  // boot-companion-label-data-version/D-L3: DATA_VERSION's pre-filled
+  // default is the most recent `data_rev` already on record — unlike
+  // PATCH_REV, nothing here increments it; the real next value is only
+  // known once builder actually publishes.
+  const { dataRev } = await previousVersions();
   // Booleans only — never the token value itself — so the Assemble tab can
   // tell the operator "leave blank, this server already has one" without
   // echoing a secret into a GET response any page script can read.
@@ -161,6 +166,7 @@ export async function assembleDefaults({ baseFolderDir, publicBase, operatorAuth
     baseFolderDir,
     baseVersion,
     nextPatchRev: nextRev,
+    dataRev,
     syncBaseUrlConfigured: !!publicBase,
     syncTokenConfigured: !!operatorAuthToken,
     // D120/audio-cache-prefetch: this base URL has no token of its own

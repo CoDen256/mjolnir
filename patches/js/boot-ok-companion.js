@@ -23,6 +23,10 @@
 // here; baking them as plain top-level constants (not just a comment) is
 // what makes a submitted bundle self-describing without a sidecar file.
 //
+// `__MJOLNIR_LABEL__`/`__MJOLNIR_DATA_VERSION__` (boot-companion-label-
+// data-version) are baked the same way, purely for on-device display on
+// the account screen (module 2176) — free-form strings, no format checks.
+//
 // It also exposes `globalThis.MJOLNIR_BUILD_ID` synchronously (task 10.1) —
 // this runs right after the entry call (`__r(0);`), long before any screen
 // the user navigates to (e.g. "My account", module 2176) can mount, so that
@@ -34,10 +38,14 @@
   var BUILD_ID = '__MJOLNIR_BUILD_ID__';
   var BASE_VERSION = '__MJOLNIR_BASE_VERSION__';
   var PATCH_REV = __MJOLNIR_PATCH_REV__;
+  var LABEL = '__MJOLNIR_LABEL__';
+  var DATA_VERSION = '__MJOLNIR_DATA_VERSION__';
   if (typeof globalThis !== 'undefined') {
     globalThis.MJOLNIR_BUILD_ID = BUILD_ID;
     globalThis.MJOLNIR_BASE_VERSION = BASE_VERSION;
     globalThis.MJOLNIR_PATCH_REV = PATCH_REV;
+    globalThis.MJOLNIR_LABEL = LABEL;
+    globalThis.MJOLNIR_DATA_VERSION = DATA_VERSION;
   }
   var DELAY_MS = 3000; // D52: survive 3 s before declaring boot-ok
   var RETRY_MS = 2000; // expo modules may not be installed yet at T+3s

@@ -74,7 +74,7 @@ test("assembling from 3 patches against a known base produces one bundle reflect
       patchesDir,
       outputPath,
       companionFiles: [COMPANION_FILE],
-      placeholders: { BUILD_ID: "b000099", PATCH_REV: 7 },
+      placeholders: { BUILD_ID: "b000099", PATCH_REV: 7, LABEL: "test-label", DATA_VERSION: "42" },
     });
 
     assert.equal(result.baseVersion, "1.5.12");
@@ -90,6 +90,8 @@ test("assembling from 3 patches against a known base produces one bundle reflect
     assert.match(outBytes, /BUILD_ID = 'b000099'/);
     assert.match(outBytes, /BASE_VERSION = '1\.5\.12'/);
     assert.match(outBytes, /PATCH_REV = 7/);
+    assert.match(outBytes, /LABEL = 'test-label'/);
+    assert.match(outBytes, /DATA_VERSION = '42'/);
 
     // The base folder's own bundle must never be touched.
     const baseStillOriginal = moduleSource(baseBundlePath, 2042);
@@ -165,7 +167,7 @@ test("assembling with zero patches still produces a byte-faithful copy stamped w
       patchesDir,
       outputPath,
       companionFiles: [COMPANION_FILE],
-      placeholders: { BUILD_ID: "b000001", PATCH_REV: 1 },
+      placeholders: { BUILD_ID: "b000001", PATCH_REV: 1, LABEL: "test-label", DATA_VERSION: "1" },
     });
 
     assert.equal(result.baseVersion, "2.0.0");
@@ -188,7 +190,7 @@ test("multiple companions are all applied, in order — independent of patch ord
       patchesDir,
       outputPath,
       companionFiles: [COMPANION_FILE, secondCompanionPath],
-      placeholders: { BUILD_ID: "b000002", PATCH_REV: 3 },
+      placeholders: { BUILD_ID: "b000002", PATCH_REV: 3, LABEL: "test-label", DATA_VERSION: "3" },
     });
 
     assert.deepEqual(result.appliedCompanions, ["boot-ok-companion", "second-companion"]);
@@ -417,7 +419,13 @@ test("generic-placeholder-substitution: a caller-supplied BASE_VERSION is silent
       patchesDir,
       outputPath,
       companionFiles: [COMPANION_FILE],
-      placeholders: { BUILD_ID: "b000003", BASE_VERSION: "9.9.9-not-the-real-one", PATCH_REV: 2 },
+      placeholders: {
+        BUILD_ID: "b000003",
+        BASE_VERSION: "9.9.9-not-the-real-one",
+        PATCH_REV: 2,
+        LABEL: "test-label",
+        DATA_VERSION: "2",
+      },
     });
 
     assert.equal(result.baseVersion, "1.5.12");

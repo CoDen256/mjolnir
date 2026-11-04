@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { appendCompanion, substituteBakedPlaceholders } from "../../src/commands/companion.js";
+
+const REAL_BOOT_OK_COMPANION = fs.readFileSync(path.resolve("patches/js/boot-ok-companion.js"), "utf8");
 
 const PLACEHOLDER_COMPANION = "(function(){ var id='__MJOLNIR_BUILD_ID__'; })();";
 const PLAIN_COMPANION = "(function(){ /* no buildId */ })();";
@@ -96,6 +100,41 @@ test("requires BASE_VERSION/PATCH_REV only when their own placeholder is present
   // Neither placeholder present — neither value is required.
   const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { placeholders: {}, name: "debug" }).toString("utf8");
   assert.ok(out.includes("/* no buildId */"));
+});
+
+test("boot-companion-label-data-version: the real boot-ok-companion.js requires and substitutes LABEL/DATA_VERSION alongside the existing three globals unaffected", () => {
+  const out = appendCompanion(bundleWithMap(), REAL_BOOT_OK_COMPANION, {
+    placeholders: {
+      BUILD_ID: "b000002",
+      BASE_VERSION: "1.5.12",
+      PATCH_REV: 3,
+      LABEL: "spring-release",
+      DATA_VERSION: "17",
+    },
+    name: "boot-ok",
+  }).toString("utf8");
+  assert.ok(out.includes("globalThis.MJOLNIR_BUILD_ID = BUILD_ID"));
+  assert.ok(out.includes("globalThis.MJOLNIR_BASE_VERSION = BASE_VERSION"));
+  assert.ok(out.includes("globalThis.MJOLNIR_PATCH_REV = PATCH_REV"));
+  assert.ok(out.includes("globalThis.MJOLNIR_LABEL = LABEL"));
+  assert.ok(out.includes("globalThis.MJOLNIR_DATA_VERSION = DATA_VERSION"));
+  assert.ok(out.includes("BUILD_ID = 'b000002'"));
+  assert.ok(out.includes("BASE_VERSION = '1.5.12'"));
+  assert.ok(out.includes("PATCH_REV = 3"));
+  assert.ok(out.includes("LABEL = 'spring-release'"));
+  assert.ok(out.includes("DATA_VERSION = '17'"));
+  assert.ok(!out.includes("__MJOLNIR_"));
+});
+
+test("boot-companion-label-data-version: omitting LABEL/DATA_VERSION aborts, since the real companion always bakes them", () => {
+  assert.throws(
+    () =>
+      appendCompanion(bundleWithMap(), REAL_BOOT_OK_COMPANION, {
+        placeholders: { BUILD_ID: "b000002", BASE_VERSION: "1.5.12", PATCH_REV: 3 },
+        name: "boot-ok",
+      }),
+    /no value was given for LABEL/
+  );
 });
 
 test("rejects a PATCH_REV that isn't a non-negative integer", () => {

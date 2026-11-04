@@ -181,6 +181,7 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
     const defaults = await assembleDefaults({ baseFolderDir });
     assert.equal(defaults.baseVersion, "9.9.1");
     assert.equal(typeof defaults.nextPatchRev, "number");
+    assert.equal(typeof defaults.dataRev, "number");
   });
 
   await t.test("D112: assembleAndSubmit assembles against the repo's own base folder and submits directly, no output path or base folder from the caller", async () => {

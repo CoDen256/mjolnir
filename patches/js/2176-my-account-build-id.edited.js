@@ -341,6 +341,24 @@ __d(function (g, _r, _i, a, m, _e, d) {
               style: _.value,
               children: typeof globalThis !== 'undefined' && globalThis.MJOLNIR_BUILD_ID+' base:'+globalThis.MJOLNIR_BASE_VERSION || 'embedded'
             })]
+          }), (0, S.jsxs)(s.View, {
+            style: _.item,
+            children: [(0, S.jsx)(s.Text, {
+              style: _.label,
+              children: "Label"
+            }), (0, S.jsx)(s.Text, {
+              style: _.value,
+              children: typeof globalThis !== 'undefined' && globalThis.MJOLNIR_LABEL || 'embedded'
+            })]
+          }), (0, S.jsxs)(s.View, {
+            style: _.item,
+            children: [(0, S.jsx)(s.Text, {
+              style: _.label,
+              children: "Data version"
+            }), (0, S.jsx)(s.Text, {
+              style: _.value,
+              children: typeof globalThis !== 'undefined' && globalThis.MJOLNIR_DATA_VERSION || 'embedded'
+            })]
           })]
         }), (0, S.jsx)(h.default, {
           title: pulling ? 'Pulling…' : 'Pull cloud progress',

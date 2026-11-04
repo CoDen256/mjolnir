@@ -752,6 +752,11 @@ let assemblePlaceholders = [
   { key: "SYNC_BASE_URL", value: "" },
   { key: "SYNC_TOKEN", value: "" },
   { key: "AUDIO_BASE_URL", value: "" },
+  // boot-companion-label-data-version: LABEL/DATA_VERSION rows, pre-filled
+  // once hub's /assemble-defaults responds (loadAssembleView below) — blank
+  // here same as the other rows above until that happens.
+  { key: "LABEL", value: "" },
+  { key: "DATA_VERSION", value: "" },
 ];
 let assemblePlaceholdersInitialized = false;
 
@@ -849,6 +854,13 @@ async function loadAssembleView() {
   }
   if (!assemblePlaceholdersInitialized) {
     assemblePlaceholdersInitialized = true;
+    // D-L3: pre-fill DATA_VERSION from hub's own most recent data_rev —
+    // only meaningful in embedded mode, since standalone has no publications
+    // table to read from.
+    if (assembleEmbedded && defaults.dataRev !== undefined && defaults.dataRev !== null) {
+      const dataVersionRow = assemblePlaceholders.find((r) => r.key === "DATA_VERSION");
+      if (dataVersionRow && !dataVersionRow.value) dataVersionRow.value = String(defaults.dataRev);
+    }
     renderAssemblePlaceholders();
   }
   el("assemble-placeholder-add-btn").onclick = () => {
@@ -987,6 +999,12 @@ async function runAssemble() {
   const placeholders = assemblePlaceholdersAsObject();
 
   if (assembleEmbedded) {
+    const labelFieldValue = el("assemble-label").value.trim();
+    // D-L3: reuse the Label field's own value for the baked LABEL
+    // placeholder too, rather than asking the operator to type it twice —
+    // only when the LABEL row was left blank; an explicit row value wins.
+    const embeddedPlaceholders = { ...placeholders };
+    if (!embeddedPlaceholders.LABEL && labelFieldValue) embeddedPlaceholders.LABEL = labelFieldValue;
     try {
       const res = await fetch("/mjolnir/ota/assemble-submit", {
         method: "POST",
@@ -995,9 +1013,9 @@ async function runAssemble() {
           patchNames: assembleSelected,
           patchbackPairNames: assemblePatchbackPairsSelected,
           companionFiles,
-          label: el("assemble-label").value.trim() || undefined,
+          label: labelFieldValue || undefined,
           patchRev: patchRevRaw ? Number(patchRevRaw) : undefined,
-          placeholders,
+          placeholders: embeddedPlaceholders,
         }),
       });
       const result = await res.json();
