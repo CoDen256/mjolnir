@@ -12,27 +12,27 @@ queue, not inside it.
 
 ## 1. Staging storage
 
-- [ ] 1.1 New hub migration: `staged_occurrences(id SERIAL PK, deck_code
+- [x] 1.1 New hub migration: `staged_occurrences(id SERIAL PK, deck_code
       TEXT, card_id TEXT, letter TEXT, staged_at TIMESTAMPTZ DEFAULT
       now())`.
-- [ ] 1.2 New module (e.g. `builder/src/stagedOccurrences.js`):
+- [x] 1.2 New module (e.g. `builder/src/stagedOccurrences.js`):
       `stageOccurrence(pool, {deckCode, cardId, letter})`,
       `stagedCount(pool, deckCode)`, `flushShippable(pool, deckCode)` —
       returns the oldest `floor(count/5)*5` rows (by `id` ASC, same
       FIFO-ordering reasoning as D-F2) and deletes them, or returns an
       empty array (and the caller logs) if `count < 5`.
-- [ ] 1.3 Tests: staging then flushing with 11 staged ships exactly 10
+- [x] 1.3 Tests: staging then flushing with 11 staged ships exactly 10
       (the 10 oldest), leaves 1; staging with 9 ships 5, leaves 4; staging
       with 4 ships 0, leaves all 4; FIFO order is respected across
       multiple staging calls spanning simulated "runs".
 
 ## 2. Pipeline integration
 
-- [ ] 2.1 `appendImmediateOccurrences`: replace its `addOccurrence` call
+- [x] 2.1 `appendImmediateOccurrences`: replace its `addOccurrence` call
       with `stageOccurrence`.
-- [ ] 2.2 `drainThenQueue`: replace its `addOccurrence` call (for drained
+- [x] 2.2 `drainThenQueue`: replace its `addOccurrence` call (for drained
       rows) with `stageOccurrence`.
-- [ ] 2.3 Add the flush step: once per deck per run, after that deck's
+- [x] 2.3 Add the flush step: once per deck per run, after that deck's
       minting/draining/staging is done, call `flushShippable`; for each
       returned `{cardId, letter}`, call `addOccurrence(deck, cardId,
       letter)` and push onto `shipments` (so `occurrence_shipments`
@@ -41,10 +41,10 @@ queue, not inside it.
       `occurrence-shipment-log`'s existing "never record for a failed
       run" guarantee, now applying to the flush step instead of the old
       direct-append call sites).
-- [ ] 2.4 If nothing was flushed for a deck that has staged occurrences,
+- [x] 2.4 If nothing was flushed for a deck that has staged occurrences,
       log it (deck code, staged count, that it's short of the next
       multiple of 5) — no other action.
-- [ ] 2.5 Tests: a full pipeline run (mint → stage → flush) produces the
+- [x] 2.5 Tests: a full pipeline run (mint → stage → flush) produces the
       correct final `Cards.length` (always a multiple of 5) across
       several simulated runs with varying numbers of newly-eligible notes
       per run; minting itself is confirmed unaffected (card_slots/content
@@ -52,7 +52,7 @@ queue, not inside it.
 
 ## 3. Forecast (if touched)
 
-- [ ] 3.1 Check whether `runForecast` (the dry-run preview) needs updating
+- [x] 3.1 Check whether `runForecast` (the dry-run preview) needs updating
       to reflect "would stage" vs. "would ship" as two different outcomes,
       now that eligibility no longer means immediate shipping. Update if
       its existing output would otherwise mislead an operator into
@@ -60,25 +60,25 @@ queue, not inside it.
 
 ## 4. Revert the app-side display fix
 
-- [ ] 4.1 **Do this only after tasks 1-3 are done, tested, and (ideally)
+- [x] 4.1 **Do this only after tasks 1-3 are done, tested, and (ideally)
       confirmed against at least one real publish** — per D-W4's
       sequencing note. Delete
       `patches/js/2119-deck-completion-display.baseline.js`,
       `patches/js/2119-deck-completion-display.edited.js`,
       `test/unit/deckCompletionDisplay.test.js`.
-- [ ] 4.2 Delete the `openspec/changes/deck-completion-display-fix/`
+- [x] 4.2 Delete the `openspec/changes/deck-completion-display-fix/`
       folder outright (never archived — same precedent as
       `audio-link-playback-minimal`/`progress-sync-shim`).
-- [ ] 4.3 Record an ADR amendment in `tun/docs/07-decisions.md`
+- [x] 4.3 Record an ADR amendment in `tun/docs/07-decisions.md`
       explaining the fix moved to its root cause (this change) rather
       than staying as an app-side symptom patch — reference both this
       change and the superseded one.
-- [ ] 4.4 Re-run the full test suite after the deletion — confirm nothing
+- [x] 4.4 Re-run the full test suite after the deletion — confirm nothing
       else referenced the deleted patch/test files.
 
 ## 5. Sign-off
 
-- [ ] 5.1 If anything here contradicts or refines `design.md` during
+- [x] 5.1 If anything here contradicts or refines `design.md` during
       implementation, record it as an ADR amendment in
       `tun/docs/07-decisions.md`.
 - [ ] 5.2 **(Operator, outside this change)** Run a real (or close-to-real)

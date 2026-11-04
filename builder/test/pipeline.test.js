@@ -170,8 +170,10 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     const model = outputModel(result.buildId);
     const deck = model.decks.find((d) => d.Name === "C20");
     assert.ok(deck, "C20 deck should have been created in the bundle");
-    // word -> occurrences ["A","E"] (D91 drops "N"); only "A" ships this run.
-    assert.equal(deck.Cards.length, 4, "only the 4 new cards' A occurrences ship this run");
+    // word -> occurrences ["A","E"] (D91 drops "N"); the 4 new A's are staged
+    // (builder-sliding-window-shipping), but 4 isn't a multiple of 5 — none
+    // flush into Cards[] yet, even though nothing queues them either.
+    assert.equal(deck.Cards.length, 0, "4 A's staged this run, short of a multiple of 5 — none flush yet");
     assert.equal(model.cards.filter((c) => c.DECK_ID === "C20").length, 4);
 
     const queued = await pendingRows("C20");
@@ -255,7 +257,7 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     assert.equal(n1CardAfter.DECK_ID, "C20");
     const n1PositionAfter = after.decks.find((d) => d.Name === "C20").Cards.findIndex((ref) => ref.Card.startsWith(n1Id));
     assert.equal(n1PositionAfter, n1Position, "an existing card's Cards[] position must never move, even across a full replay");
-    assert.equal(after.decks.find((d) => d.Name === "C20").Cards.length, 4, "C20's occurrences must not grow from a content-only regen");
+    assert.equal(after.decks.find((d) => d.Name === "C20").Cards.length, 0, "C20's occurrences must not grow from a content-only regen — still 0, its 4 staged A's remain held");
 
     // D-L3: the regenerated content reached card_content too, not just this
     // run's output bundle — the next replay must see the edit as well.
@@ -354,19 +356,27 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     c24FirstBuildId = result.buildId;
 
     const model = outputModel(result.buildId);
-    assert.equal(model.decks.find((d) => d.Name === "C24").Cards.length, 2, "both A's ship, no E's yet");
+    // builder-sliding-window-shipping: both A's are staged, not shipped —
+    // 2 isn't a multiple of 5, so the flush step holds them.
+    assert.equal(model.decks.find((d) => d.Name === "C24").Cards.length, 0, "both A's staged, held — 2 is short of a multiple of 5");
 
-    // D93: each card's A ships now, tagged to this run's build; nothing
-    // for their E yet — it's queued, not shipped.
+    // D93 (modified, D-W2): nothing flushed yet, so occurrence_shipments
+    // records nothing for these cards this run — they're staged, not shipped.
     const { rows: shipped } = await pool.query(
       "SELECT card_id, letter, build_id FROM occurrence_shipments WHERE card_id IN ('C24001', 'C24002') ORDER BY card_id"
     );
+    assert.deepEqual(shipped, [], "staged but held — nothing ships (or gets recorded in occurrence_shipments) yet");
+
+    const { rows: staged } = await pool.query(
+      "SELECT card_id, letter FROM staged_occurrences WHERE deck_code = 'C24' ORDER BY id"
+    );
     assert.deepEqual(
-      shipped.map((r) => ({ cardId: r.card_id, letter: r.letter, buildId: r.build_id })),
+      staged.map((r) => ({ cardId: r.card_id, letter: r.letter })),
       [
-        { cardId: "C24001", letter: "A", buildId: c24FirstBuildId },
-        { cardId: "C24002", letter: "A", buildId: c24FirstBuildId },
-      ]
+        { cardId: "C24001", letter: "A" },
+        { cardId: "C24002", letter: "A" },
+      ],
+      "both A's are staged (D-W1), just not yet flushed"
     );
 
     const queued = await pendingRows("C24");
@@ -393,7 +403,14 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     assert.deepEqual(result.decksMinted, [{ deckCode: "C24", count: 1 }]);
 
     const model = outputModel(result.buildId);
-    assert.equal(model.decks.find((d) => d.Name === "C24").Cards.length, 3, "3 A's total now, still no E's");
+    // builder-sliding-window-shipping: 3 A's staged cumulatively now
+    // (C24001/C24002 from the previous run, C24003 from this one) — still
+    // short of a multiple of 5, so Cards[] stays empty.
+    assert.equal(model.decks.find((d) => d.Name === "C24").Cards.length, 0, "3 A's staged total now, still short of a multiple of 5");
+    const { rows: stagedCountRow } = await pool.query(
+      "SELECT count(*) FROM staged_occurrences WHERE deck_code = 'C24'"
+    );
+    assert.equal(Number(stagedCountRow[0].count), 3, "C24001/C24002 (previous run) + C24003 (this run)");
 
     const queued = await pendingRows("C24");
     assert.equal(queued.length, 3);
@@ -421,7 +438,10 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     assert.deepEqual(result.decksMinted, [{ deckCode: "C24", count: 10 }]);
 
     const model = outputModel(result.buildId);
-    // 3 earlier A's + 10 new A's + 2 drained E's (p1, p2) = 15.
+    // builder-sliding-window-shipping: 3 previously-staged A's (C24001-003)
+    // + 10 new A's (C24004-013) + 2 newly-drained E's (p1, p2, staged not
+    // appended directly — D-W3) = 15 staged total, which IS a multiple of
+    // 5 — the flush step ships all 15 this run, in FIFO order.
     assert.equal(model.decks.find((d) => d.Name === "C24").Cards.length, 15);
 
     const queued = await pendingRows("C24");
@@ -429,10 +449,20 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     const byRemaining = queued.map((r) => r.remaining).sort((a, b) => a - b);
     assert.deepEqual(byRemaining, [1, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11]);
 
-    // D93: C24001/C24002 were minted (their A shipped) in an earlier build;
-    // their E only just drained, in *this* run's build — two shipment rows
-    // per card, naming two different builds, exactly what the shipment log
-    // exists to represent.
+    const { rows: stagedCountRow } = await pool.query(
+      "SELECT count(*) FROM staged_occurrences WHERE deck_code = 'C24'"
+    );
+    assert.equal(Number(stagedCountRow[0].count), 0, "everything staged for C24 flushed this run — 15 is an exact multiple of 5");
+
+    // D93 (modified, D-W2): C24001/C24002's A's were staged two runs ago but
+    // held (2 wasn't a multiple of 5); they only actually flush into
+    // Cards[] — and only get recorded in occurrence_shipments — now, in
+    // THIS run's build, alongside their own E's which just drained. The
+    // shipment log now names the build that actually flushed an occurrence,
+    // not the run that minted or drained it (occurrence-shipment-log's
+    // MODIFIED delta) — all four rows below share this run's buildId, not
+    // split across c24FirstBuildId and result.buildId the way immediate
+    // shipping used to produce.
     assert.notEqual(result.buildId, c24FirstBuildId, "sanity: this really is a later build");
     const { rows: bothSides } = await pool.query(
       "SELECT card_id, letter, build_id FROM occurrence_shipments WHERE card_id IN ('C24001', 'C24002') ORDER BY card_id, letter"
@@ -440,20 +470,21 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     assert.deepEqual(
       bothSides.map((r) => ({ cardId: r.card_id, letter: r.letter, buildId: r.build_id })),
       [
-        { cardId: "C24001", letter: "A", buildId: c24FirstBuildId },
+        { cardId: "C24001", letter: "A", buildId: result.buildId },
         { cardId: "C24001", letter: "E", buildId: result.buildId },
-        { cardId: "C24002", letter: "A", buildId: c24FirstBuildId },
+        { cardId: "C24002", letter: "A", buildId: result.buildId },
         { cardId: "C24002", letter: "E", buildId: result.buildId },
       ]
     );
 
-    // D-H2: this build's own occurrencesForBuild must show both kinds of
-    // shipped occurrence together — the 10 freshly-minted A's and the 2
-    // drained E's from cards minted long before this run — correctly
-    // attributed to the build that actually shipped each one (this build).
+    // D-H2: this build's own occurrencesForBuild must show every kind of
+    // flushed occurrence together — the 13 A's that just flushed (3 held
+    // from earlier runs + 10 freshly minted this run) and the 2 drained
+    // E's — correctly attributed to the build that actually shipped each
+    // one (this build, since all 15 flush together).
     const batchContents = await occurrencesForBuild(pool, result.buildId);
-    assert.equal(batchContents.length, 12, "10 new A's + 2 drained E's");
-    assert.equal(batchContents.filter((o) => o.letter === "A").length, 10);
+    assert.equal(batchContents.length, 15, "13 A's (3 previously staged + 10 new) + 2 drained E's — all flush together this run");
+    assert.equal(batchContents.filter((o) => o.letter === "A").length, 13);
     assert.equal(batchContents.filter((o) => o.letter === "E").length, 2);
     assert.ok(batchContents.every((o) => o.kind === "ship" && o.deckCode === "C24"));
   });
@@ -494,7 +525,11 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     const model = outputModel(lastPub[0].build_id);
     const c29 = model.decks.find((d) => d.Name === "C29");
     assert.ok(c29, "C29 (grammar) deck should exist from the previous run's mint");
-    assert.equal(c29.Cards.length, 1, "grammar's single occurrence (N) ships immediately, nothing queued");
+    // builder-sliding-window-shipping: grammar's single occurrence (N) is a
+    // single-occurrence type, so it's immediately staged (not queued) — but
+    // staged ≠ shipped. 1 staged occurrence is short of a multiple of 5, so
+    // it holds until more content arrives for this deck.
+    assert.equal(c29.Cards.length, 0, "grammar's single occurrence (N) is staged, not queued — but held, short of a multiple of 5");
   });
 
   await t.test("D89: wiring a real grammarRuleLookup means a grammar note's placeholder text never appears", async () => {
@@ -704,7 +739,7 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     // and unchanged — a full replay reconstructs the whole history onto the
     // new base, it doesn't drop anything.
     assert.equal(model.cards.filter((c) => c.DECK_ID === "C20").length, 4, "C20's cards survive the base change");
-    assert.equal(model.decks.find((d) => d.Name === "C20").Cards.length, 4);
+    assert.equal(model.decks.find((d) => d.Name === "C20").Cards.length, 0, "C20's 4 staged A's are still held, same as every run since they were minted");
   });
 
   t.after(async () => {

@@ -6,6 +6,7 @@ import { partitionByDeck } from "./eligibility.js";
 import { project } from "./projector.js";
 import { mintCardSlots, cardIdsForNotes, updateAudioSha256, allCardAudio, deckTitle } from "./mint.js";
 import { queuePendingOccurrence, hasPendingOccurrence, drainPendingOccurrences, pendingQueueDepths } from "./pendingOccurrences.js";
+import { stageOccurrence, stagedCount, flushShippable, peekStaged } from "./stagedOccurrences.js";
 import { recordShipments } from "./occurrenceShipments.js";
 import { previousVersions, writePublication } from "./publications.js";
 import { createBuildJob, markSucceeded, markFailed } from "./buildJobs.js";
@@ -49,33 +50,33 @@ function splitOccurrences(occurrences) {
   return { immediate: occurrences.filter((l) => l === "A"), queued: occurrences.filter((l) => l !== "A") };
 }
 
-// Appends `occurrences`' immediate letters to `deck` now and returns the
-// list of `{letter}` entries still to be queued, plus how many brand-new
-// `A`'s were just appended (the drain step's decrement count) and which
-// letters were just shipped immediately (D93 — the caller buffers these into
-// the run's shipment log, written only once `publish()` succeeds).
-function appendImmediateOccurrences(deck, cardId, occurrences) {
+// builder-sliding-window-shipping (D-W3): stages `occurrences`' immediate
+// letters instead of appending them straight to `deck.Cards[]` — minting
+// stays exactly as fast/immediate as before this change; only the actual
+// `Cards[]` append (and D93 shipment recording) moves to the once-per-deck
+// flush step below. Returns the list of `{letter}` entries still to be
+// queued, plus how many brand-new `A`'s were just staged (the drain step's
+// decrement count).
+async function stageImmediateOccurrences(pool, deckCode, cardId, occurrences) {
   const { immediate, queued } = splitOccurrences(occurrences);
-  for (const letter of immediate) addOccurrence(deck, cardId, letter);
-  return { immediate, queued, newACount: immediate.filter((l) => l === "A").length };
+  for (const letter of immediate) await stageOccurrence(pool, { deckCode, cardId, letter });
+  return { queued, newACount: immediate.filter((l) => l === "A").length };
 }
 
-// Drains `deckCode`'s *existing* queue by `newACount`, appending every row
-// that reaches `remaining <= 0`, then queues `toQueue`'s rows fresh at
-// `remaining: 11` — in that order, so a card's own just-queued `E` is never
-// decremented by the very batch of `A`'s that created it
+// Drains `deckCode`'s *existing* queue by `newACount`, staging every row
+// that reaches `remaining <= 0` (D-W3 — same staging step as fresh
+// immediate letters, not appended directly), then queues `toQueue`'s rows
+// fresh at `remaining: 11` — in that order, so a card's own just-queued `E`
+// is never decremented by the very batch of `A`'s that created it
 // (03-data-model.md's worked example: "a queued E draining in the same run
 // does not count toward another queued E's countdown"). `hasPendingOccurrence`
 // guards the D86 recovery path against double-queuing a row a prior, crashed
-// run may already have written durably before failing. Every drained letter
-// is also pushed onto `shipments` (D93) — it just shipped, in this run's
-// build, even though its card may have been minted long ago.
-async function drainThenQueue(pool, deck, deckCode, newACount, toQueue, shipments) {
+// run may already have written durably before failing.
+async function drainThenQueue(pool, deckCode, newACount, toQueue) {
   if (newACount > 0) {
     const drained = await drainPendingOccurrences(pool, deckCode, newACount);
     for (const { cardId, letter } of drained) {
-      addOccurrence(deck, cardId, letter);
-      shipments.push({ cardId, letter });
+      await stageOccurrence(pool, { deckCode, cardId, letter });
     }
   }
   for (const { cardId, letter } of toQueue) {
@@ -85,14 +86,48 @@ async function drainThenQueue(pool, deck, deckCode, newACount, toQueue, shipment
   }
 }
 
+// builder-sliding-window-shipping (D-W2): once per deck per run, after that
+// deck's minting/draining/staging is done — flushes the largest multiple of
+// 5 it currently holds into `deck.Cards[]`, pushing each onto `shipments`
+// (D93's log, now recorded only for what's actually flushed this run, per
+// `occurrence-shipment-log`'s MODIFIED delta). Logs instead, no other
+// action, when the deck has staged occurrences but not enough to reach the
+// next multiple of 5 yet.
+async function flushDeck(pool, model, deckCode, deckTitleCache, shipments, log, buildJobId) {
+  const shippable = await flushShippable(pool, deckCode);
+  if (shippable.length === 0) {
+    const staged = await stagedCount(pool, deckCode);
+    if (staged > 0) {
+      await log(buildJobId, `ship: ${deckCode} — ${staged} occurrence(s) staged, short of the next multiple of 5, held`);
+    }
+    return;
+  }
+  if (!deckTitleCache.has(deckCode)) deckTitleCache.set(deckCode, await deckTitle(pool, deckCode));
+  const deck = ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
+  for (const { cardId, letter } of shippable) {
+    addOccurrence(deck, cardId, letter);
+    shipments.push({ cardId, letter });
+  }
+  await log(buildJobId, `ship: ${deckCode} — ${shippable.length} occurrence(s) flushed`);
+}
+
 // Task 4.14/3.2 (modified builder-pipeline spec): dry run of steps 1-4 only —
 // mints and writes nothing, but now reports the actual `(card, side, note)`
-// occurrences that would ship and the ones that would be newly queued,
-// instead of a per-deck count (D-H2: a card's two sides routinely belong to
-// different batches, so a count can't represent the real unit). Predicted
-// card ids use the exact same `deck_code||card_no` scheme `mintCardSlots`
-// uses, read-only (no row inserted) — D-P5's "one implementation, two call
-// sites" extends to card-id prediction too, not just eligibility.
+// occurrences that would become eligible and the ones that would be newly
+// queued, instead of a per-deck count (D-H2: a card's two sides routinely
+// belong to different batches, so a count can't represent the real unit).
+// Predicted card ids use the exact same `deck_code||card_no` scheme
+// `mintCardSlots` uses, read-only (no row inserted) — D-P5's "one
+// implementation, two call sites" extends to card-id prediction too, not
+// just eligibility.
+//
+// builder-sliding-window-shipping (task 3.1): becoming eligible no longer
+// means shipping immediately — it means getting staged, and only the
+// largest multiple of 5 a deck holds (existing staged rows + what this run
+// would newly stage) actually flushes. `wouldShip` entries now carry
+// `willShipThisRun` so a caller can't mistake "eligible" for "ships today";
+// `byDeck` gains `stagedBeforeThisRun`/`wouldFlushCount`/`wouldHoldCount` so
+// the sliding-window state is visible without inspecting `wouldShip` at all.
 export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sourceLang = "no" } = {}) {
   const { newlyEligibleByDeck, alreadyMinted } = await pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLang });
   const queueDepths = await pendingQueueDepths(pool);
@@ -115,13 +150,14 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
     ]);
     let nextNo = Number(rows[0].max_no) + 1;
     let newACount = 0;
+    const deckEligible = [];
 
     for (const note of notes) {
       const cardId = `${deckCode}${String(nextNo).padStart(3, "0")}`;
       nextNo += 1;
       const { immediate, queued } = splitOccurrences(project(note, {}).occurrences);
       for (const letter of immediate) {
-        wouldShip.push({ cardId, letter, deckCode, noteId: note.id, noteText: note.text, reason: "new card" });
+        deckEligible.push({ cardId, letter, deckCode, noteId: note.id, noteText: note.text, reason: "new card" });
         if (letter === "A") newACount += 1;
       }
       for (const letter of queued) {
@@ -136,7 +172,7 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
       );
       for (const p of pending) {
         if (p.remaining - newACount <= 0) {
-          wouldShip.push({
+          deckEligible.push({
             cardId: p.card_id,
             letter: p.letter,
             deckCode,
@@ -148,12 +184,27 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
       }
     }
 
+    // D-W2 simulated: existing staged rows ship first (FIFO), then whatever
+    // this run would newly stage, in the same order the real pipeline
+    // stages it (fresh immediate letters before queue-drained ones — matches
+    // `deckEligible`'s own push order above).
+    const existingStaged = await peekStaged(pool, deckCode);
+    const combinedLength = existingStaged.length + deckEligible.length;
+    const shipCount = Math.floor(combinedLength / 5) * 5;
+    const newlyStagedShipCount = Math.max(0, shipCount - existingStaged.length);
+    deckEligible.forEach((entry, i) => {
+      wouldShip.push({ ...entry, willShipThisRun: i < newlyStagedShipCount });
+    });
+
     const queue = queueDepths.get(deckCode);
     byDeck.push({
       deckCode,
       newlyEligibleCount: notes.length,
       pendingQueueDepth: queue ? queue.depth : 0,
       pendingOldestRemaining: queue ? queue.oldestRemaining : null,
+      stagedBeforeThisRun: existingStaged.length,
+      wouldFlushCount: shipCount,
+      wouldHoldCount: combinedLength - shipCount,
     });
   }
 
@@ -275,6 +326,12 @@ export async function runPublish(
       return ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
     }
     const selMsByCardId = {};
+    // builder-sliding-window-shipping (D-W2): every deck touched by either
+    // loop below needs exactly one flush pass, after ALL staging/draining
+    // for this run is done — not one flush per loop, or a deck touched by
+    // both the recovery path and the decksToMint loop would flush twice in
+    // the same run against a half-staged count.
+    const touchedDeckCodes = new Set();
     for (const note of alreadyMinted) {
       const entry = cardIdByNoteId.get(note.id);
       if (!entry) continue;
@@ -291,12 +348,12 @@ export async function runPublish(
         // failed before the save/publish that was supposed to follow.
         // Recreate it fresh instead of throwing on the missing match, so
         // this run self-heals rather than failing identically forever.
-        const deck = await ensureDeckByCode(deckCode);
+        await ensureDeckByCode(deckCode);
         const title = deckTitleCache.get(deckCode);
         createCard(model.cards, { id: cardId, deckId: deckCode, N: content.N, E: content.E, D: title, X: content.X, A: content.A });
-        const { immediate, queued, newACount } = appendImmediateOccurrences(deck, cardId, content.occurrences);
-        for (const letter of immediate) shipments.push({ cardId, letter });
-        await drainThenQueue(pool, deck, deckCode, newACount, queued.map((letter) => ({ cardId, letter })), shipments);
+        const { queued, newACount } = await stageImmediateOccurrences(pool, deckCode, cardId, content.occurrences);
+        await drainThenQueue(pool, deckCode, newACount, queued.map((letter) => ({ cardId, letter })));
+        touchedDeckCodes.add(deckCode);
       }
       await updateAudioSha256(pool, cardId, note.audio_blob, note.grammar_rule_id ?? null);
     }
@@ -309,7 +366,9 @@ export async function runPublish(
     const decksMinted = [];
     for (const [deckCode, notes] of decksToMint) {
       const title = await deckTitle(pool, deckCode);
-      const deck = ensureDeck(model.decks, { name: deckCode, title });
+      deckTitleCache.set(deckCode, title);
+      ensureDeck(model.decks, { name: deckCode, title });
+      touchedDeckCodes.add(deckCode);
 
       const minted = await mintCardSlots(pool, deckCode, notes);
       await log(buildJobId, `mint: ${deckCode} — card_slots ${minted.map((m) => m.cardId).join(", ")}`);
@@ -320,18 +379,23 @@ export async function runPublish(
         const content = project(note, { grammarRuleLookup });
         await upsertCardContentRow(pool, cardId, { N: content.N, E: content.E, X: content.X, A: content.A });
         createCard(model.cards, { id: cardId, deckId: deckCode, N: content.N, E: content.E, D: title, X: content.X, A: content.A });
-        const result = appendImmediateOccurrences(deck, cardId, content.occurrences);
+        const result = await stageImmediateOccurrences(pool, deckCode, cardId, content.occurrences);
         newACount += result.newACount;
-        for (const letter of result.immediate) shipments.push({ cardId, letter });
         for (const letter of result.queued) toQueue.push({ cardId, letter });
       }
-      const shipmentsBeforeDrain = shipments.length;
-      await drainThenQueue(pool, deck, deckCode, newACount, toQueue, shipments);
-      // `drainThenQueue` only ever pushes onto `shipments` for rows that just
-      // drained (queued rows go through `queuePendingOccurrence` instead) —
-      // the length delta across the call is exactly the drained count.
-      await log(buildJobId, `drain: ${deckCode} — ${shipments.length - shipmentsBeforeDrain} row(s) reached remaining<=0`);
+      const stagedBeforeDrain = await stagedCount(pool, deckCode);
+      await drainThenQueue(pool, deckCode, newACount, toQueue);
+      const stagedAfterDrain = await stagedCount(pool, deckCode);
+      await log(buildJobId, `drain: ${deckCode} — ${stagedAfterDrain - stagedBeforeDrain} row(s) reached remaining<=0, staged`);
       decksMinted.push({ deckCode, count: minted.length });
+    }
+
+    // builder-sliding-window-shipping (D-W2): one flush pass per deck
+    // touched this run, after minting/draining/staging is fully done for
+    // every deck — ships the largest multiple of 5 each deck currently
+    // holds, logs and holds the remainder otherwise.
+    for (const deckCode of touchedDeckCodes) {
+      await flushDeck(pool, model, deckCode, deckTitleCache, shipments, log, buildJobId);
     }
 
     saveDeckCardModel(scratchPath, model);

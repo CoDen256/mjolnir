@@ -32,33 +32,37 @@ mapping to the `expression` deck (C26), regardless of its `type`.
 - **THEN** it is assigned to the expression deck (C26) rather than left
   unassigned
 
-### Requirement: Every deck with at least one newly-eligible note mints and publishes that run
-The system SHALL NOT withhold minting or publishing a newly-eligible note
-based on how many other notes are newly-eligible in the same deck —
-**superseded by D91** (operator decision, 2026-10-25): the original 6-note
-floor is removed entirely. A card's first occurrence (`A`, or a
-single-occurrence type's own letter) ships the run it is minted; any
-remaining occurrence for a multi-occurrence type is queued in a persisted,
-cross-batch table and drained once 11 other occurrences have landed in that
-deck, across however many subsequent publishes that takes (see
+### Requirement: Every deck with at least one newly-eligible note mints that run
+The system SHALL NOT withhold minting a newly-eligible note based on how
+many other notes are newly-eligible in the same deck — **superseded by
+D91** (operator decision, 2026-10-25): the original 6-note floor is removed
+entirely. A card's first occurrence (`A`, or a single-occurrence type's own
+letter) becomes eligible — and is staged — the run it is minted (see
+`occurrence-shipment-windowing`: staging ≠ shipping, builder-sliding-
+window-shipping); any remaining occurrence for a multi-occurrence type is
+queued in a persisted, cross-batch table and drained (then itself staged,
+not appended) once 11 other occurrences have landed in that deck, across
+however many subsequent publishes that takes (see
 `tun/docs/03-data-model.md`'s "Appending new cards to an existing deck").
 
 #### Scenario: A deck with 1 newly-eligible note
 - **WHEN** a run finds exactly 1 unminted, eligible note assigned to a deck
-- **THEN** it is minted and its first occurrence is published this run, with
-  no minimum batch size required
+- **THEN** it is minted and its first occurrence is staged this run, with no
+  minimum batch size required for minting itself (whether it also flushes
+  into `Cards[]` this run depends on `occurrence-shipment-windowing`'s
+  multiple-of-5 rule, independent of minting)
 
 #### Scenario: A multi-occurrence card's second occurrence is queued, not dropped
 - **WHEN** a word/expression note is minted and its card's occurrence set is
   `{A, E}`
-- **THEN** `A` is appended to the deck's `Cards[]` this run, and `E` is
-  queued at `remaining = 11` rather than appended immediately
+- **THEN** `A` is staged this run (not appended directly), and `E` is queued
+  at `remaining = 11` rather than staged immediately
 
 #### Scenario: A queued occurrence drains once enough new occurrences land
-- **WHEN** a deck's cumulative count of newly-appended occurrences since a
+- **WHEN** a deck's cumulative count of newly-staged occurrences since a
   pending row was queued reaches 11
-- **THEN** that row's occurrence is appended to the deck's `Cards[]` and the
-  row is removed
+- **THEN** the pending row is removed and its occurrence is staged (not
+  appended directly to `Cards[]` — occurrence-shipment-windowing)
 
 #### Scenario: A deck with no new cards in a run leaves its queue untouched
 - **WHEN** a run mints no new cards for a given deck
@@ -142,22 +146,34 @@ with both paths subject to the same eligibility rules (no floor — D91).
 ### Requirement: The forecast reflects the same logic as a real run, without minting
 The system SHALL expose a dry-run view that executes the same pull,
 eligibility, and deck-assignment logic as a real publish, reporting the
-actual `(card, side, note)` occurrences that would ship and the occurrences
-that would be newly queued (ships in a later run, not this one) — not a
-per-deck count — while performing no writes to `card_slots`, `decks`,
-`Cards[]`, `pending_occurrences`, `occurrence_shipments`, or any card
-content.
+actual `(card, side, note)` occurrences that would become eligible and the
+occurrences that would be newly queued (eligible in a later run, not this
+one) — not a per-deck count — while performing no writes to `card_slots`,
+`decks`, `Cards[]`, `pending_occurrences`, `occurrence_shipments`,
+`staged_occurrences`, or any card content. Because becoming eligible no
+longer means shipping immediately (occurrence-shipment-windowing), each
+eligible entry SHALL also report whether this run's flush would actually
+ship it or merely stage-and-hold it, and the per-deck report SHALL surface
+each deck's staged-before-this-run/would-flush/would-hold counts so an
+operator can't mistake "eligible" for "ships today."
 
 #### Scenario: Forecast after a real publish
 - **WHEN** the operator views the forecast immediately after a run that
   published everything currently eligible
-- **THEN** no occurrences appear in the "would ship" list, matching the real
-  run's outcome
+- **THEN** no occurrences appear in the "would become eligible" list,
+  matching the real run's outcome
 
-#### Scenario: Forecast distinguishes shipping from queuing
+#### Scenario: Forecast distinguishes becoming eligible from queuing
 - **WHEN** the forecast includes a newly-eligible word-type note
-- **THEN** its `A` occurrence appears in the "would ship" list and its `E`
+- **THEN** its `A` occurrence appears in the eligible list and its `E`
   occurrence appears separately in the "would queue" list
+
+#### Scenario: Forecast distinguishes shipping from staging-and-holding
+- **WHEN** a deck's existing staged count plus what this run would newly
+  stage reaches a multiple of 5
+- **THEN** the eligible entries within that flushed window are reported as
+  actually shipping this run; any entries beyond it are reported as staged
+  and held, not shipping
 
 #### Scenario: Forecast does not mutate state
 - **WHEN** the operator views the forecast any number of times

@@ -81,19 +81,29 @@ export function buildForecastBody(forecast, jobs, batches, batchDetails, activeL
 
   const deckRows = forecast.byDeck
     .map((d) => {
-      const willShip = forecast.wouldShip.filter((o) => o.deckCode === d.deckCode && o.reason === "new card").length;
       const willQueue = forecast.wouldQueue.filter((o) => o.deckCode === d.deckCode).length;
       return `<tr>
         <td class="mono">${escapeHtml(d.deckCode)}</td>
         <td class="num">${d.newlyEligibleCount}</td>
-        <td>${willShip ? `${willShip}× A` : "—"}</td>
+        <td>${d.wouldFlushCount ? `${d.wouldFlushCount}` : "—"}</td>
+        <td>${d.wouldHoldCount ? `${d.wouldHoldCount}` : "—"}</td>
         <td>${willQueue ? `${willQueue}× E (@11)` : "—"}</td>
         <td class="num">${d.pendingQueueDepth}</td>
       </tr>`;
     })
     .join("\n");
 
-  const shipRows = forecast.wouldShip.map((o) => occurrenceRow(o, { withReason: true })).join("\n");
+  // builder-sliding-window-shipping (task 3.1): eligible ≠ ships today —
+  // split into what the flush step would actually append to Cards[] this
+  // run vs. what gets (re)staged and held short of the next multiple of 5.
+  const shipRows = forecast.wouldShip
+    .filter((o) => o.willShipThisRun)
+    .map((o) => occurrenceRow(o, { withReason: true }))
+    .join("\n");
+  const heldRows = forecast.wouldShip
+    .filter((o) => !o.willShipThisRun)
+    .map((o) => occurrenceRow(o, { withReason: true }))
+    .join("\n");
   const queueRows = forecast.wouldQueue
     .map(
       (o) => `<tr>
@@ -151,10 +161,11 @@ ${renderActiveLogicBundleBanner(activeLogicBundle)}
   <div class="panel-head"><h3>Would publish this run — by deck</h3></div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Deck</th><th>New notes</th><th>Will ship</th><th>Will queue</th><th>Queue depth now</th></tr></thead>
-      <tbody>${deckRows || `<tr><td colspan="5">no eligible notes pulled</td></tr>`}</tbody>
+      <thead><tr><th>Deck</th><th>New notes</th><th>Will flush</th><th>Will hold</th><th>Will queue</th><th>Queue depth now</th></tr></thead>
+      <tbody>${deckRows || `<tr><td colspan="6">no eligible notes pulled</td></tr>`}</tbody>
     </table>
   </div>
+  <div class="inline-note" style="margin:0 18px 14px;">A deck only ever flushes into Cards[] in multiples of 5 (builder-sliding-window-shipping) — "Will flush" is what this run's publish would actually append; "Will hold" is staged but short of the next multiple of 5, carried forward to a later run.</div>
 </div>
 
 <div class="panel">
@@ -165,7 +176,18 @@ ${renderActiveLogicBundleBanner(activeLogicBundle)}
       <tbody>${shipRows || `<tr><td colspan="5">nothing would ship right now</td></tr>`}</tbody>
     </table>
   </div>
-  <div class="inline-note" style="margin:0 18px 14px;">A new card's <strong>A</strong> ships the run it's minted. Its <strong>E</strong> doesn't — it ships whenever the queue drains, which can be many batches later. The two rarely land in the same batch, which is why this list is occurrences, not cards.</div>
+  <div class="inline-note" style="margin:0 18px 14px;">A new card's <strong>A</strong> becomes eligible the run it's minted. Its <strong>E</strong> doesn't — it becomes eligible whenever the D91 queue drains, which can be many batches later. Either way, it only actually ships once its deck's staged count reaches a multiple of 5 — see "staged, held" below for what's eligible but not shipping yet.</div>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h3>Newly staged, held this batch <span class="pill pill-neutral" style="margin-left:8px;">short of a multiple of 5</span></h3></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Card</th><th>Side</th><th>Deck</th><th>Note</th><th>Reason</th></tr></thead>
+      <tbody>${heldRows || `<tr><td colspan="5">nothing newly staged would be held</td></tr>`}</tbody>
+    </table>
+  </div>
+  <div class="inline-note" style="margin:0 18px 14px;">Eligible this run, but this deck's total staged count (existing + new) doesn't reach the next multiple of 5 — stays staged until a future run's eligible notes push it over.</div>
 </div>
 
 <div class="panel">

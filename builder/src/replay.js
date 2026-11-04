@@ -15,6 +15,15 @@ import { getAll as getAllCardContent } from "./cardContent.js";
 // replay and mint are already two separate steps within one run, not a
 // gap). `pending_occurrences` needs no replay step of its own — it's
 // already durable DB state, read live by `drainThenQueue` exactly as before.
+//
+// builder-sliding-window-shipping: a card whose occurrences are all still
+// sitting in `staged_occurrences` (eligible, held — not yet flushed into
+// `Cards[]`/`occurrence_shipments`) must ALSO be recreated into
+// `model.cards` here — otherwise every subsequent run's "is this card
+// already in the model?" self-heal check (pipeline.js) sees it as missing
+// and re-stages its occurrences from scratch, duplicating what's already
+// staged. Its occurrence itself must NOT be appended to `deck.Cards[]` —
+// that only happens once the flush step actually ships it.
 export async function replay(pool, model) {
   const { rows: shipments } = await pool.query(
     `SELECT os.card_id, os.letter, cs.deck_code
@@ -22,7 +31,12 @@ export async function replay(pool, model) {
      JOIN card_slots cs ON cs.id = os.card_id
      ORDER BY os.id ASC`
   );
-  if (shipments.length === 0) return;
+  const { rows: staged } = await pool.query(
+    `SELECT DISTINCT so.card_id, cs.deck_code
+     FROM staged_occurrences so
+     JOIN card_slots cs ON cs.id = so.card_id`
+  );
+  if (shipments.length === 0 && staged.length === 0) return;
 
   const contentByCard = await getAllCardContent(pool);
   const titleByDeck = new Map();
@@ -37,28 +51,35 @@ export async function replay(pool, model) {
   }
 
   const created = new Set();
+  function recreateCard(cardId, deckCode) {
+    if (created.has(cardId)) return;
+    const content = contentByCard.get(cardId);
+    if (!content) {
+      // card_content is written at the exact same mint-time step that
+      // puts a card's first occurrence into the shipment/staging table —
+      // this combination means an upstream write path is broken, not a
+      // recoverable runtime condition.
+      throw new Error(`card "${cardId}" has a shipped or staged occurrence but no card_content row — data corruption`);
+    }
+    createCard(model.cards, {
+      id: cardId,
+      deckId: deckCode,
+      N: content.N,
+      E: content.E,
+      D: titleByDeck.get(deckCode),
+      X: content.X,
+      A: content.A,
+    });
+    created.add(cardId);
+  }
+
   for (const { card_id: cardId, letter, deck_code: deckCode } of shipments) {
     const deck = await ensureDeckByCode(deckCode);
-    if (!created.has(cardId)) {
-      const content = contentByCard.get(cardId);
-      if (!content) {
-        // card_content is written at the exact same mint-time step that
-        // puts a card's first occurrence into the shipment log — this
-        // combination means an upstream write path is broken, not a
-        // recoverable runtime condition.
-        throw new Error(`card "${cardId}" has a shipped occurrence but no card_content row — data corruption`);
-      }
-      createCard(model.cards, {
-        id: cardId,
-        deckId: deckCode,
-        N: content.N,
-        E: content.E,
-        D: titleByDeck.get(deckCode),
-        X: content.X,
-        A: content.A,
-      });
-      created.add(cardId);
-    }
+    recreateCard(cardId, deckCode);
     addOccurrence(deck, cardId, letter);
+  }
+  for (const { card_id: cardId, deck_code: deckCode } of staged) {
+    await ensureDeckByCode(deckCode);
+    recreateCard(cardId, deckCode);
   }
 }
