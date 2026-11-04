@@ -157,6 +157,7 @@ const NAV = [
       { href: "/mjolnir/builder/forecast", label: "Forecast & publish" },
       { href: "/mjolnir/builder/schedule", label: "Schedule" },
       { href: "/mjolnir/builder/logs", label: "Run log" },
+      { href: "/mjolnir/decks", label: "Decks" },
     ],
   },
   {

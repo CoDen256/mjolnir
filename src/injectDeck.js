@@ -127,3 +127,15 @@ export function ensureDeck(decks, { name, title, overrides = {} }) {
   decks.push(deck);
   return deck;
 }
+
+// deck-descriptions (D-DD1): a narrow, single-purpose update — touches
+// ONLY `Description` on an already-existing deck, never anything else.
+// Deliberately NOT a generalized "merge overrides into an existing deck"
+// path on `ensureDeck` itself, which would risk exposing every other
+// override key (PullCounter, MaxInterval, ...) to the same already-
+// existing-deck update, corrupting live state `ensureDeck`'s own
+// idempotent-return-untouched contract exists specifically to protect.
+export function syncDeckDescription(decks, name, description) {
+  const deck = decks.find((d) => d.Name === name);
+  if (deck && description !== undefined) deck.Description = description;
+}

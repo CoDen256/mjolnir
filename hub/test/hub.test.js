@@ -5,7 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { migrate } from "../src/migrate.js";
 import { getPool, closePool } from "../src/db.js";
-import { DECK_ALLOCATION } from "../src/decks.js";
+import { DECK_ALLOCATION, seedDecks, listDecks, updateDeckDescription } from "../src/decks.js";
 import { listPublications, writePublication, updateLabel, deleteBuild } from "../src/publications.js";
 import { cardsList } from "../src/cards.js";
 import { createServer } from "../src/server.js";
@@ -38,25 +38,36 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
   };
 
   await t.test("seeding decks is idempotent and matches the allocation table", async () => {
-    for (const { code, title } of DECK_ALLOCATION) {
-      await pool.query(
-        `INSERT INTO decks (code, title, category) VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
-        [code, title, code[0]]
-      );
-    }
+    await seedDecks();
     const { rows } = await pool.query("SELECT code FROM decks ORDER BY code");
     assert.deepEqual(rows.map((r) => r.code), DECK_ALLOCATION.map((d) => d.code).sort());
 
     // Re-seeding must not clobber an operator-edited pacing knob.
     await pool.query("UPDATE decks SET max_interval = 99 WHERE code = 'C20'");
-    for (const { code, title } of DECK_ALLOCATION) {
-      await pool.query(
-        `INSERT INTO decks (code, title, category) VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
-        [code, title, code[0]]
-      );
-    }
+    await seedDecks();
     const { rows: after } = await pool.query("SELECT max_interval FROM decks WHERE code = 'C20'");
     assert.equal(after[0].max_interval, 99);
+  });
+
+  await t.test("deck-descriptions: seedDecks writes each deck's real description, never overwrites an edited one on re-seed", async () => {
+    // C29 (Grammar), untouched by the earlier pacing-knob test above, so
+    // this test's own blast radius stays isolated.
+    const seeded = await listDecks();
+    const c29 = seeded.find((d) => d.code === "C29");
+    const expected = DECK_ALLOCATION.find((d) => d.code === "C29").description;
+    assert.ok(expected, "sanity: DECK_ALLOCATION must carry a real, non-empty description");
+    assert.equal(c29.description, expected, "an already-seeded deck carries its real description, not blank");
+
+    await updateDeckDescription("C29", "operator's own custom text");
+    await seedDecks();
+    const afterReseed = await listDecks();
+    assert.equal(
+      afterReseed.find((d) => d.code === "C29").description,
+      "operator's own custom text",
+      "re-seeding must never clobber an operator-edited description"
+    );
+
+    await assert.rejects(() => updateDeckDescription("C99-nonexistent", "x"), /no such deck/);
   });
 
   await t.test("card_slots enforces a 6-character id and unique (deck_code, card_no)", async () => {

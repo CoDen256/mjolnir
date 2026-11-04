@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createCard, interleaveOccurrences, upsertCardContent, ensureDeck } from "../../src/injectDeck.js";
+import { createCard, interleaveOccurrences, upsertCardContent, ensureDeck, syncDeckDescription } from "../../src/injectDeck.js";
 import { fixtureDecks, fixtureCards } from "../fixtures/deckCardFixture.js";
 
 test("createCard inserts a new card keyed by an externally-supplied id", () => {
@@ -125,4 +125,37 @@ test("ensureDeck accepts overrides for the deck defaults", () => {
   const deck = ensureDeck(decks, { name: "C27", title: "Listening", overrides: { MaxInterval: 20 } });
   assert.equal(deck.MaxInterval, 20);
   assert.equal(deck.AutoTickStreak, 1);
+});
+
+test("ensureDeck: a brand-new deck gets a real Description when passed as an override, not blank", () => {
+  const decks = [];
+  const deck = ensureDeck(decks, { name: "C30", title: "Lexic", overrides: { Description: "Vocabulary." } });
+  assert.equal(deck.Description, "Vocabulary.");
+});
+
+test("ensureDeck: Description defaults to empty string when no override is given", () => {
+  const decks = [];
+  const deck = ensureDeck(decks, { name: "C20", title: "Substantiv" });
+  assert.equal(deck.Description, "");
+});
+
+test("syncDeckDescription: updates only Description on an already-existing deck, no other field", () => {
+  const decks = [{ Name: "C20", Title: "Substantiv", Description: "", PullCounter: 7, MaxInterval: 10 }];
+  syncDeckDescription(decks, "C20", "Nouns.");
+  assert.equal(decks[0].Description, "Nouns.");
+  assert.equal(decks[0].PullCounter, 7, "PullCounter must never be touched");
+  assert.equal(decks[0].MaxInterval, 10, "MaxInterval must never be touched");
+  assert.equal(decks[0].Title, "Substantiv", "Title must never be touched");
+});
+
+test("syncDeckDescription: a nonexistent deck name is a silent no-op, not an error", () => {
+  const decks = [{ Name: "C20", Description: "" }];
+  assert.doesNotThrow(() => syncDeckDescription(decks, "C99-nonexistent", "x"));
+  assert.equal(decks.length, 1, "no deck is created as a side effect");
+});
+
+test("syncDeckDescription: an undefined description leaves the existing value untouched", () => {
+  const decks = [{ Name: "C20", Description: "already set" }];
+  syncDeckDescription(decks, "C20", undefined);
+  assert.equal(decks[0].Description, "already set");
 });

@@ -60,8 +60,13 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
   await pool.query(
     "TRUNCATE card_slots, publications, build_jobs, minted_notes, decks, pending_occurrences, occurrence_shipments, job_logs, logic_bundles, card_content CASCADE"
   );
-  for (const { code, title } of DECK_ALLOCATION) {
-    await pool.query("INSERT INTO decks (code, title, category) VALUES ($1, $2, $3)", [code, title, code[0]]);
+  for (const { code, title, description } of DECK_ALLOCATION) {
+    await pool.query("INSERT INTO decks (code, title, category, description) VALUES ($1, $2, $3, $4)", [
+      code,
+      title,
+      code[0],
+      description || "",
+    ]);
   }
 
   // The publish guards (tool/src/otaPublish.js) require the magic activation
@@ -170,6 +175,9 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     const model = outputModel(result.buildId);
     const deck = model.decks.find((d) => d.Name === "C20");
     assert.ok(deck, "C20 deck should have been created in the bundle");
+    // deck-descriptions: a brand-new deck gets its real description baked
+    // in, not left blank the way every custom deck used to be.
+    assert.equal(deck.Description, "Nouns.", "a freshly-created deck gets its real description, not blank");
     // word -> occurrences ["A","E"] (D91 drops "N"); the 4 new A's are staged
     // (builder-sliding-window-shipping), but 4 isn't a multiple of 5 — none
     // flush into Cards[] yet, even though nothing queues them either.
@@ -382,6 +390,15 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     const queued = await pendingRows("C24");
     assert.equal(queued.length, 2);
     assert.ok(queued.every((r) => r.letter === "E" && r.remaining === 11));
+
+    // deck-descriptions: C24 was freshly created this run with its real
+    // seeded description.
+    assert.equal(model.decks.find((d) => d.Name === "C24").Description, "Prepositions.");
+
+    // Simulate the operator editing C24's description in hub's console
+    // between this run and the next — the NEXT test confirms this reaches
+    // the bundle, without touching PullCounter/MaxInterval (D-DD1).
+    await pool.query("UPDATE decks SET description = 'Updated by the operator.' WHERE code = 'C24'");
   });
 
   await t.test("C24: a subsequent run with 1 new note decrements the existing pending rows and queues the new one fresh", async () => {
@@ -416,6 +433,15 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     assert.equal(queued.length, 3);
     const byRemaining = queued.map((r) => r.remaining).sort((a, b) => a - b);
     assert.deepEqual(byRemaining, [10, 10, 11], "p1/p2 decremented to 10 by this run's one new A; p3 queued fresh at 11");
+
+    // deck-descriptions (task 2.4): C24 already existed before this run —
+    // its description (edited in hub between the two runs) must reach the
+    // bundle on this, the next publish that touches it, with no other
+    // field disturbed.
+    const c24 = model.decks.find((d) => d.Name === "C24");
+    assert.equal(c24.Description, "Updated by the operator.", "an already-existing deck's description updates on its next publish");
+    assert.equal(c24.PullCounter, 0, "PullCounter must never be touched by a description sync");
+    assert.equal(c24.MaxInterval, 10, "MaxInterval must never be touched by a description sync");
   });
 
   await t.test("C24: enough cumulative new cards cross 11 and drain only the oldest E's", async () => {

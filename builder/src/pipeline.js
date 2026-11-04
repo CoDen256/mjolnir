@@ -1,10 +1,10 @@
 import { loadDeckCardModel, saveDeckCardModel, addOccurrence } from "../../src/deckData.js";
-import { createCard, upsertCardContent, ensureDeck } from "../../src/injectDeck.js";
+import { createCard, upsertCardContent, ensureDeck, syncDeckDescription } from "../../src/injectDeck.js";
 import { publish, restampCompanionBuildId } from "../../tool/src/otaPublish.js";
 import { pullNotes, filterAudioEligible } from "./stabburClient.js";
 import { partitionByDeck } from "./eligibility.js";
 import { project } from "./projector.js";
-import { mintCardSlots, cardIdsForNotes, updateAudioSha256, allCardAudio, deckTitle } from "./mint.js";
+import { mintCardSlots, cardIdsForNotes, updateAudioSha256, allCardAudio, deckTitle, deckDescription } from "./mint.js";
 import { queuePendingOccurrence, hasPendingOccurrence, drainPendingOccurrences, pendingQueueDepths } from "./pendingOccurrences.js";
 import { stageOccurrence, stagedCount, flushShippable, peekStaged } from "./stagedOccurrences.js";
 import { recordShipments } from "./occurrenceShipments.js";
@@ -93,9 +93,11 @@ async function drainThenQueue(pool, deckCode, newACount, toQueue) {
 // `occurrence-shipment-log`'s MODIFIED delta). Logs instead, no other
 // action, when the deck has staged occurrences but not enough to reach the
 // next multiple of 5 yet.
-async function flushDeck(pool, model, deckCode, deckTitleCache, shipments, log, buildJobId) {
+async function flushDeck(pool, model, deckCode, deckTitleCache, deckDescriptionCache, shipments, log, buildJobId) {
   if (!deckTitleCache.has(deckCode)) deckTitleCache.set(deckCode, await deckTitle(pool, deckCode));
   const deck = ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
+  if (!deckDescriptionCache.has(deckCode)) deckDescriptionCache.set(deckCode, await deckDescription(pool, deckCode));
+  syncDeckDescription(model.decks, deckCode, deckDescriptionCache.get(deckCode));
   // The deck's REAL current total matters, not just what's sitting staged —
   // see stagedOccurrences.js's flushShippable for why (a deck that was
   // already off the 5-grid before this mechanism existed needs the target
@@ -340,9 +342,13 @@ export async function runPublish(
     const existingContentBeforeRegen = await getAllCardContent(pool);
     const changedCardIds = [];
     const deckTitleCache = new Map();
+    const deckDescriptionCache = new Map();
     async function ensureDeckByCode(deckCode) {
       if (!deckTitleCache.has(deckCode)) deckTitleCache.set(deckCode, await deckTitle(pool, deckCode));
-      return ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
+      const deck = ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
+      if (!deckDescriptionCache.has(deckCode)) deckDescriptionCache.set(deckCode, await deckDescription(pool, deckCode));
+      syncDeckDescription(model.decks, deckCode, deckDescriptionCache.get(deckCode));
+      return deck;
     }
     const selMsByCardId = {};
     // builder-sliding-window-shipping (D-W2): every deck touched by either
@@ -387,6 +393,8 @@ export async function runPublish(
       const title = await deckTitle(pool, deckCode);
       deckTitleCache.set(deckCode, title);
       ensureDeck(model.decks, { name: deckCode, title });
+      if (!deckDescriptionCache.has(deckCode)) deckDescriptionCache.set(deckCode, await deckDescription(pool, deckCode));
+      syncDeckDescription(model.decks, deckCode, deckDescriptionCache.get(deckCode));
       touchedDeckCodes.add(deckCode);
 
       const minted = await mintCardSlots(pool, deckCode, notes);
@@ -414,7 +422,7 @@ export async function runPublish(
     // every deck — ships the largest multiple of 5 each deck currently
     // holds, logs and holds the remainder otherwise.
     for (const deckCode of touchedDeckCodes) {
-      await flushDeck(pool, model, deckCode, deckTitleCache, shipments, log, buildJobId);
+      await flushDeck(pool, model, deckCode, deckTitleCache, deckDescriptionCache, shipments, log, buildJobId);
     }
 
     saveDeckCardModel(scratchPath, model);

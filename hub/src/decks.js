@@ -5,16 +5,16 @@ import { query } from "./db.js";
 // bundle deck entry is created once, lazily, by `ensureDeck` (D-P1) the
 // first time `builder` mints a card into it.
 export const DECK_ALLOCATION = [
-  { code: "C20", title: "Substantiv" },
-  { code: "C21", title: "Adjektiv" },
-  { code: "C22", title: "Verb" },
-  { code: "C23", title: "Adverb" },
-  { code: "C24", title: "Preposisjon" },
-  { code: "C25", title: "Konjunksjon/Subjunksjon" },
-  { code: "C26", title: "Expression" }, // type=expression, or any unmapped pos
-  { code: "C27", title: "Listening" },
-  { code: "C28", title: "Pronunciation" },
-  { code: "C29", title: "Grammar" },
+  { code: "C20", title: "Substantiv", description: "Nouns." },
+  { code: "C21", title: "Adjektiv", description: "Adjectives." },
+  { code: "C22", title: "Verb", description: "Verbs." },
+  { code: "C23", title: "Adverb", description: "Adverbs." },
+  { code: "C24", title: "Preposisjon", description: "Prepositions." },
+  { code: "C25", title: "Konjunksjon/Subjunksjon", description: "Conjunctions and subjunctions." },
+  { code: "C26", title: "Expression", description: "Fixed expressions and phrases." }, // type=expression, or any unmapped pos
+  { code: "C27", title: "Listening", description: "Listening comprehension." },
+  { code: "C28", title: "Pronunciation", description: "Pronunciation practice." },
+  { code: "C29", title: "Grammar", description: "Grammar rules and usage." },
 ];
 
 // Task 3.3. "Fixed catalog data" (13-operator-console-ux.md) — safe to
@@ -23,12 +23,25 @@ export const DECK_ALLOCATION = [
 // ON CONFLICT DO NOTHING so a re-run never clobbers an operator-edited
 // pacing knob for a deck that already exists.
 export async function seedDecks() {
-  for (const { code, title } of DECK_ALLOCATION) {
+  for (const { code, title, description } of DECK_ALLOCATION) {
     await query(
-      `INSERT INTO decks (code, title, category) VALUES ($1, $2, $3)
+      `INSERT INTO decks (code, title, category, description) VALUES ($1, $2, $3, $4)
        ON CONFLICT (code) DO NOTHING`,
-      [code, title, code[0]]
+      [code, title, code[0], description || ""]
     );
   }
   return DECK_ALLOCATION.length;
+}
+
+// Task 1.3: the operator's own edit affordance (same pattern as
+// `publications.js`'s `updateLabel`) — independent of `seedDecks`'
+// ON CONFLICT DO NOTHING, which never touches an already-existing row.
+export async function updateDeckDescription(code, description) {
+  const { rowCount } = await query("UPDATE decks SET description = $1 WHERE code = $2", [description, code]);
+  if (rowCount === 0) throw new Error(`no such deck "${code}"`);
+}
+
+export async function listDecks() {
+  const { rows } = await query("SELECT code, title, category, description FROM decks ORDER BY code");
+  return rows;
 }

@@ -79,3 +79,11 @@ export async function deckTitle(pool, deckCode) {
   if (rows.length === 0) throw new Error(`deck "${deckCode}" not found in hub's decks table — was it seeded?`);
   return rows[0].title;
 }
+
+// deck-descriptions (D-DD2): mirrors `deckTitle` exactly — same source of
+// truth, same shape, same "not found" guard.
+export async function deckDescription(pool, deckCode) {
+  const { rows } = await pool.query("SELECT description FROM decks WHERE code = $1", [deckCode]);
+  if (rows.length === 0) throw new Error(`deck "${deckCode}" not found in hub's decks table — was it seeded?`);
+  return rows[0].description;
+}

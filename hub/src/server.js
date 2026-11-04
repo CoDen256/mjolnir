@@ -15,7 +15,7 @@ import {
 import { findBakedBaseVersion, findBakedPatchRev } from "../../tool/src/otaPublish.js";
 import { list as listLogicBundles } from "./logicBundles.js";
 import { cardsList, stripHtml, getCardSlot } from "./cards.js";
-import { DECK_ALLOCATION } from "./decks.js";
+import { DECK_ALLOCATION, listDecks, updateDeckDescription } from "./decks.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
 import { slugify } from "./slug.js";
@@ -164,6 +164,51 @@ document.querySelectorAll('.delete-build-btn').forEach((btn) => {
     const buildId = btn.dataset.buildId;
     if (!confirm('Delete ' + buildId + ' from history? This does not affect the device unless it is the current build (blocked if so).')) return;
     const res = await fetch('/mjolnir/ota/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ buildId }) });
+    if (res.ok) location.reload(); else alert('error: ' + (await res.json()).error);
+  });
+});
+</script>`,
+  });
+}
+
+// ---- Decks ----
+
+// deck-descriptions (task 1.3): the operator's own edit affordance for the
+// on-device deck `Description` field builder now bakes in — same
+// edit-label pattern the publish history page already uses.
+function renderDecksPage(decks) {
+  const rows = decks
+    .map(
+      (d) => `<tr>
+        <td class="mono">${escapeHtml(d.code)}</td>
+        <td>${escapeHtml(d.title)}</td>
+        <td class="wrap">${escapeHtml(d.description || "")}</td>
+        <td><button class="btn-ghost edit-description-btn" data-code="${escapeHtml(d.code)}">edit description</button></td>
+      </tr>`
+    )
+    .join("\n");
+
+  return renderShell({
+    title: "mjolnir / hub — decks",
+    activeHref: "/mjolnir/decks",
+    body: `
+<div class="page-head"><div><h2>Decks</h2><div class="page-sub">Every deck's title/description baked into the published bundle's on-device deck list.</div></div></div>
+<div class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Code</th><th>Title</th><th>Description</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4">no decks seeded yet</td></tr>`}</tbody>
+    </table>
+  </div>
+</div>
+<div class="inline-note">A description change takes effect on that deck's next publish — the same regenerate-on-every-publish step that already refreshes card content.</div>
+<script>
+document.querySelectorAll('.edit-description-btn').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const code = btn.dataset.code;
+    const description = prompt('New description for ' + code + ':');
+    if (description === null) return;
+    const res = await fetch('/mjolnir/decks/api/description', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, description }) });
     if (res.ok) location.reload(); else alert('error: ' + (await res.json()).error);
   });
 });
@@ -928,6 +973,15 @@ export function createServer(pool, config) {
         const body = buildLogsBody(jobs, selectedJob, logLines, "/mjolnir/builder/logs");
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         return res.end(renderShell({ title: "mjolnir / hub — run log", activeHref: "/mjolnir/builder/logs", body }));
+      }
+      if (req.method === "GET" && url.pathname === "/mjolnir/decks") {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end(renderDecksPage(await listDecks()));
+      }
+      if (req.method === "POST" && url.pathname === "/mjolnir/decks/api/description") {
+        const { code, description } = await readJson(req);
+        await updateDeckDescription(code, description);
+        return sendJson(res, 200, { ok: true });
       }
 
       // /mjolnir/ui is the canonical entry point, matching stabbur's own
