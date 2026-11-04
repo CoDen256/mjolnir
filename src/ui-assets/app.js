@@ -738,6 +738,78 @@ let companionsDefaultApplied = false;
 // the original path-based flow."
 let assembleEmbedded = false;
 
+// generic-placeholder-substitution (D-G4): one ordered list of {key, value}
+// rows, replacing the old fixed set of named fields. Pre-filled on first
+// load with the keys this project's own patches already rely on — BUILD_ID
+// (blank; moot in embedded mode, where hub always assigns its own build id
+// at submit time, but harmless to leave an unused row), SYNC_BASE_URL/
+// SYNC_TOKEN/AUDIO_BASE_URL (blank — same "leave blank to use the server's
+// own default" behavior the old dedicated fields had). BASE_VERSION is
+// never a row here — it's always read from the base folder's own
+// apktool.yml (D-G2), never operator-editable.
+let assemblePlaceholders = [
+  { key: "BUILD_ID", value: "" },
+  { key: "SYNC_BASE_URL", value: "" },
+  { key: "SYNC_TOKEN", value: "" },
+  { key: "AUDIO_BASE_URL", value: "" },
+];
+let assemblePlaceholdersInitialized = false;
+
+function renderAssemblePlaceholders() {
+  const container = el("assemble-placeholders-list");
+  container.innerHTML = "";
+  assemblePlaceholders.forEach((row, idx) => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "field-grid";
+
+    const keyLabel = document.createElement("label");
+    keyLabel.textContent = "Key";
+    const keyInput = document.createElement("input");
+    keyInput.type = "text";
+    keyInput.value = row.key;
+    keyInput.placeholder = "e.g. LABEL";
+    keyInput.addEventListener("input", () => {
+      row.key = keyInput.value.trim().toUpperCase();
+    });
+    keyLabel.appendChild(keyInput);
+
+    const isSecret = /TOKEN|SECRET/.test(row.key);
+    const valueLabel = document.createElement("label");
+    valueLabel.textContent = "Value";
+    const valueInput = document.createElement("input");
+    valueInput.type = isSecret ? "password" : "text";
+    valueInput.value = row.value;
+    valueInput.placeholder = isSecret
+      ? "(default from OPERATOR_AUTH_TOKEN, if configured)"
+      : row.key.endsWith("_URL")
+        ? "(default from TUN_PUBLIC_BASE, if configured)"
+        : "";
+    valueInput.addEventListener("input", () => {
+      row.value = valueInput.value;
+    });
+    valueLabel.appendChild(valueInput);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.textContent = "Remove";
+    removeBtn.addEventListener("click", () => {
+      assemblePlaceholders = assemblePlaceholders.filter((r) => r !== row);
+      renderAssemblePlaceholders();
+    });
+
+    rowEl.append(keyLabel, valueLabel, removeBtn);
+    container.appendChild(rowEl);
+  });
+}
+
+function assemblePlaceholdersAsObject() {
+  const out = {};
+  for (const { key, value } of assemblePlaceholders) {
+    if (key && value.trim()) out[key] = value.trim();
+  }
+  return out;
+}
+
 async function detectAssembleMode() {
   try {
     const res = await fetch("/mjolnir/ota/assemble-defaults");
@@ -761,27 +833,28 @@ async function loadAssembleView() {
       `activate it from /mjolnir/ota when ready.`;
     el("assemble-patch-rev-hint").textContent =
       `optional — auto-incremented to ${defaults.nextPatchRev} (the next global patch_rev) if left blank`;
-    el("assemble-sync-base-url-hint").textContent = defaults.syncBaseUrlConfigured
-      ? "configured on this server — leave blank to use it"
-      : "not configured on this server (TUN_PUBLIC_BASE unset) — required here if a selected patch/companion bakes __MJOLNIR_SYNC_BASE_URL__";
-    el("assemble-sync-token-hint").textContent = defaults.syncTokenConfigured
-      ? "configured on this server — leave blank to use it"
-      : "not configured on this server (OPERATOR_AUTH_TOKEN unset) — required here if a selected patch/companion bakes __MJOLNIR_SYNC_TOKEN__";
-    el("assemble-audio-base-url-hint").textContent = defaults.audioBaseUrlConfigured
-      ? "configured on this server — leave blank to use it"
-      : "not configured on this server (TUN_PUBLIC_BASE unset) — required here if a selected patch/companion bakes __MJOLNIR_AUDIO_BASE_URL__";
+    el("assemble-placeholders-hint").textContent =
+      `BUILD_ID is ignored here (hub assigns its own at submit time). SYNC_BASE_URL/SYNC_TOKEN/AUDIO_BASE_URL: ` +
+      `${defaults.syncBaseUrlConfigured ? "configured on this server — leave blank to use it" : "not configured (TUN_PUBLIC_BASE unset)"}; ` +
+      `${defaults.syncTokenConfigured ? "token configured — leave blank to use it" : "token not configured (OPERATOR_AUTH_TOKEN unset)"}. ` +
+      `Leave any row blank to use the server's own default, or fill it to override.`;
   } else {
     el("assemble-mode-caption").textContent =
       "Running standalone (no hub reachable) — base folder and output bundle path are required below.";
     el("assemble-patch-rev-hint").textContent =
       "the operator's responsibility — read the current max off /mjolnir/ota's history";
-    el("assemble-sync-base-url-hint").textContent =
-      "blank = use this process's own TUN_PUBLIC_BASE env var, if set — otherwise required if a selected patch/companion bakes __MJOLNIR_SYNC_BASE_URL__";
-    el("assemble-sync-token-hint").textContent =
-      "blank = use this process's own OPERATOR_AUTH_TOKEN env var, if set — otherwise required if a selected patch/companion bakes __MJOLNIR_SYNC_TOKEN__";
-    el("assemble-audio-base-url-hint").textContent =
-      "blank = use this process's own TUN_PUBLIC_BASE env var, if set — otherwise required if a selected patch/companion bakes __MJOLNIR_AUDIO_BASE_URL__";
+    el("assemble-placeholders-hint").textContent =
+      "BUILD_ID is required if a selected patch/companion bakes __MJOLNIR_BUILD_ID__. SYNC_BASE_URL/SYNC_TOKEN/AUDIO_BASE_URL: " +
+      "blank = use this process's own TUN_PUBLIC_BASE/OPERATOR_AUTH_TOKEN env vars, if set — otherwise required if a selected patch/companion bakes the matching placeholder.";
   }
+  if (!assemblePlaceholdersInitialized) {
+    assemblePlaceholdersInitialized = true;
+    renderAssemblePlaceholders();
+  }
+  el("assemble-placeholder-add-btn").onclick = () => {
+    assemblePlaceholders = [...assemblePlaceholders, { key: "", value: "" }];
+    renderAssemblePlaceholders();
+  };
 
   showPatchesDirCaption("assemble-patches-dir-caption");
   patchesCache = await api("GET", "/api/patches");
@@ -908,12 +981,10 @@ async function runAssemble() {
   const companionFiles = assembleCompanionsSelected
     .map((name) => assembleCompanionsCache.find((c) => c.name === name)?.path)
     .filter(Boolean);
-  // Both blank by default — the server falls back to this deployment's own
-  // TUN_PUBLIC_BASE/OPERATOR_AUTH_TOKEN when neither is supplied. Only sent
-  // at all when the operator explicitly typed an override.
-  const syncBaseUrl = el("assemble-sync-base-url").value.trim() || undefined;
-  const syncToken = el("assemble-sync-token").value.trim() || undefined;
-  const audioBaseUrl = el("assemble-audio-base-url").value.trim() || undefined;
+  // generic-placeholder-substitution: a blank row is simply omitted — the
+  // server falls back to its own default for SYNC_BASE_URL/SYNC_TOKEN/
+  // AUDIO_BASE_URL when the key is absent, same as before.
+  const placeholders = assemblePlaceholdersAsObject();
 
   if (assembleEmbedded) {
     try {
@@ -926,9 +997,7 @@ async function runAssemble() {
           companionFiles,
           label: el("assemble-label").value.trim() || undefined,
           patchRev: patchRevRaw ? Number(patchRevRaw) : undefined,
-          syncBaseUrl,
-          syncToken,
-          audioBaseUrl,
+          placeholders,
         }),
       });
       const result = await res.json();
@@ -951,19 +1020,21 @@ async function runAssemble() {
   }
 
   try {
+    // Standalone mode has no hub/database, so unlike embedded mode there's
+    // no server-side patch_rev auto-resolution (D108) — PATCH_REV must come
+    // through the same generic placeholders map as everything else here,
+    // from the dedicated "Patch rev" field above.
+    const standalonePlaceholders = { ...placeholders };
+    if (patchRevRaw) standalonePlaceholders.PATCH_REV = patchRevRaw;
     const result = await api("POST", "/api/assemble", {
       baseFolderPath,
       patchNames: assembleSelected,
       patchbackPairNames: assemblePatchbackPairsSelected,
       outputPath,
       companionFiles,
-      buildId: el("assemble-build-id").value.trim() || undefined,
-      patchRev: patchRevRaw ? Number(patchRevRaw) : undefined,
-      syncBaseUrl,
-      syncToken,
-      audioBaseUrl,
+      placeholders: standalonePlaceholders,
     });
-    resultEl.innerHTML = `Assembled <code>${result.outputPath}</code> — base_version <strong>${result.baseVersion}</strong>, patch_rev <strong>${result.patchRev ?? "(not baked)"}</strong>, ${result.appliedPatches.length} patch(es) applied, ${result.appliedPatchbackPairs.length} patch-back pair(s) applied, ${result.appliedCompanions.length} companion(s) appended.<br>Submit it to hub's OTA console (<code>/mjolnir/ota</code>) when ready, or drag-drop it there by hand.`;
+    resultEl.innerHTML = `Assembled <code>${result.outputPath}</code> — base_version <strong>${result.baseVersion}</strong>, patch_rev <strong>${result.placeholders.PATCH_REV ?? "(not baked)"}</strong>, ${result.appliedPatches.length} patch(es) applied, ${result.appliedPatchbackPairs.length} patch-back pair(s) applied, ${result.appliedCompanions.length} companion(s) appended.<br>Submit it to hub's OTA console (<code>/mjolnir/ota</code>) when ready, or drag-drop it there by hand.`;
     resultEl.classList.remove("hidden");
   } catch (err) {
     errorEl.textContent = err.message;

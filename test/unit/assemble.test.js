@@ -74,12 +74,11 @@ test("assembling from 3 patches against a known base produces one bundle reflect
       patchesDir,
       outputPath,
       companionFiles: [COMPANION_FILE],
-      buildId: "b000099",
-      patchRev: 7,
+      placeholders: { BUILD_ID: "b000099", PATCH_REV: 7 },
     });
 
     assert.equal(result.baseVersion, "1.5.12");
-    assert.equal(result.patchRev, 7);
+    assert.equal(result.placeholders.PATCH_REV, 7);
     assert.deepEqual(result.appliedPatches, ["bump-2042", "bump-1186", "patch-824"]);
     assert.deepEqual(result.appliedCompanions, ["boot-ok-companion"]);
 
@@ -166,8 +165,7 @@ test("assembling with zero patches still produces a byte-faithful copy stamped w
       patchesDir,
       outputPath,
       companionFiles: [COMPANION_FILE],
-      buildId: "b000001",
-      patchRev: 1,
+      placeholders: { BUILD_ID: "b000001", PATCH_REV: 1 },
     });
 
     assert.equal(result.baseVersion, "2.0.0");
@@ -190,8 +188,7 @@ test("multiple companions are all applied, in order — independent of patch ord
       patchesDir,
       outputPath,
       companionFiles: [COMPANION_FILE, secondCompanionPath],
-      buildId: "b000002",
-      patchRev: 3,
+      placeholders: { BUILD_ID: "b000002", PATCH_REV: 3 },
     });
 
     assert.deepEqual(result.appliedCompanions, ["boot-ok-companion", "second-companion"]);
@@ -280,8 +277,7 @@ test("progress-sync-shim: --sync-base-url/--sync-token bake into both a patch-ba
       patchbackPairNames: ["2042-sync-shim"],
       outputPath,
       companionFiles: [restoreCompanionPath],
-      syncBaseUrl: "https://hub.example.net/mjolnir/userdata",
-      syncToken: "s3cret",
+      placeholders: { SYNC_BASE_URL: "https://hub.example.net/mjolnir/userdata", SYNC_TOKEN: "s3cret" },
     });
 
     const moduleOut = moduleSource(outputPath, 2042);
@@ -318,7 +314,7 @@ test("progress-sync-shim: omitting --sync-base-url/--sync-token aborts assembly 
           patchbackPairNames: ["2042-sync-shim"],
           outputPath,
         }),
-      /no syncBaseUrl was given/
+      /no value was given for SYNC_BASE_URL/
     );
   });
 });
@@ -348,7 +344,7 @@ test("audio-link-playback-minimal: --audio-base-url bakes into a patch-back-appl
       patchesDir,
       patchbackPairNames: ["2042-audio-link"],
       outputPath,
-      audioBaseUrl: "https://hub.example.net/audio-by-card",
+      placeholders: { AUDIO_BASE_URL: "https://hub.example.net/audio-by-card" },
     });
 
     const moduleOut = moduleSource(outputPath, 2042);
@@ -383,7 +379,7 @@ test("audio-link-playback-minimal: omitting --audio-base-url aborts assembly whe
           patchbackPairNames: ["2042-audio-link"],
           outputPath,
         }),
-      /no audioBaseUrl was given/
+      /no value was given for AUDIO_BASE_URL/
     );
   });
 });
@@ -406,5 +402,28 @@ test("an unknown patch-back pair name aborts the assembly before the output path
       /no such patch-back pair/
     );
     assert.equal(fs.existsSync(outputPath), false);
+  });
+});
+
+test("generic-placeholder-substitution: a caller-supplied BASE_VERSION is silently overridden by the real computed value (D-G2)", async () => {
+  await withTmpDir(async (dir) => {
+    const baseFolder = makeBaseFolder(dir, "1.5.12");
+    const patchesDir = path.join(dir, "patches");
+    const outputPath = path.join(dir, "out", "assembled.bundle");
+
+    const result = await assembleBundle({
+      baseFolderPath: baseFolder,
+      patchNames: [],
+      patchesDir,
+      outputPath,
+      companionFiles: [COMPANION_FILE],
+      placeholders: { BUILD_ID: "b000003", BASE_VERSION: "9.9.9-not-the-real-one", PATCH_REV: 2 },
+    });
+
+    assert.equal(result.baseVersion, "1.5.12");
+    assert.equal(result.placeholders.BASE_VERSION, "1.5.12");
+    const outBytes = fs.readFileSync(outputPath, "utf8");
+    assert.match(outBytes, /BASE_VERSION = '1\.5\.12'/);
+    assert.ok(!outBytes.includes("9.9.9-not-the-real-one"));
   });
 });

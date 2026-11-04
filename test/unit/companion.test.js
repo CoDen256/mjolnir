@@ -19,7 +19,7 @@ function bundleNoMap() {
 
 test("inserts the companion before the sourcemap comments, after the entry call", () => {
   const out = appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, {
-    buildId: "b000002",
+    placeholders: { BUILD_ID: "b000002" },
     name: "boot-ok",
   }).toString("utf8");
   const entryIdx = out.indexOf("__r(0);");
@@ -32,7 +32,7 @@ test("inserts the companion before the sourcemap comments, after the entry call"
 
 test("substitutes the buildId placeholder", () => {
   const out = appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, {
-    buildId: "b000002",
+    placeholders: { BUILD_ID: "b000002" },
     name: "boot-ok",
   }).toString("utf8");
   assert.ok(out.includes("id='b000002'"));
@@ -41,7 +41,7 @@ test("substitutes the buildId placeholder", () => {
 
 test("leaves the 26-byte activation prefix untouched (D51)", () => {
   const out = appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, {
-    buildId: "b000002",
+    placeholders: { BUILD_ID: "b000002" },
     name: "boot-ok",
   });
   assert.equal(out.subarray(0, 26).toString("utf8"), "var __BUNDLE_START_TIME__=");
@@ -49,35 +49,33 @@ test("leaves the 26-byte activation prefix untouched (D51)", () => {
 
 test("appends at EOF when there is no sourcemap comment", () => {
   const out = appendCompanion(bundleNoMap(), PLACEHOLDER_COMPANION, {
-    buildId: "b000002",
+    placeholders: { BUILD_ID: "b000002" },
     name: "boot-ok",
   }).toString("utf8");
   assert.ok(out.indexOf("__r(824);") < out.indexOf("b000002"));
 });
 
-test("requires a buildId only when the companion uses the placeholder", () => {
+test("requires a value only when the companion uses that placeholder", () => {
   assert.throws(
-    () => appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, { name: "boot-ok" }),
-    /no buildId was given/
+    () => appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, { placeholders: {}, name: "boot-ok" }),
+    /no value was given for BUILD_ID/
   );
-  // A companion without the placeholder needs no buildId.
-  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { name: "debug" }).toString("utf8");
+  // A companion without the placeholder needs no value for it.
+  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { placeholders: {}, name: "debug" }).toString("utf8");
   assert.ok(out.includes("/* no buildId */"));
 });
 
-test("rejects a buildId outside the D48 charset", () => {
+test("rejects a BUILD_ID outside the D48 charset", () => {
   assert.throws(
-    () => appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, { buildId: "bad id!", name: "boot-ok" }),
-    /buildId must match/
+    () => appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, { placeholders: { BUILD_ID: "bad id!" }, name: "boot-ok" }),
+    /BUILD_ID must match/
   );
 });
 
-test("substitutes baseVersion and patchRev placeholders alongside buildId with no interaction", () => {
+test("substitutes BASE_VERSION and PATCH_REV placeholders alongside BUILD_ID with no interaction", () => {
   const companion = "(function(){ var b='__MJOLNIR_BUILD_ID__'; var v='__MJOLNIR_BASE_VERSION__'; var p=__MJOLNIR_PATCH_REV__; })();";
   const out = appendCompanion(bundleWithMap(), companion, {
-    buildId: "b000002",
-    baseVersion: "1.5.12",
-    patchRev: 3,
+    placeholders: { BUILD_ID: "b000002", BASE_VERSION: "1.5.12", PATCH_REV: 3 },
     name: "boot-ok",
   }).toString("utf8");
   assert.ok(out.includes("b='b000002'"));
@@ -86,36 +84,35 @@ test("substitutes baseVersion and patchRev placeholders alongside buildId with n
   assert.ok(!out.includes("__MJOLNIR_"));
 });
 
-test("requires baseVersion/patchRev only when their own placeholder is present", () => {
+test("requires BASE_VERSION/PATCH_REV only when their own placeholder is present", () => {
   assert.throws(
-    () => appendCompanion(bundleWithMap(), "var v='__MJOLNIR_BASE_VERSION__';", { name: "boot-ok" }),
-    /no baseVersion was given/
+    () => appendCompanion(bundleWithMap(), "var v='__MJOLNIR_BASE_VERSION__';", { placeholders: {}, name: "boot-ok" }),
+    /no value was given for BASE_VERSION/
   );
   assert.throws(
-    () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { name: "boot-ok" }),
-    /no patchRev was given/
+    () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { placeholders: {}, name: "boot-ok" }),
+    /no value was given for PATCH_REV/
   );
-  // Neither placeholder present — neither option is required.
-  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { name: "debug" }).toString("utf8");
+  // Neither placeholder present — neither value is required.
+  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { placeholders: {}, name: "debug" }).toString("utf8");
   assert.ok(out.includes("/* no buildId */"));
 });
 
-test("rejects a patchRev that isn't a non-negative integer", () => {
+test("rejects a PATCH_REV that isn't a non-negative integer", () => {
   assert.throws(
-    () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { patchRev: -1, name: "boot-ok" }),
-    /patchRev must be/
+    () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { placeholders: { PATCH_REV: -1 }, name: "boot-ok" }),
+    /PATCH_REV must be/
   );
   assert.throws(
-    () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { patchRev: 1.5, name: "boot-ok" }),
-    /patchRev must be/
+    () => appendCompanion(bundleWithMap(), "var p=__MJOLNIR_PATCH_REV__;", { placeholders: { PATCH_REV: 1.5 }, name: "boot-ok" }),
+    /PATCH_REV must be/
   );
 });
 
-test("progress-sync-shim: substitutes syncBaseUrl/syncToken placeholders in an appended companion", () => {
+test("progress-sync-shim: substitutes SYNC_BASE_URL/SYNC_TOKEN placeholders in an appended companion", () => {
   const companion = "(function(){ var u='__MJOLNIR_SYNC_BASE_URL__'; var t='__MJOLNIR_SYNC_TOKEN__'; })();";
   const out = appendCompanion(bundleWithMap(), companion, {
-    syncBaseUrl: "https://hub.example.net/mjolnir/userdata",
-    syncToken: "s3cret",
+    placeholders: { SYNC_BASE_URL: "https://hub.example.net/mjolnir/userdata", SYNC_TOKEN: "s3cret" },
     name: "progress-sync-restore-companion",
   }).toString("utf8");
   assert.ok(out.includes("u='https://hub.example.net/mjolnir/userdata'"));
@@ -123,25 +120,25 @@ test("progress-sync-shim: substitutes syncBaseUrl/syncToken placeholders in an a
   assert.ok(!out.includes("__MJOLNIR_SYNC_"));
 });
 
-test("progress-sync-shim: requires syncBaseUrl/syncToken only when their own placeholder is present, and validates syncBaseUrl is https://", () => {
+test("progress-sync-shim: requires SYNC_BASE_URL/SYNC_TOKEN only when their own placeholder is present, and validates SYNC_BASE_URL is https://", () => {
   assert.throws(
-    () => appendCompanion(bundleWithMap(), "var u='__MJOLNIR_SYNC_BASE_URL__';", { name: "restore" }),
-    /no syncBaseUrl was given/
+    () => appendCompanion(bundleWithMap(), "var u='__MJOLNIR_SYNC_BASE_URL__';", { placeholders: {}, name: "restore" }),
+    /no value was given for SYNC_BASE_URL/
   );
   assert.throws(
-    () => appendCompanion(bundleWithMap(), "var t='__MJOLNIR_SYNC_TOKEN__';", { name: "restore" }),
-    /no syncToken was given/
+    () => appendCompanion(bundleWithMap(), "var t='__MJOLNIR_SYNC_TOKEN__';", { placeholders: {}, name: "restore" }),
+    /no value was given for SYNC_TOKEN/
   );
   assert.throws(
     () =>
       appendCompanion(bundleWithMap(), "var u='__MJOLNIR_SYNC_BASE_URL__';", {
-        syncBaseUrl: "http://insecure.example.net",
+        placeholders: { SYNC_BASE_URL: "http://insecure.example.net" },
         name: "restore",
       }),
     /must be a bare https:\/\/ URL/
   );
-  // Neither placeholder present — neither option is required.
-  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { name: "debug" }).toString("utf8");
+  // Neither placeholder present — neither value is required.
+  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { placeholders: {}, name: "debug" }).toString("utf8");
   assert.ok(out.includes("/* no buildId */"));
 });
 
@@ -151,8 +148,8 @@ test("progress-sync-shim: substituteBakedPlaceholders bakes both placeholders ac
     "utf8"
   );
   const out = substituteBakedPlaceholders(bundle, {
-    syncBaseUrl: "https://hub.example.net/mjolnir/userdata",
-    syncToken: "s3cret",
+    SYNC_BASE_URL: "https://hub.example.net/mjolnir/userdata",
+    SYNC_TOKEN: "s3cret",
   }).toString("utf8");
   assert.ok(out.includes("'https://hub.example.net/mjolnir/userdata'"));
   assert.ok(out.includes("'s3cret'"));
@@ -165,44 +162,55 @@ test("progress-sync-shim: substituteBakedPlaceholders is a no-op (and needs no o
   assert.equal(out, bundle); // same buffer, not merely equal bytes — confirms the early-return path
 });
 
-test("audio-link-playback-minimal: substitutes the audioBaseUrl placeholder in an appended companion, and across a whole bundle via substituteBakedPlaceholders (D120)", () => {
+test("audio-link-playback-minimal: substitutes the AUDIO_BASE_URL placeholder in an appended companion, and across a whole bundle via substituteBakedPlaceholders (D120)", () => {
   const companion = "(function(){ var u='__MJOLNIR_AUDIO_BASE_URL__'; })();";
   const out = appendCompanion(bundleWithMap(), companion, {
-    audioBaseUrl: "https://hub.example.net/audio-by-card",
+    placeholders: { AUDIO_BASE_URL: "https://hub.example.net/audio-by-card" },
     name: "audio-companion",
   }).toString("utf8");
   assert.ok(out.includes("u='https://hub.example.net/audio-by-card'"));
   assert.ok(!out.includes("__MJOLNIR_AUDIO_BASE_URL__"));
 
   const bundle = Buffer.from("var AUDIO_BASE_URL = '__MJOLNIR_AUDIO_BASE_URL__';\n", "utf8");
-  const whole = substituteBakedPlaceholders(bundle, { audioBaseUrl: "https://hub.example.net/audio-by-card" }).toString(
+  const whole = substituteBakedPlaceholders(bundle, { AUDIO_BASE_URL: "https://hub.example.net/audio-by-card" }).toString(
     "utf8"
   );
   assert.ok(whole.includes("'https://hub.example.net/audio-by-card'"));
 });
 
-test("audio-link-playback-minimal: requires audioBaseUrl only when its own placeholder is present, and validates it's https://", () => {
+test("audio-link-playback-minimal: requires AUDIO_BASE_URL only when its own placeholder is present, and validates it's https://", () => {
   assert.throws(
-    () => appendCompanion(bundleWithMap(), "var u='__MJOLNIR_AUDIO_BASE_URL__';", { name: "audio-companion" }),
-    /no audioBaseUrl was given/
+    () => appendCompanion(bundleWithMap(), "var u='__MJOLNIR_AUDIO_BASE_URL__';", { placeholders: {}, name: "audio-companion" }),
+    /no value was given for AUDIO_BASE_URL/
   );
   assert.throws(
     () =>
       appendCompanion(bundleWithMap(), "var u='__MJOLNIR_AUDIO_BASE_URL__';", {
-        audioBaseUrl: "http://insecure.example.net",
+        placeholders: { AUDIO_BASE_URL: "http://insecure.example.net" },
         name: "audio-companion",
       }),
     /must be a bare https:\/\/ URL/
   );
-  // Neither placeholder present — the option is not required.
-  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { name: "debug" }).toString("utf8");
+  // Neither placeholder present — the value is not required.
+  const out = appendCompanion(bundleWithMap(), PLAIN_COMPANION, { placeholders: {}, name: "debug" }).toString("utf8");
   assert.ok(out.includes("/* no buildId */"));
 });
 
+test("a brand-new, never-before-seen placeholder key substitutes correctly with no code change (proves genericness)", () => {
+  const companion = "(function(){ var l='__MJOLNIR_LABEL__'; var d='__MJOLNIR_DATA_VERSION__'; })();";
+  const out = appendCompanion(bundleWithMap(), companion, {
+    placeholders: { LABEL: "base 0 · logic 0 · data 3", DATA_VERSION: "3" },
+    name: "boot-ok",
+  }).toString("utf8");
+  assert.ok(out.includes("l='base 0 · logic 0 · data 3'"));
+  assert.ok(out.includes("d='3'"));
+  assert.ok(!out.includes("__MJOLNIR_"));
+});
+
 test("refuses to append the same companion twice", () => {
-  const once = appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, { buildId: "b000002", name: "boot-ok" });
+  const once = appendCompanion(bundleWithMap(), PLACEHOLDER_COMPANION, { placeholders: { BUILD_ID: "b000002" }, name: "boot-ok" });
   assert.throws(
-    () => appendCompanion(once, PLACEHOLDER_COMPANION, { buildId: "b000002", name: "boot-ok" }),
+    () => appendCompanion(once, PLACEHOLDER_COMPANION, { placeholders: { BUILD_ID: "b000002" }, name: "boot-ok" }),
     /already present/
   );
 });

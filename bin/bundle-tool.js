@@ -16,6 +16,21 @@ import { publish } from "../tool/src/otaPublish.js";
 
 const program = new Command();
 
+// generic-placeholder-substitution: `--set KEY=VALUE`, repeatable,
+// accumulating into one placeholder map — replaces the old per-placeholder
+// named flags (--build-id, --sync-base-url, etc.) entirely.
+function collectSet(value, previous) {
+  const idx = value.indexOf("=");
+  if (idx === -1) {
+    throw new Error(`--set must be KEY=VALUE, got "${value}"`);
+  }
+  const key = value.slice(0, idx).trim();
+  if (!key) {
+    throw new Error(`--set must have a non-empty KEY, got "${value}"`);
+  }
+  return { ...previous, [key]: value.slice(idx + 1) };
+}
+
 program
   .name("bundle-tool")
   .description("Analyze a Metro production bundle without ever dumping the whole file");
@@ -89,21 +104,14 @@ program
   .description(
     "Append a redeployable JS companion (e.g. patches/js/boot-ok-companion.js) after the bundle entry; no module bytes change"
   )
-  .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if the companion uses it)")
-  .option("--base-version <v>", "base_version to substitute for __MJOLNIR_BASE_VERSION__ (required if the companion uses it)")
-  .option("--patch-rev <n>", "patch_rev to substitute for __MJOLNIR_PATCH_REV__ (required if the companion uses it)")
-  .option("--sync-base-url <url>", "progress-sync-shim: https:// base URL to substitute for __MJOLNIR_SYNC_BASE_URL__ (required if the companion uses it)")
-  .option("--sync-token <token>", "progress-sync-shim: bearer token to substitute for __MJOLNIR_SYNC_TOKEN__ (required if the companion uses it)")
-  .option("--audio-base-url <url>", "audio-link-playback-minimal: https:// base URL to substitute for __MJOLNIR_AUDIO_BASE_URL__ (required if the companion uses it)")
+  .option(
+    "--set <key=value>",
+    "bake __MJOLNIR_<KEY>__ as <value> wherever it appears in the companion's source (repeatable, e.g. --set BUILD_ID=b000123 --set SYNC_BASE_URL=https://example.test)",
+    collectSet,
+    {}
+  )
   .action(async (bundle, outputBundle, companionFile, opts) => {
-    runCompanion(bundle, outputBundle, companionFile, {
-      buildId: opts.buildId,
-      baseVersion: opts.baseVersion,
-      patchRev: opts.patchRev !== undefined ? Number(opts.patchRev) : undefined,
-      syncBaseUrl: opts.syncBaseUrl,
-      syncToken: opts.syncToken,
-      audioBaseUrl: opts.audioBaseUrl,
-    });
+    runCompanion(bundle, outputBundle, companionFile, { placeholders: opts.set });
   });
 
 program
@@ -125,11 +133,12 @@ program
   .option("--patches-dir <dir>", "directory to read patch files from, relative to CWD", "patches")
   .option("--patchback-pairs <names>", "comma-separated, ordered REPLACE patch-back pair names to apply (raw <id>-name.baseline.js/.edited.js files under <patches-dir>/js, e.g. 2176-my-account-build-id — D111)", "")
   .option("--companions <files>", "comma-separated, ordered companion files to APPEND (e.g. patches/js/boot-ok-companion.js,patches/js/config-rotate.js — new top-level code, touches zero existing module bytes)", "")
-  .option("--build-id <id>", "buildId to substitute for __MJOLNIR_BUILD_ID__ (required if any companion uses it)")
-  .option("--patch-rev <n>", "patch_rev to bake in — the operator's responsibility to supply (D-L2's global counter lives in hub's logic_bundles table)")
-  .option("--sync-base-url <url>", "progress-sync-shim: https:// base URL to substitute for __MJOLNIR_SYNC_BASE_URL__ (required if the shim patch or restore companion is included)")
-  .option("--sync-token <token>", "progress-sync-shim: bearer token to substitute for __MJOLNIR_SYNC_TOKEN__ (required if the shim patch or restore companion is included)")
-  .option("--audio-base-url <url>", "audio-link-playback-minimal: https:// base URL to substitute for __MJOLNIR_AUDIO_BASE_URL__ (required if the 1440 patch is included)")
+  .option(
+    "--set <key=value>",
+    "bake __MJOLNIR_<KEY>__ as <value> wherever it appears in any patch/companion (repeatable, e.g. --set BUILD_ID=b000123 --set PATCH_REV=4 --set SYNC_BASE_URL=https://example.test). BASE_VERSION is always read from the base folder's own apktool.yml — any --set BASE_VERSION=... is ignored.",
+    collectSet,
+    {}
+  )
   .action(async (baseFolder, outputBundle, opts) => {
     const patchNames = opts.patches ? opts.patches.split(",").map((s) => s.trim()).filter(Boolean) : [];
     const patchbackPairNames = opts.patchbackPairs
@@ -143,15 +152,11 @@ program
       patchbackPairNames,
       outputPath: outputBundle,
       companionFiles,
-      buildId: opts.buildId,
-      patchRev: opts.patchRev !== undefined ? Number(opts.patchRev) : undefined,
-      syncBaseUrl: opts.syncBaseUrl,
-      syncToken: opts.syncToken,
-      audioBaseUrl: opts.audioBaseUrl,
+      placeholders: opts.set,
     });
     console.log(`assembled ${outputBundle}`);
     console.log(`  base_version  ${result.baseVersion}`);
-    console.log(`  patch_rev     ${result.patchRev ?? "(not baked — no --patch-rev given)"}`);
+    console.log(`  patch_rev     ${result.placeholders.PATCH_REV ?? "(not baked — no --set PATCH_REV=... given)"}`);
     console.log(`  patches (replace, JSON)      ${result.appliedPatches.join(", ") || "(none)"}`);
     console.log(`  patch-back pairs (replace)   ${result.appliedPatchbackPairs.join(", ") || "(none)"}`);
     console.log(`  companions (append)          ${result.appliedCompanions.join(", ") || "(none)"}`);

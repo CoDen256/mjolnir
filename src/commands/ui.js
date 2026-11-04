@@ -966,20 +966,23 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
       method: "POST",
       pattern: /^\/api\/assemble$/,
       handler: async (match, body) => {
-        const {
-          baseFolderPath,
-          patchNames,
-          patchbackPairNames,
-          outputPath,
-          companionFiles,
-          buildId,
-          patchRev,
-          syncBaseUrl,
-          syncToken,
-          audioBaseUrl,
-        } = body || {};
+        const { baseFolderPath, patchNames, patchbackPairNames, outputPath, companionFiles, placeholders } = body || {};
         if (!baseFolderPath) throw new Error("baseFolderPath is required");
         if (!outputPath) throw new Error("outputPath is required");
+        // generic-placeholder-substitution: SYNC_BASE_URL/SYNC_TOKEN/
+        // AUDIO_BASE_URL are the only three keys this server knows how to
+        // default (the same values it already configures for the
+        // device-facing `/mjolnir/userdata/*` routes, per task 4.2's
+        // decision) — so assembling via the workbench doesn't require
+        // retyping values this process already has configured. An explicit
+        // request value (even falsy/empty) still falls back to the default,
+        // matching this route's own prior behavior exactly.
+        const finalPlaceholders = {
+          ...placeholders,
+          SYNC_BASE_URL: placeholders?.SYNC_BASE_URL || defaultSyncBaseUrl(),
+          SYNC_TOKEN: placeholders?.SYNC_TOKEN || process.env.OPERATOR_AUTH_TOKEN || undefined,
+          AUDIO_BASE_URL: placeholders?.AUDIO_BASE_URL || defaultAudioBaseUrl(),
+        };
         const result = await assembleBundle({
           baseFolderPath,
           patchNames: patchNames || [],
@@ -988,21 +991,7 @@ function createRoutes(sessions, { patchesDir, companionsDir, editorCmd }) {
           patchbackDir: companionsDir,
           outputPath,
           companionFiles: companionFiles || [],
-          buildId: buildId || undefined,
-          patchRev: patchRev === undefined || patchRev === null || patchRev === "" ? undefined : Number(patchRev),
-          // progress-sync-shim's `__MJOLNIR_SYNC_BASE_URL__`/
-          // `__MJOLNIR_SYNC_TOKEN__` are the same values this deployment
-          // already configures for the device-facing `/mjolnir/userdata/*`
-          // routes (`hub/src/server.js`'s `USERDATA_PREFIX` block, gated by
-          // the same `OPERATOR_AUTH_TOKEN` per task 4.2's decision) —
-          // default to them here so assembling via the workbench doesn't
-          // require the operator to retype values this process already
-          // has configured; an explicit request value still wins.
-          syncBaseUrl: syncBaseUrl || defaultSyncBaseUrl(),
-          syncToken: syncToken || process.env.OPERATOR_AUTH_TOKEN || undefined,
-          // D120: same reasoning as syncBaseUrl above — no token involved
-          // (the route is plain static/unauthenticated by design).
-          audioBaseUrl: audioBaseUrl || defaultAudioBaseUrl(),
+          placeholders: finalPlaceholders,
         });
         return { status: 201, body: result };
       },

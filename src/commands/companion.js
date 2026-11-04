@@ -11,41 +11,81 @@ import path from "node:path";
 // module dependency; the companion needs none, because it reaches native
 // modules via `globalThis.expo.modules.<Name>`.
 
-const BUILD_ID_RE = /^[A-Za-z0-9._-]{1,64}$/; // D48 — same charset native validates
-const BUILD_ID_PLACEHOLDER = "__MJOLNIR_BUILD_ID__";
+// generic-placeholder-substitution (D-G1): any `__MJOLNIR_<KEY>__` found in a
+// companion's source or an assembled bundle is substituted from a single
+// `placeholders: {[key]: value}` map — no per-key constant, no per-key
+// branch. Validation is by key NAME/SUFFIX convention, not a bespoke check
+// per key: a `_URL`-suffixed key must be a bare `https://` URL (D53 —
+// transport must never be silently downgradable); `BUILD_ID`/`BASE_VERSION`
+// keep the charset native validates (D48); `PATCH_REV` must be a
+// non-negative integer. Everything else is accepted as any non-empty
+// string. Adding a new placeholder (e.g. `LABEL`, `DATA_VERSION`) needs
+// zero changes here or anywhere in the CLI/HTTP/UI layers — just a new key
+// in whatever map the caller already builds.
+const PLACEHOLDER_PATTERN = /__MJOLNIR_([A-Z0-9_]+)__/g;
+const URL_VALUE_RE = /^https:\/\/\S+$/; // D53-style: transport must not be downgradable
+const ID_CHARSET_RE = /^[A-Za-z0-9._-]{1,64}$/; // D48 — same charset native validates
 
-// D-L1: base_version/patch_rev are baked in exactly the same way BUILD_ID
-// is — same placeholder-substitution pass, not a second mechanism. Order
-// matters only in that each is independent: a companion can bake any subset
-// of the three with no interaction between them (task 2.1).
-const BASE_VERSION_RE = /^[A-Za-z0-9._-]{1,64}$/; // same charset reasoning as buildId — it's baked the same way
-const BASE_VERSION_PLACEHOLDER = "__MJOLNIR_BASE_VERSION__";
-const PATCH_REV_PLACEHOLDER = "__MJOLNIR_PATCH_REV__";
+// Every distinct `__MJOLNIR_<KEY>__` key present in `text`, in first-seen
+// order (a Set preserves insertion order in JS, which keeps companion
+// console output and error messages in a stable, predictable sequence).
+function findPlaceholderKeys(text) {
+  const keys = new Set();
+  const re = new RegExp(PLACEHOLDER_PATTERN);
+  let match;
+  while ((match = re.exec(text))) keys.add(match[1]);
+  return keys;
+}
 
-// progress-sync-shim: the device-facing sync base URL/token, baked the same
-// way as the other three placeholders — not hardcoded, so a deployment can
-// point at its own hub without hand-editing either patch file. Exported so
-// `substituteBakedPlaceholders` (below) can apply the exact same
-// placeholders to a patch-back-applied module's source too, not just an
-// appended companion's — `2080-progress-sync-shim.edited.js` carries both,
-// and patch-back has no append-time substitution step of its own.
-export const SYNC_BASE_URL_PLACEHOLDER = "__MJOLNIR_SYNC_BASE_URL__";
-export const SYNC_TOKEN_PLACEHOLDER = "__MJOLNIR_SYNC_TOKEN__";
-const SYNC_BASE_URL_RE = /^https:\/\/\S+$/; // D53-style: transport must not be downgradable
+// D-G1's three convention-based rules, by key name/suffix. Throws on a
+// missing or malformed value; returns the value's final substituted string
+// form on success.
+function validatePlaceholderValue(key, rawValue, label) {
+  if (rawValue === undefined || rawValue === null || rawValue === "") {
+    throw new Error(`${label} contains __MJOLNIR_${key}__ but no value was given for ${key}`);
+  }
+  if (key.endsWith("_URL")) {
+    if (!URL_VALUE_RE.test(rawValue)) {
+      throw new Error(`${key} must be a bare https:// URL with no trailing slash expected by the caller — got '${rawValue}'`);
+    }
+    return String(rawValue);
+  }
+  if (key === "BUILD_ID" || key === "BASE_VERSION") {
+    if (!ID_CHARSET_RE.test(rawValue)) {
+      throw new Error(`${key} must match ${ID_CHARSET_RE} (D48) — got '${rawValue}'`);
+    }
+    return String(rawValue);
+  }
+  if (key === "PATCH_REV") {
+    const n = typeof rawValue === "number" ? rawValue : Number(rawValue);
+    if (!Number.isInteger(n) || n < 0) {
+      throw new Error(`PATCH_REV must be a non-negative integer — got '${rawValue}'`);
+    }
+    return String(n);
+  }
+  return String(rawValue);
+}
 
-// D120: audio-link-playback-minimal's own base URL, baked the exact same
-// way — supersedes D-A2's original "literal string, re-author to change"
-// choice. Also lives only inside a patch-back-applied module
-// (`1440-audio-link-playback.edited.js`), so it needs the same whole-bundle
-// substitution pass as the sync placeholders, not just the per-companion one.
-export const AUDIO_BASE_URL_PLACEHOLDER = "__MJOLNIR_AUDIO_BASE_URL__";
+// Substitutes every `__MJOLNIR_<KEY>__` found in `text` from `placeholders`,
+// validating each per D-G1. A key present in `text` with no matching entry
+// in `placeholders` is still an error — same "contains X but no value was
+// given" failure this project has always had, just reached generically.
+function substitutePlaceholders(text, placeholders, label) {
+  const keys = findPlaceholderKeys(text);
+  let result = text;
+  for (const key of keys) {
+    const value = validatePlaceholderValue(key, placeholders ? placeholders[key] : undefined, label);
+    result = result.split(`__MJOLNIR_${key}__`).join(value);
+  }
+  return result;
+}
 
 // Pure: returns a new Buffer with `companionSource` appended. `name` is used
-// for a sentinel comment that makes re-appending the same companion an error.
-// If the companion contains a given placeholder, the matching option is
-// required and substituted; a placeholder absent from the source means its
-// option is simply ignored.
-export function appendCompanion(bundleBuffer, companionSource, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken, audioBaseUrl, name } = {}) {
+// for a sentinel comment that makes re-appending the same companion an
+// error. Every `__MJOLNIR_<KEY>__` placeholder in the companion's source is
+// substituted from `placeholders`; a key the source doesn't reference is
+// simply ignored, same as before.
+export function appendCompanion(bundleBuffer, companionSource, { placeholders, name } = {}) {
   const sentinel = `/* mjolnir-companion: ${name || "unnamed"} */`;
   const original = bundleBuffer.toString("utf8");
 
@@ -53,38 +93,7 @@ export function appendCompanion(bundleBuffer, companionSource, { buildId, baseVe
     throw new Error(`companion '${name}' is already present in this bundle`);
   }
 
-  let source = companionSource;
-  if (source.includes(BUILD_ID_PLACEHOLDER)) {
-    if (!buildId) {
-      throw new Error(`companion '${name}' contains ${BUILD_ID_PLACEHOLDER} but no buildId was given`);
-    }
-    if (!BUILD_ID_RE.test(buildId)) {
-      throw new Error(`buildId must match ${BUILD_ID_RE} (D48) — got '${buildId}'`);
-    }
-    source = source.split(BUILD_ID_PLACEHOLDER).join(buildId);
-  }
-  if (source.includes(BASE_VERSION_PLACEHOLDER)) {
-    if (!baseVersion) {
-      throw new Error(`companion '${name}' contains ${BASE_VERSION_PLACEHOLDER} but no baseVersion was given`);
-    }
-    if (!BASE_VERSION_RE.test(baseVersion)) {
-      throw new Error(`baseVersion must match ${BASE_VERSION_RE} — got '${baseVersion}'`);
-    }
-    source = source.split(BASE_VERSION_PLACEHOLDER).join(baseVersion);
-  }
-  if (source.includes(PATCH_REV_PLACEHOLDER)) {
-    if (patchRev === undefined || patchRev === null) {
-      throw new Error(`companion '${name}' contains ${PATCH_REV_PLACEHOLDER} but no patchRev was given`);
-    }
-    if (!Number.isInteger(patchRev) || patchRev < 0) {
-      throw new Error(`patchRev must be a non-negative integer — got '${patchRev}'`);
-    }
-    source = source.split(PATCH_REV_PLACEHOLDER).join(String(patchRev));
-  }
-  if (source.includes(SYNC_BASE_URL_PLACEHOLDER) || source.includes(SYNC_TOKEN_PLACEHOLDER) || source.includes(AUDIO_BASE_URL_PLACEHOLDER)) {
-    source = substituteBakedPlaceholdersInText(source, { syncBaseUrl, syncToken, audioBaseUrl }, `companion '${name}'`);
-  }
-
+  const source = substitutePlaceholders(companionSource, placeholders, `companion '${name}'`);
   const block = `\n${sentinel}\n${source.trim()}\n`;
 
   // Insert before the first sourcemap/debugId comment if present, so those stay
@@ -101,64 +110,21 @@ export function appendCompanion(bundleBuffer, companionSource, { buildId, baseVe
   return Buffer.from(result, "utf8");
 }
 
-// Shared by `appendCompanion` (scoped to one companion's own source) and
-// `substituteBakedPlaceholders` (scoped to a whole bundle, for
-// `2080-progress-sync-shim.edited.js`'s and `1440-audio-link-playback.
-// edited.js`'s own copies of these placeholders — patch-back has no
-// append-time substitution step of its own, so those patches' placeholders
-// can only be baked this way, at assemble time).
-function substituteBakedPlaceholdersInText(text, { syncBaseUrl, syncToken, audioBaseUrl }, label) {
-  let result = text;
-  if (result.includes(SYNC_BASE_URL_PLACEHOLDER)) {
-    if (!syncBaseUrl) {
-      throw new Error(`${label} contains ${SYNC_BASE_URL_PLACEHOLDER} but no syncBaseUrl was given`);
-    }
-    if (!SYNC_BASE_URL_RE.test(syncBaseUrl)) {
-      throw new Error(`syncBaseUrl must be a bare https:// URL with no trailing slash expected by the caller — got '${syncBaseUrl}'`);
-    }
-    result = result.split(SYNC_BASE_URL_PLACEHOLDER).join(syncBaseUrl);
-  }
-  if (result.includes(SYNC_TOKEN_PLACEHOLDER)) {
-    if (!syncToken) {
-      throw new Error(`${label} contains ${SYNC_TOKEN_PLACEHOLDER} but no syncToken was given`);
-    }
-    result = result.split(SYNC_TOKEN_PLACEHOLDER).join(syncToken);
-  }
-  if (result.includes(AUDIO_BASE_URL_PLACEHOLDER)) {
-    if (!audioBaseUrl) {
-      throw new Error(`${label} contains ${AUDIO_BASE_URL_PLACEHOLDER} but no audioBaseUrl was given`);
-    }
-    if (!SYNC_BASE_URL_RE.test(audioBaseUrl)) {
-      throw new Error(`audioBaseUrl must be a bare https:// URL with no trailing slash expected by the caller — got '${audioBaseUrl}'`);
-    }
-    result = result.split(AUDIO_BASE_URL_PLACEHOLDER).join(audioBaseUrl);
-  }
-  return result;
-}
-
-// Substitutes `__MJOLNIR_SYNC_BASE_URL__`/`__MJOLNIR_SYNC_TOKEN__`/
-// `__MJOLNIR_AUDIO_BASE_URL__` wherever they appear across an entire
+// Substitutes every `__MJOLNIR_<KEY>__` found anywhere across an entire
 // assembled bundle — unlike `appendCompanion`'s substitution (one appended
 // companion's own source), this also reaches patch-back-applied modules
-// (the mod 2080 shim, the mod 1440 audio patch), since those modules'
+// (e.g. the mod 2080 shim, the mod 1440 audio patch), since those modules'
 // edited source becomes part of the bundle's own bytes with no append-time
-// hook to substitute through. A no-op (returns the buffer unchanged) when
-// none of the three placeholders are present anywhere — an assembly using
-// neither progress-sync-shim nor audio-link-playback-minimal pays nothing
-// for this existing.
-export function substituteBakedPlaceholders(bundleBuffer, { syncBaseUrl, syncToken, audioBaseUrl } = {}) {
+// hook to substitute through. A no-op (returns the buffer unchanged) when no
+// placeholder is present anywhere — an assembly using none of these patches
+// pays nothing for this existing.
+export function substituteBakedPlaceholders(bundleBuffer, placeholders = {}) {
   const text = bundleBuffer.toString("utf8");
-  if (
-    !text.includes(SYNC_BASE_URL_PLACEHOLDER) &&
-    !text.includes(SYNC_TOKEN_PLACEHOLDER) &&
-    !text.includes(AUDIO_BASE_URL_PLACEHOLDER)
-  ) {
-    return bundleBuffer;
-  }
-  return Buffer.from(substituteBakedPlaceholdersInText(text, { syncBaseUrl, syncToken, audioBaseUrl }, "this bundle"), "utf8");
+  if (findPlaceholderKeys(text).size === 0) return bundleBuffer;
+  return Buffer.from(substitutePlaceholders(text, placeholders, "this bundle"), "utf8");
 }
 
-export function runCompanion(bundlePath, outputPath, companionFile, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken, audioBaseUrl } = {}) {
+export function runCompanion(bundlePath, outputPath, companionFile, { placeholders } = {}) {
   // Create the output directory if needed — otherwise writeFileSync throws a
   // raw ENOENT stack at the end of the work, after the bundle is built.
   const outDir = path.dirname(outputPath);
@@ -170,28 +136,17 @@ export function runCompanion(bundlePath, outputPath, companionFile, { buildId, b
   const companionSource = fs.readFileSync(companionFile, "utf8");
   const name = path.basename(companionFile).replace(/\.js$/, "");
 
-  const out = appendCompanion(bundle, companionSource, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken, audioBaseUrl, name });
+  const out = appendCompanion(bundle, companionSource, { placeholders, name });
   fs.writeFileSync(outputPath, out);
 
   console.log(`appended companion '${name}' → ${outputPath}`);
-  if (companionSource.includes(BUILD_ID_PLACEHOLDER)) {
-    console.log(`  buildId  ${buildId}`);
+  const keys = findPlaceholderKeys(companionSource);
+  for (const key of keys) {
+    const isSecret = key.includes("TOKEN") || key.includes("SECRET");
+    console.log(`  ${key}  ${isSecret ? "(set)" : placeholders?.[key]}`);
+  }
+  if (keys.has("BUILD_ID")) {
     console.log(`  NOTE: pass the SAME buildId to tun/bin/ota-publish.sh so the`);
-    console.log(`        boot-ok marker pairs with bundle-${buildId}.js (D52).`);
-  }
-  if (companionSource.includes(BASE_VERSION_PLACEHOLDER)) {
-    console.log(`  baseVersion  ${baseVersion}`);
-  }
-  if (companionSource.includes(PATCH_REV_PLACEHOLDER)) {
-    console.log(`  patchRev  ${patchRev}`);
-  }
-  if (companionSource.includes(SYNC_BASE_URL_PLACEHOLDER)) {
-    console.log(`  syncBaseUrl  ${syncBaseUrl}`);
-  }
-  if (companionSource.includes(SYNC_TOKEN_PLACEHOLDER)) {
-    console.log(`  syncToken  (set)`);
-  }
-  if (companionSource.includes(AUDIO_BASE_URL_PLACEHOLDER)) {
-    console.log(`  audioBaseUrl  ${audioBaseUrl}`);
+    console.log(`        boot-ok marker pairs with bundle-${placeholders?.BUILD_ID}.js (D52).`);
   }
 }

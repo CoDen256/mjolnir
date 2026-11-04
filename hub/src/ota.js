@@ -189,9 +189,7 @@ export async function assembleAndSubmit({
   patchRev,
   dataDir,
   logicBundleDir,
-  syncBaseUrl,
-  syncToken,
-  audioBaseUrl,
+  placeholders,
 }) {
   const resolvedPatchRev = patchRev === undefined || patchRev === null ? await nextPatchRev() : Number(patchRev);
   const tmpPath = path.join(dataDir, `.assemble-submit-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
@@ -204,11 +202,14 @@ export async function assembleAndSubmit({
       patchbackPairNames: patchbackPairNames || [],
       outputPath: tmpPath,
       companionFiles: companionFiles || [],
-      buildId: ASSEMBLE_PLACEHOLDER_BUILD_ID,
-      patchRev: resolvedPatchRev,
-      syncBaseUrl,
-      syncToken,
-      audioBaseUrl,
+      // BUILD_ID/PATCH_REV are hub's own values, not operator-editable via
+      // the generic placeholder map here — BUILD_ID is a real id only
+      // assigned once this bundle is actually submitted (below), and
+      // PATCH_REV is this function's own `patchRev` param (resolved via
+      // `nextPatchRev()` above) — both always override anything the caller
+      // might have put in `placeholders`, same as `assembleBundle`'s own
+      // BASE_VERSION auto-override (D-G2).
+      placeholders: { ...placeholders, BUILD_ID: ASSEMBLE_PLACEHOLDER_BUILD_ID, PATCH_REV: resolvedPatchRev },
     });
     const bytes = fs.readFileSync(tmpPath);
     const resolvedLabel = label || `${assembled.baseVersion}-patch${resolvedPatchRev}`;

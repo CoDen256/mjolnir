@@ -49,11 +49,7 @@ export async function assembleBundle({
   patchbackDir,
   outputPath,
   companionFiles,
-  buildId,
-  patchRev,
-  syncBaseUrl,
-  syncToken,
-  audioBaseUrl,
+  placeholders,
 }) {
   const baseBundlePath = path.join(baseFolderPath, BASE_BUNDLE_RELATIVE_PATH);
   if (!fs.existsSync(baseBundlePath)) {
@@ -62,6 +58,10 @@ export async function assembleBundle({
     );
   }
   const baseVersion = readBaseVersion(baseFolderPath);
+  // D-G2 (generic-placeholder-substitution): BASE_VERSION is never operator-
+  // supplied — it's always read from the base folder's own apktool.yml,
+  // overriding any BASE_VERSION the caller might have mistakenly included.
+  const mergedPlaceholders = { ...placeholders, BASE_VERSION: baseVersion };
 
   // Resolve every patch up front: "a patch that fails to locate aborts the
   // assembly with no partial output written" (task 5.3) — a patch name that
@@ -136,18 +136,18 @@ export async function assembleBundle({
       // entry calls / sourcemap comments) — strictly outside every
       // module's [start, end) range, so `modules`' offsets stay valid with
       // no shift needed here.
-      buffer = appendCompanion(buffer, source, { buildId, baseVersion, patchRev, syncBaseUrl, syncToken, audioBaseUrl, name });
+      buffer = appendCompanion(buffer, source, { placeholders: mergedPlaceholders, name });
     }
 
-    // progress-sync-shim's `__MJOLNIR_SYNC_BASE_URL__`/`__MJOLNIR_SYNC_TOKEN__`
-    // and audio-link-playback-minimal's `__MJOLNIR_AUDIO_BASE_URL__` (D120)
-    // also appear inside patch-back-applied modules' own source (the
-    // `2080-progress-sync-shim` and `1440-audio-link-playback` pairs), not
-    // just inside an appended companion — patch-back has no append-time
-    // substitution step of its own, so this final pass over the whole
-    // assembled bundle is where those patches' placeholders actually get
-    // baked. A no-op when none of the three placeholders appear anywhere.
-    buffer = substituteBakedPlaceholders(buffer, { syncBaseUrl, syncToken, audioBaseUrl });
+    // Any placeholder (e.g. progress-sync-shim's SYNC_BASE_URL/SYNC_TOKEN,
+    // audio-link-playback-minimal's AUDIO_BASE_URL, D120) can also appear
+    // inside a patch-back-applied module's own source (the `2080-progress-
+    // sync-shim` and `1440-audio-link-playback` pairs), not just inside an
+    // appended companion — patch-back has no append-time substitution step
+    // of its own, so this final pass over the whole assembled bundle is
+    // where those patches' placeholders actually get baked. A no-op when no
+    // placeholder appears anywhere.
+    buffer = substituteBakedPlaceholders(buffer, mergedPlaceholders);
 
     // The only disk write in the whole assemble — everything above ran
     // against `buffer` in memory.
@@ -171,7 +171,7 @@ export async function assembleBundle({
   return {
     outputPath,
     baseVersion,
-    patchRev,
+    placeholders: mergedPlaceholders,
     appliedPatches: patchNames || [],
     appliedPatchbackPairs: patchbackPairs.map((p) => p.name),
     appliedCompanions: companionSources.map((c) => c.name),

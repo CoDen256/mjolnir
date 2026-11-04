@@ -1104,6 +1104,7 @@ export function createServer(pool, config) {
       }
       if (req.method === "POST" && url.pathname === "/mjolnir/ota/assemble-submit") {
         const body = await readJson(req);
+        const placeholders = body.placeholders || {};
         const row = await assembleAndSubmit({
           baseFolderDir: config.baseFolderDir,
           patchNames: body.patchNames || [],
@@ -1114,19 +1115,24 @@ export function createServer(pool, config) {
           patchRev: body.patchRev === undefined || body.patchRev === null || body.patchRev === "" ? undefined : Number(body.patchRev),
           dataDir: config.dataDir,
           logicBundleDir: config.logicBundleDir,
-          // progress-sync-shim's __MJOLNIR_SYNC_BASE_URL__/
-          // __MJOLNIR_SYNC_TOKEN__ default to this deployment's own
+          // generic-placeholder-substitution: SYNC_BASE_URL/SYNC_TOKEN/
+          // AUDIO_BASE_URL default to this deployment's own
           // TUN_PUBLIC_BASE/OPERATOR_AUTH_TOKEN — the same values already
           // gating the device-facing /mjolnir/userdata/* routes below
           // (task 4.2's decision) — so assembling via the embedded
           // workbench doesn't require retyping values hub already has
-          // configured; an explicit request value still wins.
-          syncBaseUrl: body.syncBaseUrl || defaultSyncBaseUrl(config.publicBase),
-          syncToken: body.syncToken || config.operatorAuthToken || undefined,
-          // D120: same reasoning as syncBaseUrl above — defaults to this
-          // deployment's own public base, no token involved (the route is
-          // plain static/unauthenticated by design).
-          audioBaseUrl: body.audioBaseUrl || defaultAudioBaseUrl(config.publicBase),
+          // configured; an explicit request value (even falsy/empty) still
+          // falls back to the default, matching this route's prior
+          // behavior exactly.
+          placeholders: {
+            ...placeholders,
+            SYNC_BASE_URL: placeholders.SYNC_BASE_URL || defaultSyncBaseUrl(config.publicBase),
+            SYNC_TOKEN: placeholders.SYNC_TOKEN || config.operatorAuthToken || undefined,
+            // D120: same reasoning as SYNC_BASE_URL above — defaults to
+            // this deployment's own public base, no token involved (the
+            // route is plain static/unauthenticated by design).
+            AUDIO_BASE_URL: placeholders.AUDIO_BASE_URL || defaultAudioBaseUrl(config.publicBase),
+          },
         });
         return sendJson(res, 200, row);
       }

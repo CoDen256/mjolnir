@@ -1065,7 +1065,7 @@ test("POST /api/assemble prefers an explicit syncBaseUrl/syncToken over the env 
         patchNames: [],
         outputPath,
         companionFiles: [companion],
-        syncBaseUrl: "https://explicit.test/mjolnir/userdata",
+        placeholders: { SYNC_BASE_URL: "https://explicit.test/mjolnir/userdata" },
       });
       assert.equal(status, 201);
       assert.deepEqual(data.appliedCompanions, ["sync-companion-2"]);
@@ -1142,7 +1142,7 @@ test("POST /api/assemble prefers an explicit audioBaseUrl over the env default (
         patchNames: [],
         outputPath,
         companionFiles: [companion],
-        audioBaseUrl: "https://explicit.test",
+        placeholders: { AUDIO_BASE_URL: "https://explicit.test" },
       });
       assert.equal(status, 201);
       assert.deepEqual(data.appliedCompanions, ["audio-companion-2"]);

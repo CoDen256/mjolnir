@@ -190,10 +190,6 @@
                 Output bundle path
                 <input id="assemble-output-path" type="text" placeholder="out/assembled.bundle" />
               </label>
-              <label>
-                Build id <span class="field-hint">cosmetic here — builder restamps it on every real publish</span>
-                <input id="assemble-build-id" type="text" placeholder="b000000" />
-              </label>
             </div>
 
             <div class="field-grid">
@@ -203,25 +199,16 @@
               </label>
             </div>
 
-            <h3>progress-sync-shim placeholders <span class="field-hint">only needed if a selected patch/companion bakes __MJOLNIR_SYNC_BASE_URL__/__MJOLNIR_SYNC_TOKEN__</span></h3>
-            <div class="field-grid">
-              <label>
-                Sync base URL <span id="assemble-sync-base-url-hint" class="field-hint">blank = use this server's TUN_PUBLIC_BASE + /mjolnir/userdata</span>
-                <input id="assemble-sync-base-url" type="text" placeholder="(default from TUN_PUBLIC_BASE)" />
-              </label>
-              <label>
-                Sync token <span id="assemble-sync-token-hint" class="field-hint">blank = use this server's OPERATOR_AUTH_TOKEN</span>
-                <input id="assemble-sync-token" type="password" placeholder="(default from OPERATOR_AUTH_TOKEN)" />
-              </label>
-            </div>
-
-            <h3>audio-link-playback-minimal placeholder <span class="field-hint">only needed if a selected patch/companion bakes __MJOLNIR_AUDIO_BASE_URL__</span></h3>
-            <div class="field-grid">
-              <label>
-                Audio base URL <span id="assemble-audio-base-url-hint" class="field-hint">blank = use this server's TUN_PUBLIC_BASE + /audio-by-card</span>
-                <input id="assemble-audio-base-url" type="text" placeholder="(default from TUN_PUBLIC_BASE)" />
-              </label>
-            </div>
+            <!-- generic-placeholder-substitution: any KEY/value pair here
+                 substitutes __MJOLNIR_<KEY>__ wherever it appears in a
+                 selected patch/companion — replaces the old fixed set of
+                 named fields (Build id, Sync base URL, Sync token, Audio
+                 base URL). BASE_VERSION is never shown here — it's always
+                 read from the base folder's own apktool.yml (D-G2). -->
+            <h3>Placeholders <span class="field-hint">__MJOLNIR_&lt;KEY&gt;__ substituted wherever a selected patch/companion bakes it — add a row for any key you need, beyond the common ones already listed</span></h3>
+            <div id="assemble-placeholders-hint" class="field-hint" style="margin-bottom:8px;"></div>
+            <div id="assemble-placeholders-list"></div>
+            <button id="assemble-placeholder-add-btn" type="button">+ Add placeholder</button>
 
             <div id="assemble-patches-dir-caption" class="dir-caption"></div>
             <h3>Patches to apply, in order <span class="field-hint">REPLACE-style — modifies an existing module in place</span></h3>
