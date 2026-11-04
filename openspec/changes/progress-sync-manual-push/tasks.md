@@ -11,7 +11,7 @@ extended, not replaced) before editing it.
 
 ## 1. Push companion function
 
-- [ ] 1.1 Resolve D-PP2's flagged risk: read `updateSessionUserData`'s real
+- [x] 1.1 Resolve D-PP2's flagged risk: read `updateSessionUserData`'s real
       implementation, confirm whether calling it from a manual push is
       semantically acceptable (stamping `lastCompletedSession`/affecting
       `consistencyRate` as a side effect) or whether `updateUserData` (or
@@ -19,32 +19,32 @@ extended, not replaced) before editing it.
       `tun/docs/07-decisions.md` either way — this is exactly the kind of
       "found implementing, refines design.md" case this project's own
       practice expects to be recorded.
-- [ ] 1.2 Add `globalThis.MJOLNIR_PUSH_CLOUD_PROGRESS` to the existing pull
+- [x] 1.2 Add `globalThis.MJOLNIR_PUSH_CLOUD_PROGRESS` to the existing pull
       companion file (rename the file if appropriate per D-PP1), reading
       current state directly from the redux store (same `__r(MOD_STORE)`
       pattern the pull companion already uses) and calling the method
       decided in 1.1 with that current state.
-- [ ] 1.3 Tests: not-signed-in rejection; a successful push with real
+- [x] 1.3 Tests: not-signed-in rejection; a successful push with real
       current state produces the correct call (method, args) to the
       shim; a failure (network/HTTP error) rejects with the real error,
       not swallowed.
 
 ## 2. Account screen button
 
-- [ ] 2.1 `2176-my-account-build-id.edited.js`: add a "Push cloud
+- [x] 2.1 `2176-my-account-build-id.edited.js`: add a "Push cloud
       progress" button next to "Pull cloud progress", same `h.default`
       component pattern, no confirmation dialog (unlike pull's), guarded
       against double-taps the same way pull's button is (local
       `pushing` state, label swap, disabled while in flight).
-- [ ] 2.2 Wire up plain success/failure Alert feedback — no persistent
+- [x] 2.2 Wire up plain success/failure Alert feedback — no persistent
       on-screen "last pushed" indicator (per spec).
-- [ ] 2.3 Tests: pressing the button while signed in with the mocked
+- [x] 2.3 Tests: pressing the button while signed in with the mocked
       companion shows success feedback; not-signed-in shows the right
       message; rapid double-press only triggers one call.
 
 ## 3. Sign-off
 
-- [ ] 3.1 If anything here contradicts or refines `design.md` during
+- [x] 3.1 If anything here contradicts or refines `design.md` during
       implementation (especially 1.1's resolution), record it as an ADR
       amendment in `tun/docs/07-decisions.md`.
 - [ ] 3.2 **(Operator, outside this change)** Assemble/install a bundle

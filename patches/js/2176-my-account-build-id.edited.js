@@ -140,7 +140,7 @@ __d(function (g, _r, _i, a, m, _e, d) {
       // progress-sync-manual-pull: replaces the deleted progress-sync-
       // restore-companion.js's one-shot auto-restore (D-S4, removed per
       // D127) with a user-triggered pull, reached via
-      // globalThis.MJOLNIR_PULL_CLOUD_PROGRESS (progress-sync-pull-
+      // globalThis.MJOLNIR_PULL_CLOUD_PROGRESS (progress-sync-manual-
       // companion.js, D-M1 — no shared scope between a companion and a
       // patched module otherwise, same convention as MJOLNIR_BUILD_ID).
       pullCloudProgress = function () {
@@ -159,6 +159,31 @@ __d(function (g, _r, _i, a, m, _e, d) {
           'not-signed-in' === e.code
             ? s.Alert.alert('Not signed in', 'Sign in with your account first, then try again.')
             : s.Alert.alert('Pull failed', e && e.message ? e.message : 'Something went wrong pulling your progress.');
+        });
+      },
+      Z = (0, l.useState)(!1),
+      K = (0, n.default)(Z, 2),
+      pushing = K[0],
+      setPushing = K[1],
+      // progress-sync-manual-push (D-PP1/D-PP3): the reverse direction,
+      // same companion file, same globalThis convention
+      // (globalThis.MJOLNIR_PUSH_CLOUD_PROGRESS). No confirmation dialog
+      // — unlike pull, a push never changes anything on this device, so
+      // there's nothing local to protect against.
+      pushCloudProgress = function () {
+        if (pushing) return;
+        setPushing(!0);
+        (typeof globalThis !== 'undefined' && globalThis.MJOLNIR_PUSH_CLOUD_PROGRESS
+          ? globalThis.MJOLNIR_PUSH_CLOUD_PROGRESS()
+          : Promise.reject(Object.assign(new Error('push unavailable'), { code: 'unavailable' }))
+        ).then(function () {
+          setPushing(!1);
+          s.Alert.alert('Progress pushed', 'Your current progress has been pushed to the server.');
+        }).catch(function (e) {
+          setPushing(!1);
+          'not-signed-in' === e.code
+            ? s.Alert.alert('Not signed in', 'Sign in with your account first, then try again.')
+            : s.Alert.alert('Push failed', e && e.message ? e.message : 'Something went wrong pushing your progress.');
         });
       },
       B = O.filter(function (e) {
@@ -368,6 +393,12 @@ __d(function (g, _r, _i, a, m, _e, d) {
           onPress: function () {
             return setPullConfirmOpen(!0);
           }
+        }), (0, S.jsx)(h.default, {
+          title: pushing ? 'Pushing…' : 'Push cloud progress',
+          disabled: pushing,
+          styles: _.btn,
+          paddingHorizontal: (0, c.normalize)(16),
+          onPress: pushCloudProgress
         }), (0, S.jsx)(h.default, {
           title: 'Delete account',
           color: '#FF5050',
