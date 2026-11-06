@@ -139,3 +139,39 @@ export function syncDeckDescription(decks, name, description) {
   const deck = decks.find((d) => d.Name === name);
   if (deck && description !== undefined) deck.Description = description;
 }
+
+// deck-consolidation: the same narrow sync, for `Title` — needed because a
+// deck code can now be REUSED by a different family after a one-time
+// migration (C20: "Substantiv" before, "Practice" after) without its
+// bundle entry ever being recreated. Without this, `ensureDeck`'s
+// idempotent-return-untouched contract would leave a repurposed deck
+// showing its old, wrong title on-device forever — nothing else in the
+// normal publish flow ever revisits an existing deck's `Title`.
+export function syncDeckTitle(decks, name, title) {
+  const deck = decks.find((d) => d.Name === name);
+  if (deck && title !== undefined) deck.Title = title;
+}
+
+// deck-removal (D-DC4): removes `name`'s entry entirely via a plain array
+// splice — preserves mod 2119's same-category contiguity requirement for
+// whatever decks remain, AS LONG AS the caller only ever removes a deck
+// that's part of the same contiguous category block as the decks staying
+// behind (true for deck-consolidation's retired codes, all "C"-prefixed
+// alongside the two kept "C" codes). No reordering of survivors is needed —
+// removing one entry and leaving the rest in their relative order preserves
+// contiguity of whatever subset remains.
+//
+// This module stays pure/synchronous like every other function here — it
+// has no DB connection of its own, so it can't check `card_slots` itself.
+// `cardCount` is the caller's job to supply (the migration script has the
+// live connection); passing a nonzero count refuses the removal and leaves
+// `decks` untouched, matching deck-removal's "confirm zero references
+// first" contract.
+export function removeDeck(decks, name, { cardCount = 0 } = {}) {
+  const index = decks.findIndex((d) => d.Name === name);
+  if (index === -1) throw new Error(`no such deck "${name}"`);
+  if (cardCount > 0) {
+    throw new Error(`cannot remove deck "${name}" — ${cardCount} card_slots row(s) still reference it`);
+  }
+  decks.splice(index, 1);
+}

@@ -1,20 +1,20 @@
 import { query } from "./db.js";
 
-// The deck allocation table (tun/docs/03-data-model.md, builder/README.md).
-// `hub`'s own `decks` row is metadata only (title/pacing knobs); the actual
-// bundle deck entry is created once, lazily, by `ensureDeck` (D-P1) the
-// first time `builder` mints a card into it.
+// The deck allocation table (tun/docs/03-data-model.md, builder/README.md,
+// deck-consolidation). `hub`'s own `decks` row is metadata only (title/
+// pacing knobs); the actual bundle deck entry is created once, lazily, by
+// `ensureDeck` (D-P1) the first time `builder` mints a card into it.
+//
+// deck-consolidation: these are now the 2 families' STARTING codes only
+// (`builder/src/deckFamilies.js`'s `DECK_FAMILIES`) — the original 10-way
+// per-type/PoS split (C20-C29, one deck each) collapsed into `lexic`
+// (starts C30) and `practice` (starts C20, repurposing the old
+// "substantiv" code rather than keeping it). A family's overflow codes
+// (C21, C31, ...) are never pre-seeded here — `deckFamilies.js`'s
+// `ensureRolloverDeck` creates their `decks` row lazily, on first rollover.
 export const DECK_ALLOCATION = [
-  { code: "C20", title: "Substantiv", description: "Nouns." },
-  { code: "C21", title: "Adjektiv", description: "Adjectives." },
-  { code: "C22", title: "Verb", description: "Verbs." },
-  { code: "C23", title: "Adverb", description: "Adverbs." },
-  { code: "C24", title: "Preposisjon", description: "Prepositions." },
-  { code: "C25", title: "Konjunksjon/Subjunksjon", description: "Conjunctions and subjunctions." },
-  { code: "C26", title: "Expression", description: "Fixed expressions and phrases." }, // type=expression, or any unmapped pos
-  { code: "C27", title: "Listening", description: "Listening comprehension." },
-  { code: "C28", title: "Pronunciation", description: "Pronunciation practice." },
-  { code: "C29", title: "Grammar", description: "Grammar rules and usage." },
+  { code: "C20", title: "Practice", description: "Grammar, listening, and pronunciation practice." },
+  { code: "C30", title: "Lexic", description: "Vocabulary and expressions." },
 ];
 
 // Task 3.3. "Fixed catalog data" (13-operator-console-ux.md) — safe to

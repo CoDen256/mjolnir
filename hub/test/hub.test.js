@@ -50,19 +50,19 @@ describe("hub: migrate, seed, publications, cards, ota, server", async (t) => {
   });
 
   await t.test("deck-descriptions: seedDecks writes each deck's real description, never overwrites an edited one on re-seed", async () => {
-    // C29 (Grammar), untouched by the earlier pacing-knob test above, so
+    // C30 (Lexic), untouched by the earlier pacing-knob test above, so
     // this test's own blast radius stays isolated.
     const seeded = await listDecks();
-    const c29 = seeded.find((d) => d.code === "C29");
-    const expected = DECK_ALLOCATION.find((d) => d.code === "C29").description;
+    const c30 = seeded.find((d) => d.code === "C30");
+    const expected = DECK_ALLOCATION.find((d) => d.code === "C30").description;
     assert.ok(expected, "sanity: DECK_ALLOCATION must carry a real, non-empty description");
-    assert.equal(c29.description, expected, "an already-seeded deck carries its real description, not blank");
+    assert.equal(c30.description, expected, "an already-seeded deck carries its real description, not blank");
 
-    await updateDeckDescription("C29", "operator's own custom text");
+    await updateDeckDescription("C30", "operator's own custom text");
     await seedDecks();
     const afterReseed = await listDecks();
     assert.equal(
-      afterReseed.find((d) => d.code === "C29").description,
+      afterReseed.find((d) => d.code === "C30").description,
       "operator's own custom text",
       "re-seeding must never clobber an operator-edited description"
     );

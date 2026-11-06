@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createCard, interleaveOccurrences, upsertCardContent, ensureDeck, syncDeckDescription } from "../../src/injectDeck.js";
+import { createCard, interleaveOccurrences, upsertCardContent, ensureDeck, syncDeckDescription, syncDeckTitle, removeDeck } from "../../src/injectDeck.js";
 import { fixtureDecks, fixtureCards } from "../fixtures/deckCardFixture.js";
 
 test("createCard inserts a new card keyed by an externally-supplied id", () => {
@@ -158,4 +158,80 @@ test("syncDeckDescription: an undefined description leaves the existing value un
   const decks = [{ Name: "C20", Description: "already set" }];
   syncDeckDescription(decks, "C20", undefined);
   assert.equal(decks[0].Description, "already set");
+});
+
+// deck-consolidation: a deck code can be REUSED by a different family after
+// migration (C20: "Substantiv" -> "Practice") — Title needs the exact same
+// sync-on-every-publish treatment Description already got.
+test("syncDeckTitle: updates only Title on an already-existing deck, no other field", () => {
+  const decks = [{ Name: "C20", Title: "Substantiv", Description: "Nouns.", PullCounter: 7, MaxInterval: 10 }];
+  syncDeckTitle(decks, "C20", "Practice");
+  assert.equal(decks[0].Title, "Practice");
+  assert.equal(decks[0].PullCounter, 7, "PullCounter must never be touched");
+  assert.equal(decks[0].MaxInterval, 10, "MaxInterval must never be touched");
+  assert.equal(decks[0].Description, "Nouns.", "Description must never be touched");
+});
+
+test("syncDeckTitle: a nonexistent deck name is a silent no-op, not an error", () => {
+  const decks = [{ Name: "C20", Title: "Substantiv" }];
+  assert.doesNotThrow(() => syncDeckTitle(decks, "C99-nonexistent", "x"));
+  assert.equal(decks.length, 1, "no deck is created as a side effect");
+});
+
+test("syncDeckTitle: an undefined title leaves the existing value untouched", () => {
+  const decks = [{ Name: "C20", Title: "already set" }];
+  syncDeckTitle(decks, "C20", undefined);
+  assert.equal(decks[0].Title, "already set");
+});
+
+// deck-removal: a decks array shaped like the real pre-consolidation state —
+// 10 "C"-prefixed category decks (C20-C29) plus a non-"C" deck on each side,
+// to prove removal never disturbs decks outside the category block being
+// retired from.
+function preConsolidationDecks() {
+  const cCodes = ["C20", "C21", "C22", "C23", "C24", "C25", "C26", "C27", "C28", "C29"];
+  return [
+    { ID: 0, Name: "A01", Title: "Stock deck before", Cards: [] },
+    ...cCodes.map((code, i) => ({ ID: i + 1, Name: code, Title: code, Cards: [] })),
+    { ID: 11, Name: "D01", Title: "Stock deck after", Cards: [] },
+  ];
+}
+
+function isContiguousBlock(decks, prefix) {
+  const indexes = decks.map((d, i) => (d.Name.startsWith(prefix) ? i : -1)).filter((i) => i !== -1);
+  if (indexes.length === 0) return true;
+  return indexes[indexes.length - 1] - indexes[0] + 1 === indexes.length;
+}
+
+test("removeDeck: removing a deck with zero remaining references succeeds, and surviving 'C' decks stay contiguous", () => {
+  const decks = preConsolidationDecks();
+  for (const code of ["C21", "C22", "C23", "C24", "C25", "C26", "C27", "C28", "C29"]) {
+    removeDeck(decks, code, { cardCount: 0 });
+  }
+  assert.deepEqual(
+    decks.map((d) => d.Name),
+    ["A01", "C20", "D01"]
+  );
+  assert.ok(isContiguousBlock(decks, "C"), "the one surviving 'C' deck trivially forms a contiguous block");
+});
+
+test("removeDeck: removing from the middle of the 'C' block keeps every remaining 'C' deck contiguous", () => {
+  const decks = preConsolidationDecks();
+  removeDeck(decks, "C24", { cardCount: 0 });
+  removeDeck(decks, "C25", { cardCount: 0 });
+  assert.ok(isContiguousBlock(decks, "C"), "C20-C23 and C26-C29 must still form one contiguous block with no gap");
+  assert.equal(decks.find((d) => d.Name === "A01").ID, 0, "the non-'C' deck before the block is untouched");
+  assert.equal(decks.find((d) => d.Name === "D01").ID, 11, "the non-'C' deck after the block is untouched");
+});
+
+test("removeDeck: a deck that still has referencing card_slots rows throws and changes nothing", () => {
+  const decks = preConsolidationDecks();
+  const before = JSON.parse(JSON.stringify(decks));
+  assert.throws(() => removeDeck(decks, "C21", { cardCount: 3 }), /cannot remove deck "C21".*3 card_slots row/);
+  assert.deepEqual(decks, before);
+});
+
+test("removeDeck: a nonexistent deck name throws", () => {
+  const decks = preConsolidationDecks();
+  assert.throws(() => removeDeck(decks, "C99-nonexistent"), /no such deck/);
 });

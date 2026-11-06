@@ -1,10 +1,11 @@
 import { loadDeckCardModel, saveDeckCardModel, addOccurrence } from "../../src/deckData.js";
-import { createCard, upsertCardContent, ensureDeck, syncDeckDescription } from "../../src/injectDeck.js";
+import { createCard, upsertCardContent, ensureDeck, syncDeckDescription, syncDeckTitle, removeDeck } from "../../src/injectDeck.js";
 import { publish, restampCompanionBuildId } from "../../tool/src/otaPublish.js";
 import { pullNotes, filterAudioEligible } from "./stabburClient.js";
 import { partitionByDeck } from "./eligibility.js";
 import { project } from "./projector.js";
 import { mintCardSlots, cardIdsForNotes, updateAudioSha256, allCardAudio, deckTitle, deckDescription } from "./mint.js";
+import { resolveActiveDeckCode } from "./deckFamilies.js";
 import { queuePendingOccurrence, hasPendingOccurrence, drainPendingOccurrences, pendingQueueDepths } from "./pendingOccurrences.js";
 import { stageOccurrence, stagedCount, flushShippable, peekStaged } from "./stagedOccurrences.js";
 import { recordShipments } from "./occurrenceShipments.js";
@@ -24,6 +25,12 @@ import crypto from "node:crypto";
 // into already-minted vs newly-eligible, group the latter by deck. Shared
 // verbatim between the forecast and a real run (D-P5): one implementation of
 // "which notes are eligible and where do they go," two call sites.
+//
+// deck-rollover (D-DR2/D-DR3): `partitionByDeck` groups by deck FAMILY now
+// (whatever `assignDeck` returns), not a literal code — resolved to each
+// family's actual active code here, once per family per run, so every
+// downstream caller (forecast's prediction and the real mint) keeps dealing
+// in literal deck codes exactly as before this change.
 async function pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLang }) {
   // `since` is deliberately never passed: every run does a full pull, since
   // regenerating every already-minted card's content (not just new ones)
@@ -37,7 +44,15 @@ async function pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLan
   ]);
   const mintedNoteIds = new Set(rows.map((r) => r.note_id));
 
-  return { eligibleNotesById: new Map(eligible.map((n) => [n.id, n])), ...partitionByDeck(eligible, mintedNoteIds) };
+  const { alreadyMinted, newlyEligibleByDeck: newlyEligibleByFamily } = partitionByDeck(eligible, mintedNoteIds);
+  const newlyEligibleByDeck = new Map();
+  for (const [familyKey, familyNotes] of newlyEligibleByFamily) {
+    const deckCode = await resolveActiveDeckCode(pool, familyKey);
+    if (!newlyEligibleByDeck.has(deckCode)) newlyEligibleByDeck.set(deckCode, []);
+    newlyEligibleByDeck.get(deckCode).push(...familyNotes);
+  }
+
+  return { eligibleNotesById: new Map(eligible.map((n) => [n.id, n])), alreadyMinted, newlyEligibleByDeck };
 }
 
 // D91: for a freshly-minted card, its `A` occurrence always ships this run
@@ -96,6 +111,7 @@ async function drainThenQueue(pool, deckCode, newACount, toQueue) {
 async function flushDeck(pool, model, deckCode, deckTitleCache, deckDescriptionCache, shipments, log, buildJobId) {
   if (!deckTitleCache.has(deckCode)) deckTitleCache.set(deckCode, await deckTitle(pool, deckCode));
   const deck = ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
+  syncDeckTitle(model.decks, deckCode, deckTitleCache.get(deckCode));
   if (!deckDescriptionCache.has(deckCode)) deckDescriptionCache.set(deckCode, await deckDescription(pool, deckCode));
   syncDeckDescription(model.decks, deckCode, deckDescriptionCache.get(deckCode));
   // The deck's REAL current total matters, not just what's sitting staged —
@@ -119,6 +135,76 @@ async function flushDeck(pool, model, deckCode, deckTitleCache, deckDescriptionC
     shipments.push({ cardId, letter });
   }
   await log(buildJobId, `ship: ${deckCode} — ${shippable.length} occurrence(s) flushed (${alreadyShipped} -> ${deck.Cards.length})`);
+}
+
+// deck-consolidation: a deck code can be REUSED by an entirely different
+// family after the one-time migration (C20: substantiv -> practice) — its
+// `decks.title` row gets updated as part of that migration (see
+// `deckConsolidationMigration.js`), but the active logic bundle's own
+// baked-in `decks[].Cards[]`/`model.cards` entries are never touched by it
+// (the migration only writes to hub's Postgres tables). Left alone, two
+// things break: (1) a freshly-assigned id in the reused code can collide
+// textually with a STILL-PRESENT stale card from before migration (found
+// live: practice's first new card at C20 computes id "C20001" — identical
+// to the OLD "C20001" substantiv card still sitting in `model.cards` —
+// `replay`'s `createCard` throws "already exists"); (2) even without a
+// literal collision, the deck's old Cards[]/PullCounter describe a study
+// position against content that's now entirely different.
+//
+// Detected by comparing each deck's baked-in `Title` against hub's CURRENT
+// title for that code — the only way those ever diverge is this migration
+// event (deck-descriptions' own edits only ever touch `Description`;
+// nothing else in this codebase updates an existing `decks` row's title).
+// On that one-time mismatch: drop the deck's entire stale Cards[]/cards and
+// reset PullCounter, so `replay` (which runs right after this) rebuilds
+// Cards[] from scratch using only currently-valid, already-repointed
+// occurrence_shipments/staged_occurrences — exactly as if this were a
+// brand-new deck, matching deck-rollover's own fresh-deck PullCounter:0.
+async function resetReusedDecks(pool, model) {
+  if (model.decks.length === 0) return;
+  const { rows } = await pool.query("SELECT code, title FROM decks");
+  const currentTitleByCode = new Map(rows.map((r) => [r.code, r.title]));
+
+  for (const deck of model.decks) {
+    const currentTitle = currentTitleByCode.get(deck.Name);
+    if (currentTitle === undefined || currentTitle === deck.Title) continue;
+    const staleCardIds = new Set(deck.Cards.map((ref) => ref.Card.slice(0, -1)));
+    deck.Cards = [];
+    deck.PullCounter = 0;
+    for (let i = model.cards.length - 1; i >= 0; i--) {
+      if (staleCardIds.has(model.cards[i].ID)) model.cards.splice(i, 1);
+    }
+  }
+}
+
+// deck-consolidation (D-DC5/deck-removal): `replay` only ever ADDS decks to
+// `model` (via `ensureDeck`) — it never removes one, so a deck already
+// baked into the active logic bundle from BEFORE a migration stays in
+// `model.decks` forever unless something explicitly strips it. This is that
+// something: every run, after minting/flushing is done, any "C"-prefixed
+// deck with zero remaining `card_slots` references gets removed from both
+// the bundle array and hub's `decks` table. Scoped to "C"-prefixed decks
+// only — this project's category convention (mod 2119) — so a hand-created
+// custom deck in some other category is never touched by this generic
+// safety net; only the migration's own retired codes can ever actually
+// reach zero references in practice (D-DC5's "delete when provably safe").
+async function pruneRetiredDecks(pool, model, log, buildJobId) {
+  for (const deck of [...model.decks]) {
+    if (deck.Name[0] !== "C") continue;
+    const { rows } = await pool.query("SELECT count(*) AS count FROM card_slots WHERE deck_code = $1", [deck.Name]);
+    if (Number(rows[0].count) > 0) continue;
+    removeDeck(model.decks, deck.Name, { cardCount: 0 });
+    // Its stale cards (baked into the active bundle from before migration,
+    // never touched by replay/mint since nothing references this deck_code
+    // anymore) must go too — `saveDeckCardModel`'s own referential-
+    // integrity check rejects a card whose DECK_ID names a deck that no
+    // longer exists.
+    for (let i = model.cards.length - 1; i >= 0; i--) {
+      if (model.cards[i].DECK_ID === deck.Name) model.cards.splice(i, 1);
+    }
+    await pool.query("DELETE FROM decks WHERE code = $1", [deck.Name]);
+    await log(buildJobId, `prune: ${deck.Name} removed — zero remaining card_slots references`);
+  }
 }
 
 // Task 4.14/3.2 (modified builder-pipeline spec): dry run of steps 1-4 only —
@@ -329,6 +415,7 @@ export async function runPublish(
     scratchPath = path.join(os.tmpdir(), `mjolnir-builder-scratch-${process.pid}-${buildId}.js`);
     fs.writeFileSync(scratchPath, active.bytes);
     const model = loadDeckCardModel(scratchPath);
+    await resetReusedDecks(pool, model);
     await replay(pool, model);
 
     // Regenerate every already-minted card's content fresh (not just new
@@ -346,6 +433,7 @@ export async function runPublish(
     async function ensureDeckByCode(deckCode) {
       if (!deckTitleCache.has(deckCode)) deckTitleCache.set(deckCode, await deckTitle(pool, deckCode));
       const deck = ensureDeck(model.decks, { name: deckCode, title: deckTitleCache.get(deckCode) });
+      syncDeckTitle(model.decks, deckCode, deckTitleCache.get(deckCode));
       if (!deckDescriptionCache.has(deckCode)) deckDescriptionCache.set(deckCode, await deckDescription(pool, deckCode));
       syncDeckDescription(model.decks, deckCode, deckDescriptionCache.get(deckCode));
       return deck;
@@ -393,6 +481,7 @@ export async function runPublish(
       const title = await deckTitle(pool, deckCode);
       deckTitleCache.set(deckCode, title);
       ensureDeck(model.decks, { name: deckCode, title });
+      syncDeckTitle(model.decks, deckCode, title);
       if (!deckDescriptionCache.has(deckCode)) deckDescriptionCache.set(deckCode, await deckDescription(pool, deckCode));
       syncDeckDescription(model.decks, deckCode, deckDescriptionCache.get(deckCode));
       touchedDeckCodes.add(deckCode);
@@ -424,6 +513,8 @@ export async function runPublish(
     for (const deckCode of touchedDeckCodes) {
       await flushDeck(pool, model, deckCode, deckTitleCache, deckDescriptionCache, shipments, log, buildJobId);
     }
+
+    await pruneRetiredDecks(pool, model, log, buildJobId);
 
     saveDeckCardModel(scratchPath, model);
 
@@ -478,6 +569,24 @@ export async function runPublish(
     // Safe to discard unconditionally — every run fully reconstructs its
     // own scratch copy from the active logic bundle + hub's ledger tables
     // (D-L4); nothing is ever lost by deleting it here.
-    if (scratchPath) fs.rmSync(scratchPath, { force: true });
+    //
+    // The `.exploded` sidecar directory (`deckData.js`'s `saveDeckCardModel`
+    // re-explodes on every save, `loadManifest` auto-explodes on first
+    // load) must be removed too, not just the scratch file itself — found
+    // live via a test exercising two runs that land on the same buildId
+    // back to back (`nextBuildId` only advances once `publications` gets a
+    // row, so a run that fails before ever publishing leaves the NEXT run
+    // computing the identical buildId, hence the identical scratchPath).
+    // Deleting only the file left this orphaned sidecar's manifest.json
+    // describing the FAILED run's — possibly already-mutated — byte
+    // layout; the next run reusing that path got a byte-identical fresh
+    // file but a stale manifest pointing at the wrong offsets, and
+    // `loadManifest` only re-explodes when no manifest exists at all, so it
+    // never noticed the mismatch (`locateDeckCardModules` threw "could not
+    // locate the deck-catalog/card-content module pair").
+    if (scratchPath) {
+      fs.rmSync(scratchPath, { force: true });
+      fs.rmSync(`${scratchPath}.exploded`, { recursive: true, force: true });
+    }
   }
 }

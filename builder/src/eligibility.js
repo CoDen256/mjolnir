@@ -6,6 +6,11 @@ import { assignDeck } from "./deckAssignment.js";
 // `minted_notes` — the caller queries this against hub's database so this
 // function stays pure/testable without a live connection.
 //
+// deck-rollover: `assignDeck` returns a deck FAMILY key now, not a literal
+// code (D-DR3) — this function's grouping is unchanged, it just groups by
+// family key instead. Resolving a family to its actual active deck code
+// happens later, once per family per run, in `pipeline.js`'s `pullAndAssign`.
+//
 // No minimum-batch floor (D91 — supersedes the earlier 6-note floor):
 // lag-11 is no longer a same-batch property to wait for enough cards to
 // satisfy, so every deck with at least one newly-eligible note mints and
