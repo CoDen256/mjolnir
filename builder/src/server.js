@@ -226,58 +226,62 @@ function buildPipelineRail(forecast, lastJob, totalPulled, totalAlreadyMinted) {
 }
 
 const OCCURRENCE_LETTER_LABEL = { A: "A", E: "E", N: "N" };
+const SHIP_ORDER_ROW_SIZE = 40;
 
 function unitSpan(cls, letter, title) {
   return `<span class="flow-u ${cls}" title="${escapeHtml(title)}">${escapeHtml(OCCURRENCE_LETTER_LABEL[letter] || letter || "?")}</span>`;
 }
 
-// Task 5.2: the real zone (shipped -> staged -> open), laid out in explicit
-// rows of 20 cells (4 batches of 5), with a visible divider rule between
-// every batch of 5 — not just spacing, a real `.flow-batch-div` element.
-function renderRealZoneRows(units) {
-  const rows = [];
-  for (let i = 0; i < units.length; i += 20) rows.push(units.slice(i, i + 20));
-  return rows
-    .map((row, i) => {
-      const start = i * 20 + 1;
-      const end = i * 20 + row.length;
-      const groups = [];
-      for (let j = 0; j < row.length; j += 5) groups.push(row.slice(j, j + 5));
-      const cells = groups
-        .map((group) => group.map((u) => unitSpan(u.cls, u.letter, u.title)).join(""))
-        .join('<span class="flow-batch-div"></span>');
-      return `<div class="flow-shape-row"><span class="flow-row-no">${start}–${end}</span>${cells}</div>`;
-    })
-    .join("\n");
-}
+// Task 5.2/5.3, merged into one continuous strip: the projected pending
+// zone naturally extends the real zone (shipped -> staged -> open) in the
+// SAME grid — rows of 40 cells, a `.flow-batch-div` between every batch of
+// 5 throughout (real AND projected alike), row numbering carrying over
+// rather than restarting. `nowIndex` (the absolute 0-based index where real
+// ends and projected begins) is always itself a multiple of 5 — `open` is
+// computed as `nextMultipleOf5(shipped) - (shipped+staged)`, so
+// `realUnits.length` is always exactly `nextMultipleOf5(shipped)` — so the
+// "now" marker always lands on a real batch boundary, never mid-group.
+function renderShipOrderStrip(units, nowIndex = null) {
+  if (units.length === 0) return "";
+  const rowParts = [];
+  let rowStart = 0;
+  let rowCells = [];
+  // Tracked separately from `rowCells.length` — that array also holds
+  // divider/marker HTML fragments, which must never count toward the
+  // row's own cell-number range.
+  let rowUnitCount = 0;
 
-// Task 5.3: the projected pending zone, grouped by drain tier (not batches of
-// 5) — a `flow-tier-sep` marks every boundary where `remaining` changes, so
-// the UI never implies one fixed-schedule queue.
-function renderPendingRows(tiers) {
-  const flat = [];
-  tiers.forEach(({ remaining, cards }, tierIndex) => {
-    cards.forEach((c) => flat.push({ ...c, remaining, isLastOfTier: false }));
-    if (flat.length) flat[flat.length - 1].isLastOfTier = true;
-  });
-  if (flat.length === 0) return "";
+  const flushRow = () => {
+    if (rowUnitCount === 0) return;
+    const start = rowStart + 1;
+    const end = rowStart + rowUnitCount;
+    rowParts.push(`<div class="flow-shape-row"><span class="flow-row-no">${start}–${end}</span>${rowCells.join("")}</div>`);
+    rowCells = [];
+    rowUnitCount = 0;
+  };
 
-  const rows = [];
-  for (let i = 0; i < flat.length; i += 20) rows.push(flat.slice(i, i + 20));
-  return rows
-    .map((row, i) => {
-      const start = i * 20 + 1;
-      const end = i * 20 + row.length;
-      const cells = row
-        .map((c) => {
-          const title = `${c.cardId} · ${c.letter}${c.noteText ? ` · ${c.noteText}` : ""} — +${c.remaining} away`;
-          const unit = unitSpan("pending", c.letter, title);
-          return c.isLastOfTier ? `${unit}<span class="flow-tier-sep">+${c.remaining}</span>` : unit;
-        })
-        .join("");
-      return `<div class="flow-shape-row"><span class="flow-row-no">${start}–${end}</span>${cells}</div>`;
-    })
-    .join("\n");
+  for (let i = 0; i < units.length; i++) {
+    const isRowStart = i % SHIP_ORDER_ROW_SIZE === 0;
+    const isGroupStart = i % 5 === 0;
+    if (isRowStart) {
+      flushRow();
+      rowStart = i;
+      if (i === nowIndex && i !== 0) {
+        rowParts.push(`<div class="flow-now-marker" title="everything below is projected — order depends on what arrives next">now — projected from here</div>`);
+      }
+    } else if (isGroupStart) {
+      rowCells.push(
+        i === nowIndex
+          ? `<span class="flow-now-div" title="now — everything after this point is projected">now</span>`
+          : `<span class="flow-batch-div"></span>`
+      );
+    }
+    const u = units[i];
+    rowCells.push(unitSpan(u.cls, u.letter, u.title));
+    rowUnitCount += 1;
+  }
+  flushRow();
+  return rowParts.join("\n");
 }
 
 function buildDeckFlowDetail(d, deckMeta, shipOrder) {
@@ -305,13 +309,40 @@ function buildDeckFlowDetail(d, deckMeta, shipOrder) {
     })),
   ];
 
-  const pendingHtml = renderPendingRows(d.pendingByTier);
+  // Task 5.3 (reworked): instead of a text "+N" label marking how far a
+  // tier is, that distance is rendered AS N actual filler cells (`.flow-u
+  // .gap`, "?" like `open`, but visually distinct — these represent future
+  // arrivals, not unminted slots) — inserted right after that tier's own
+  // cards, in the same continuous strip `open` already flows into. Pending
+  // zone is empty for a single-occurrence family (occPerCard !== 2) by
+  // construction (`pendingByTier` never has rows for those decks).
+  const pendingUnits = [];
+  for (const tier of d.pendingByTier) {
+    for (const c of tier.cards) {
+      pendingUnits.push({
+        cls: "pending",
+        letter: c.letter,
+        title: `${c.cardId} · ${c.letter}${c.noteText ? ` · ${c.noteText}` : ""} — +${tier.remaining} away`,
+      });
+    }
+    for (let i = 0; i < tier.remaining; i++) {
+      pendingUnits.push({
+        cls: "gap",
+        letter: "?",
+        title: `${tier.remaining} more new card${tier.remaining === 1 ? "" : "s"} must land in ${d.deckCode} before this tier drains`,
+      });
+    }
+  }
+  const hasPending = pendingUnits.length > 0;
+  const combinedUnits = hasPending ? [...realUnits, ...pendingUnits] : realUnits;
+  const nowIndex = hasPending ? realUnits.length : null;
 
   const legend = `<div class="flow-legend">
     <span class="sw">${unitSpan("shipped", "·", "shipped")}shipped</span>
     <span class="sw">${unitSpan("staged", "·", "staged")}staged — short of next 5</span>
     <span class="sw">${unitSpan("open", "?", "open")}open — not yet minted</span>
     ${occPerCard === 2 ? `<span class="sw">${unitSpan("pending", "E", "pending")}pending — 11-batch spacing lag</span>` : ""}
+    ${hasPending ? `<span class="sw">${unitSpan("gap", "?", "future arrival")}not yet landed — counts toward a tier draining</span>` : ""}
   </div>`;
 
   const bannerClass = d.gridStatus.onGrid ? "" : " crit";
@@ -322,26 +353,22 @@ function buildDeckFlowDetail(d, deckMeta, shipOrder) {
     ${d.wouldFlushCount > 0 ? `the next multiple of 5 would be reached and flushed (+${d.wouldFlushCount})` : d.stagedTotal > 0 ? "held — still short of the next multiple of 5" : "nothing outstanding"}.
   </div>`;
 
+  const emptyNote = occPerCard === 2
+    ? "No pending occurrences right now — nothing waiting out the 11-batch spacing lag."
+    : "No pending zone for this deck — single-occurrence type, nothing ever waits out an 11-batch spacing gap.";
+
   return `<div class="flow-detail">
     ${banner}
     <div class="flow-shape-wrap">
-      <h4>Full ship order — real so far, projected after "now"</h4>
+      <h4>Full ship order — shipped → staged → open → now → pending, one continuous strip</h4>
       ${legend}
       <div class="flow-shape-box">
-        ${realUnits.length ? `<div class="flow-zone-row">real — shipped · staged · open (4 batches of 5 per row)</div>` : ""}
-        <div class="flow-shape-rows">${renderRealZoneRows(realUnits) || `<div class="flow-pending-empty">nothing minted into this deck yet</div>`}</div>
-        ${
-          occPerCard === 2
-            ? pendingHtml
-              ? `<div class="flow-zone-row" style="margin-top:12px;" title="Everything above is real. Everything below is projected — order depends on what arrives next.">projected — grouped by how many more new cards must land before each tier drains, not batches of 5</div>
-          <div class="flow-shape-rows" style="margin-top:6px;">${pendingHtml}</div>`
-              : `<p class="flow-pending-empty">No pending occurrences right now — nothing waiting out the 11-batch spacing lag.</p>`
-            : `<p class="flow-pending-empty">No pending zone for this deck — single-occurrence type, nothing ever waits out an 11-batch spacing gap.</p>`
-        }
+        <div class="flow-shape-rows">${renderShipOrderStrip(combinedUnits, nowIndex) || `<div class="flow-pending-empty">nothing minted into this deck yet</div>`}</div>
+        ${combinedUnits.length === 0 ? "" : hasPending ? "" : `<p class="flow-pending-empty">${escapeHtml(emptyNote)}</p>`}
       </div>
       ${
-        pendingHtml
-          ? `<div class="flow-shape-note"><b>How "open" and "pending" actually relate:</b> they're not strictly sequential. Every pending occurrence counts down by however many brand-new cards land in ${escapeHtml(d.deckCode)} each run — whichever rows reach zero drain together in that same run, not one at a time on a fixed schedule. A single new card can fill the open slot above <i>and</i> drain a near-zero pending tier in the same run.</div>`
+        hasPending
+          ? `<div class="flow-shape-note"><b>How "open" and "pending" actually relate:</b> they're not strictly sequential. Every pending occurrence counts down by however many brand-new cards land in ${escapeHtml(d.deckCode)} each run — whichever rows reach zero drain together in that same run, not one at a time on a fixed schedule. The "?" filler cells after each tier represent that same distance visually, not a literal queue of specific future cards. A single new card can fill the open slot above <i>and</i> drain a near-zero pending tier in the same run.</div>`
           : ""
       }
     </div>
@@ -350,9 +377,16 @@ function buildDeckFlowDetail(d, deckMeta, shipOrder) {
 
 // Task 5.1: the compact per-deck summary row — code/title, the 5-cell
 // in-progress-batch block, the grid-status chip, and absolute totals + this
-// run's delta. The 5-cell block always shows the CURRENT, not-yet-flushed
-// batch — `shippedCount % 5` cells are already-shipped (a fully-shipped
-// batch has already flushed and is never "current"), then staged, then open.
+// run's delta. The 5-cell BLOCK (colored cells) shows the CURRENT,
+// not-yet-flushed batch only — `shippedCount % 5` cells are already-shipped
+// within it (a fully-shipped batch has already flushed and is never
+// "current"), then staged, then open. The READOUT TEXT's "shipped" number
+// is deliberately NOT that same in-batch count (which is always 0 for an
+// on-grid deck — a completed batch is by definition never "current",
+// so that figure would be vacuous) — it's the deck's absolute lifetime
+// shipped total, same number the global totals strip and the detail
+// banner both already use.
+
 function buildDeckFlowCard(d, deckMeta, shipOrder, thisRunOccDelta) {
   const meta = deckMeta.get(d.deckCode) || { title: d.deckCode, description: "" };
   const shippedInBatch = d.shippedTotal % 5;
@@ -388,7 +422,7 @@ function buildDeckFlowCard(d, deckMeta, shipOrder, thisRunOccDelta) {
 
       <div class="flow-grid-track">
         <div class="flow-blocks">${cells}</div>
-        <div class="flow-grid-readout"><span class="mono">${shippedInBatch}</span> shipped · <span class="mono">${stagedShown}</span> staged · <span class="mono">${openShown}</span> open</div>
+        <div class="flow-grid-readout"><span class="mono">${d.shippedTotal}</span> shipped · <span class="mono">${stagedShown}</span> staged · <span class="mono">${openShown}</span> open</div>
       </div>
 
       ${statusChip}
