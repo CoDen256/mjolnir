@@ -9,8 +9,8 @@
 // new class invented here. Wrapped in the same `<div class="center">` every
 // stock N/E/X field uses, which this previously omitted.
 function translationsHtml(note) {
-  const lines = note.translations.map((t) => `<b class="bold">${t.lang}</b>: ${t.text}`);
-  return `<div class="center"><div class="left">${lines.join("<br>")}</div></div>`;
+  const lines = note.translations.map((t) => `${t.text}`);
+  return `<div class="center">${lines.join("<br>")}</div>`;
 }
 
 // Per-POS inflection line layout (tun/docs/03-data-model.md's inflection
@@ -25,7 +25,7 @@ function wordInflectionLines(pos, inflections) {
   if (pos === "substantiv") {
     const { article, sg_indef, sg_def, pl_def, pl_indef } = inflections;
     const headword = [article, sg_indef].filter(Boolean).join(" ");
-    return [headword, sg_def, pl_def, pl_indef].filter(Boolean);
+    return [headword, sg_def, pl_indef, pl_def].filter(Boolean);
   }
   if (pos === "adjektiv") {
     const { positiv, nøytrum, flertall, komparativ, superlativ } = inflections;
@@ -78,7 +78,7 @@ function transcriptionHtml(note){
   .replace(/^[\/\[\]]+|[\/\[\]]+$/g, '')
   .replace(/["']/g, char => map[char]);
 
-  return `<div class="arialFont supWrap">[&ensp; ${ipa} ]</div>`
+  return `[&ensp; ${ipa} ]`
 }
 
 const PROJECTORS = {
@@ -108,7 +108,7 @@ const PROJECTORS = {
   }),
   pronunciation: (note) => ({
     N: `<div class="center">Read out:<br><span class="lg">${note.text}</span></div>`,
-    E: `<div class="center">${transcriptionHtml(note)}</div>`,
+    E: `<div class="center"><div class="arialFont supWrap">${transcriptionHtml(note)}</div></div>`,
     X: "",
     A: "E",
     occurrences: ["N"],
