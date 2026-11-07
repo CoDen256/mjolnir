@@ -154,7 +154,7 @@ __d(function (g, _r, _i, _a, m, _e, d) {
                 Tt = St[1],
                 xt = (0, a.useRef)(void 0).current;
             (0, a.useEffect)(function () {
-                return ze.current = !0, function () {
+                return ze.current = !0,ae(!1),function () {
                     ze.current = !1;
                 };
             }, []), (0, a.useEffect)(function () {

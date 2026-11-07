@@ -20,12 +20,42 @@ __d(function (g, r, i, a, m, e, d) {
       collapsed: true,
       diff: false,
       stateTransformer: function (state) {
-        return JSON.stringify(state);
+        return JSON.stringify(mjolnirCompactCards(state));
       },
       actionTransformer: function (action) {
-        return JSON.stringify(action);
+        return JSON.stringify(mjolnirCompactCards(action));
       }
     })));
+  function mjolnirIsCardRecord(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, "D") && Object.prototype.hasOwnProperty.call(value, "ID");
+  }
+  function mjolnirCardToArray(card) {
+    var out = [];
+    for (var key in card) {
+      if (Object.prototype.hasOwnProperty.call(card, key) && key !== "D") {
+        out.push(card[key]);
+      }
+    }
+    return out;
+  }
+  function mjolnirCompactCards(value) {
+    if (Array.isArray(value)) {
+      return value.map(mjolnirCompactCards);
+    }
+    if (value && typeof value === "object") {
+      if (mjolnirIsCardRecord(value)) {
+        return mjolnirCardToArray(value);
+      }
+      var out = {};
+      for (var key in value) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+          out[key] = mjolnirCompactCards(value[key]);
+        }
+      }
+      return out;
+    }
+    return value;
+  }
   v.run(f.default);
   e.persistor = (0, c.persistStore)(y), e.default = y;
 }, 953, [1, 954, 956, 957, 964, 969, 973, 974, 985]);
