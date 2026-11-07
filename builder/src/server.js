@@ -85,6 +85,11 @@ function fmtDeckBreakdown(byDeck, pick) {
   return parts.map(([code, v]) => `${escapeHtml(code)} ${v}`).join(" · ");
 }
 
+function deltaLine(delta, { neutralLabel = "nothing this run" } = {}) {
+  if (delta > 0) return `<div class="delta"><span class="plus">+${delta}</span> this run</div>`;
+  return `<div class="delta neutral">${escapeHtml(neutralLabel)}</div>`;
+}
+
 function buildGlobalTotals(forecast) {
   const sum = (pick) => forecast.byDeck.reduce((n, d) => n + (pick(d) || 0), 0);
   const mintedTotal = sum((d) => d.mintedCount);
@@ -93,21 +98,34 @@ function buildGlobalTotals(forecast) {
   const stagedTotal = sum((d) => d.stagedTotal);
   const pendingTotal = sum((d) => d.pendingTotal);
 
+  // This-run deltas — forward-looking, same "if published right now" basis
+  // the pipeline rail's own deltas already use, not yet-committed actuals.
+  // Occurrences-eventual's delta mirrors Cards-minted's: each newly-
+  // eligible card contributes its family's full occurrence shape, derived
+  // the same way `deckTotals` derives the absolute total (no second source
+  // of truth).
+  const mintedDelta = sum((d) => d.newlyEligibleCount);
+  const eventualDelta = sum((d) => d.newlyEligibleCount * (occurrencesPerCardForDeck(d.deckCode) ?? 0));
+  const shippedDelta = sum((d) => d.wouldFlushCount);
+
   return `
 <div class="flow-totals">
   <div class="flow-cell-stat">
     <div class="label">Cards minted</div>
     <div class="value">${mintedTotal}</div>
+    ${deltaLine(mintedDelta, { neutralLabel: "nothing newly eligible" })}
     <div class="sub">${fmtDeckBreakdown(forecast.byDeck, (d) => d.mintedCount)}</div>
   </div>
   <div class="flow-cell-stat">
     <div class="label">Occurrences, eventual</div>
     <div class="value">${eventualTotal}</div>
+    ${deltaLine(eventualDelta, { neutralLabel: "nothing newly eligible" })}
     <div class="sub">every side every minted card will ever contribute</div>
   </div>
   <div class="flow-cell-stat">
     <div class="label">Shipped (in bundle)</div>
     <div class="value">${shippedTotal}</div>
+    ${deltaLine(shippedDelta, { neutralLabel: "nothing would flush" })}
     <div class="sub">${fmtDeckBreakdown(forecast.byDeck, (d) => d.shippedTotal)}</div>
   </div>
   <div class="flow-cell-stat">

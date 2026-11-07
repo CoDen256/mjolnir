@@ -120,6 +120,9 @@ details.json-toggle summary { cursor: pointer; font-size: 13px; padding: 4px 0; 
 .flow-cell-stat .label { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; margin-bottom: 6px; }
 .flow-cell-stat .value { font-size: 22px; font-weight: 700; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .flow-cell-stat .sub { font-size: 11.5px; color: var(--text-faint); margin-top: 3px; }
+.flow-cell-stat .delta { font-size: 11.5px; font-weight: 650; color: var(--text-dim); margin-top: 3px; }
+.flow-cell-stat .delta .plus { color: var(--ok); font-weight: 700; }
+.flow-cell-stat .delta.neutral { color: var(--text-faint); font-weight: 500; }
 
 .flow-rail { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px 16px; margin-bottom: 16px; }
 .flow-rail-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }
