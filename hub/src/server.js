@@ -19,7 +19,21 @@ import { DECK_ALLOCATION, listDecks, updateDeckDescription } from "./decks.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
 import { slugify } from "./slug.js";
-import { getOrCreate, merge, replace, remove, listAccounts, perCardProgress, historyDeltas } from "./userdata.js";
+import {
+  getOrCreate,
+  merge,
+  replace,
+  remove,
+  listAccounts,
+  perCardProgress,
+  historyDeltas,
+  userdataDoc,
+  historyDoc,
+  distinctDeckTitles,
+  STATE_LABELS,
+  PAGE_SIZES,
+} from "./userdata.js";
+import { cardIndex } from "./cardText.js";
 import { createRequestHandler as createWorkbenchHandler } from "../../src/commands/ui.js";
 // D109: builder's own pages are rendered here directly, in-process — same
 // monorepo, same shared Postgres (D-P3) — instead of the earlier iframe-
@@ -35,6 +49,8 @@ import { jobLogLines } from "../../builder/src/jobLogs.js";
 import { recentBatches, occurrencesForBuild } from "../../builder/src/batchHistory.js";
 import { getActiveMeta } from "../../builder/src/logicBundle.js";
 import { buildForecastBody, buildScheduleBody, buildLogsBody, loadDeckMeta, loadShipOrders } from "../../builder/src/server.js";
+import { buildInsights } from "./insights.js";
+import { renderInsightsPage } from "./insightsPage.js";
 
 const WORKBENCH_MOUNT = "/mjolnir/workbench";
 
@@ -467,6 +483,10 @@ details.json-toggle pre { margin: 8px 0 0; padding: 12px 14px; background: var(-
 .tl-delta { font-family: var(--mono); }
 .tl-delta.up { color: var(--ok); }
 .tl-delta.flat { color: var(--text-faint); }
+.pager { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.pager-readout { font-size: 12px; color: var(--text-faint); margin-right: auto; }
+.pager a.btn-ghost[aria-disabled="true"] { opacity: .4; pointer-events: none; }
+.pager a.pager-current { background: var(--bg-elevated); color: var(--text); font-weight: 600; }
 `;
 
 function timeAgo(date) {
@@ -483,30 +503,47 @@ function timeAgo(date) {
   return `${Math.floor(days / 7)}w ago`;
 }
 
-// D-C3: Status is derived, not stored — "brand new" wins whenever the
-// scheduler's own Type says so (a just-minted occurrence), otherwise Park/
-// Graduated/default, matching the mockup's own worked examples exactly.
-function cardStatusPill(card) {
-  if (card.type === "brand") return `<span class="pill pill-accent">brand new</span>`;
-  if (card.park) return `<span class="pill pill-warn">parked</span>`;
-  if (card.graduated) return `<span class="pill pill-neutral">graduated</span>`;
-  return `<span class="pill pill-ok">active</span>`;
+// D-UP5: the four R3/R4 states, not a climbing ladder. The "brand new"
+// branch from the old derived-status logic is dropped — `Type` only ever
+// holds `prev`/`same` on real data, never `brand` (findings.md R3), so
+// that branch was dead and its pill would have been misleading had it
+// ever fired. "Parked early" is deliberately not "manually archived" — R9
+// shows the stored record cannot distinguish a hand-park from mod 2133's
+// `FreshPark`.
+function cardStatusPill(row) {
+  const label = STATE_LABELS[row.state];
+  if (!label) return `<span class="pill pill-neutral">—</span>`;
+  if (row.state === "inRotation") return `<span class="pill pill-ok">${label}</span>`;
+  if (row.state === "retiredCeiling") return `<span class="pill pill-neutral">${label}</span>`;
+  return `<span class="pill pill-warn">${label}</span>`; // parkedEarly / parkedDormant
 }
 
-function perCardRowHtml(card) {
+function flagsHtml(row) {
+  const chips = [];
+  if (row.tag) chips.push(`<span class="chip">tagged</span>`);
+  if (row.panic) chips.push(`<span class="chip">panic</span>`);
+  return chips.join(" ");
+}
+
+function perCardRowHtml(row) {
   return `<tr>
-    <td class="mono">${escapeHtml(card.id)}</td>
-    <td class="wrap">${card.content ? escapeHtml(stripHtml(card.content)) : ""}</td>
-    <td><span class="chip">${escapeHtml(card.side ?? "")}</span></td>
-    <td>${escapeHtml(card.deckTitle || card.deckCode || "")}</td>
-    <td class="num">${card.stage ?? ""}</td>
-    <td>${cardStatusPill(card)}</td>
-    <td class="dim">${escapeHtml(card.type || "")}</td>
-    <td class="dim">${timeAgo(card.lastReviewedAt)}</td>
+    <td class="mono">${escapeHtml(row.id)}</td>
+    <td class="wrap">${row.content ? escapeHtml(stripHtml(row.content)) : ""}</td>
+    <td><span class="chip">${escapeHtml(row.side ?? "")}</span></td>
+    <td>${escapeHtml(row.deckTitle || "")}</td>
+    <td class="num">${row.stage ?? ""}</td>
+    <td>${cardStatusPill(row)}</td>
+    <td class="num">${row.interval ?? ""}</td>
+    <td class="dim">${row.nextDueAt ? escapeHtml(new Date(row.nextDueAt).toISOString().slice(0, 10)) : "—"}</td>
+    <td class="num">${row.reschedules ?? ""}</td>
+    <td>${flagsHtml(row)}</td>
   </tr>`;
 }
 
-function historyRowHtml(entry) {
+// D-UP4: the raw document is fetched on first expand, via `data-doc-url`
+// (wired up by the `<script>` at the bottom of `renderDevicePage`) —
+// never inlined here, which is the whole point of this change.
+function historyRowHtml(entry, selectedUid) {
   const dot = entry.title === "Account deleted" ? "warn" : entry.title === "Synced" ? "" : "ok";
   const details = entry.detail
     .map((d) =>
@@ -515,21 +552,63 @@ function historyRowHtml(entry) {
         : `<span>${escapeHtml(d.label)} <span class="tl-delta ${d.up ? "up" : "flat"}">${escapeHtml(d.text)}</span></span>`
     )
     .join("\n");
+  const docUrl = `/mjolnir/device/doc?uid=${encodeURIComponent(selectedUid)}&historyId=${encodeURIComponent(entry.id)}`;
   return `<div class="tl-row">
     <div class="tl-time">${timeAgo(entry.at)}</div>
     <div class="tl-rail"><div class="tl-dot ${dot}"></div></div>
     <div>
       <div class="tl-title">${escapeHtml(entry.title)}</div>
       ${details ? `<div class="tl-detail">${details}</div>` : ""}
-      <details class="json-toggle" style="margin-top:4px;">
+      <details class="json-toggle" style="margin-top:4px;" data-doc-url="${escapeHtml(docUrl)}">
         <summary>raw doc</summary>
-        <pre>${escapeHtml(JSON.stringify(entry.doc, null, 2))}</pre>
+        <pre>loading…</pre>
       </details>
     </div>
   </div>`;
 }
 
-function renderDevicePage({ accounts, selectedUid, doc, perCard, history }) {
+// `filters` carries every GET param the toolbar/pager round-trips, always
+// with `uid` merged in — one helper so the toolbar, pager and "Clear"
+// link can never disagree about what the current query actually is.
+function deviceQueryUrl(selectedUid, filters, overrides = {}) {
+  const merged = { uid: selectedUid, ...filters, ...overrides };
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(merged)) {
+    if (value === "" || value === null || value === undefined) continue;
+    params.set(key, String(value));
+  }
+  return `/mjolnir/device?${params.toString()}`;
+}
+
+function pagerHtml(selectedUid, filters, total) {
+  const totalPages = Math.max(1, Math.ceil(total / filters.size));
+  const page = Math.min(Math.max(1, filters.page), totalPages);
+  const from = total === 0 ? 0 : (page - 1) * filters.size + 1;
+  const to = Math.min(total, page * filters.size);
+
+  const windowStart = Math.max(1, page - 2);
+  const windowEnd = Math.min(totalPages, page + 2);
+  const numbered = [];
+  for (let p = windowStart; p <= windowEnd; p++) {
+    numbered.push(
+      `<a class="btn-ghost${p === page ? " pager-current" : ""}" href="${escapeHtml(deviceQueryUrl(selectedUid, filters, { page: p }))}">${p}</a>`
+    );
+  }
+
+  const navLink = (label, targetPage, disabled) =>
+    `<a class="btn-ghost" href="${escapeHtml(deviceQueryUrl(selectedUid, filters, { page: targetPage }))}" ${disabled ? 'aria-disabled="true"' : ""}>${label}</a>`;
+
+  return `<div class="pager">
+    <span class="pager-readout">showing ${from}–${to} of ${total}</span>
+    ${navLink("« first", 1, page <= 1)}
+    ${navLink("‹ prev", Math.max(1, page - 1), page <= 1)}
+    ${numbered.join("")}
+    ${navLink("next ›", Math.min(totalPages, page + 1), page >= totalPages)}
+    ${navLink("last »", totalPages, page >= totalPages)}
+  </div>`;
+}
+
+function renderDevicePage({ accounts, selectedUid, doc, perCard, total, history, filters, deckTitles, cardIndexInfo }) {
   if (accounts.length === 0) {
     return renderShell({
       title: "mjolnir / hub — device sync",
@@ -556,7 +635,25 @@ function renderDevicePage({ accounts, selectedUid, doc, perCard, history }) {
     : `<div class="inline-note">No userdata document for this account yet.</div>`;
 
   const perCardRows = perCard.map(perCardRowHtml).join("\n");
-  const historyRows = history.map(historyRowHtml).join("\n");
+  const historyRows = history.map((entry) => historyRowHtml(entry, selectedUid)).join("\n");
+
+  const deckOptions = deckTitles
+    .map((d) => `<option value="${escapeHtml(d)}" ${d === filters.deck ? "selected" : ""}>${escapeHtml(d)}</option>`)
+    .join("");
+  const stateOptions = Object.entries(STATE_LABELS)
+    .map(([key, label]) => `<option value="${key}" ${filters.state === key ? "selected" : ""}>${escapeHtml(label)}</option>`)
+    .join("");
+  const sideOption = (letter) => `<option value="${letter}" ${filters.side === letter ? "selected" : ""}>${letter}</option>`;
+  const sortOption = (key, label) => `<option value="${key}" ${filters.sort === key ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  const sizeOptions = PAGE_SIZES.map((n) => `<option value="${n}" ${filters.size === n ? "selected" : ""}>${n} / page</option>`).join("");
+
+  const snapshotDocUrl = `/mjolnir/device/doc?uid=${encodeURIComponent(selectedUid)}`;
+
+  const bundleNote = cardIndexInfo.reason
+    ? `<div class="inline-note">Content for stock cards is unavailable: ${escapeHtml(cardIndexInfo.reason)}. Every other column is unaffected.</div>`
+    : perCard.some((r) => r.contentSource === "bundle")
+      ? `<div class="inline-note">Content for stock cards is read from the currently published bundle (build <code>${escapeHtml(cardIndexInfo.buildId || "")}</code>).</div>`
+      : "";
 
   return renderShell({
     title: "mjolnir / hub — device sync",
@@ -567,7 +664,7 @@ function renderDevicePage({ accounts, selectedUid, doc, perCard, history }) {
     <h2>Device sync</h2>
     <div class="page-sub">Progress reported by the signed-in account, kept as a mirror — this view is read-only.</div>
   </div>
-  <a class="btn btn-ghost" href="/mjolnir/device?uid=${encodeURIComponent(selectedUid)}">↻ Refresh</a>
+  <a class="btn btn-ghost" href="${escapeHtml(deviceQueryUrl(selectedUid, filters))}">↻ Refresh</a>
 </div>
 
 <form method="GET" action="/mjolnir/device">
@@ -585,22 +682,49 @@ function renderDevicePage({ accounts, selectedUid, doc, perCard, history }) {
   </div>
   <div class="panel-pad">
     ${snapGrid}
-    ${doc ? `<details class="json-toggle" style="margin-top:16px;"><summary>raw doc</summary><pre>${escapeHtml(JSON.stringify(doc, null, 2))}</pre></details>` : ""}
+    ${doc ? `<details class="json-toggle" style="margin-top:16px;" data-doc-url="${escapeHtml(snapshotDocUrl)}"><summary>raw doc</summary><pre>loading…</pre></details>` : ""}
   </div>
 </div>
 
 <div class="panel">
   <div class="panel-head">
-    <div><h3>Per-card progress</h3><div class="page-sub">Every occurrence with SRS state, joined against card content — ${perCard.length} rows.</div></div>
+    <div><h3>Per-card progress</h3><div class="page-sub">Every occurrence with SRS state, joined against card content — ${total} matching.</div></div>
+  </div>
+  <div class="panel-pad" style="padding-bottom:0;">
+    <form class="toolbar" method="GET" action="/mjolnir/device">
+      <input type="hidden" name="uid" value="${escapeHtml(selectedUid)}">
+      <input class="search-input" type="search" name="q" value="${escapeHtml(filters.q)}" placeholder="Search card id or content…">
+      <select name="deck"><option value="">Deck: all</option>${deckOptions}</select>
+      <select name="side"><option value="">Side: all</option>${sideOption("N")}${sideOption("E")}${sideOption("A")}</select>
+      <select name="state"><option value="">State: all</option>${stateOptions}</select>
+      <select name="flag">
+        <option value="">Flag: all</option>
+        <option value="tag" ${filters.flag === "tag" ? "selected" : ""}>tagged</option>
+        <option value="panic" ${filters.flag === "panic" ? "selected" : ""}>panic</option>
+      </select>
+      <select name="sort">
+        <option value="">Sort: device order</option>
+        ${sortOption("id", "Card id")}${sortOption("side", "Side")}${sortOption("deck", "Deck")}${sortOption("stage", "Stage")}${sortOption("interval", "Interval")}${sortOption("nextDue", "Next due")}${sortOption("reschedules", "Reschedules")}
+      </select>
+      <select name="dir">
+        <option value="asc" ${filters.dir === "asc" ? "selected" : ""}>asc</option>
+        <option value="desc" ${filters.dir === "desc" ? "selected" : ""}>desc</option>
+      </select>
+      <select name="size">${sizeOptions}</select>
+      <button type="submit">Filter</button>
+      <a class="btn-ghost" href="/mjolnir/device?uid=${encodeURIComponent(selectedUid)}">Clear</a>
+    </form>
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Card</th><th>Content</th><th>Side</th><th>Deck</th><th class="num">Stage</th><th>Status</th><th>Type</th><th>Last reviewed</th></tr></thead>
-      <tbody>${perCardRows || `<tr><td colspan="8">no per-card progress recorded yet</td></tr>`}</tbody>
+      <thead><tr><th>Card</th><th>Content</th><th>Side</th><th>Deck</th><th class="num">Stage</th><th>Status</th><th class="num">Interval</th><th>Next due</th><th class="num">Reschedules</th><th>Flags</th></tr></thead>
+      <tbody>${perCardRows || `<tr><td colspan="10">no per-card progress matches this filter</td></tr>`}</tbody>
     </table>
   </div>
   <div class="panel-pad" style="padding-top:12px; padding-bottom:14px;">
+    ${pagerHtml(selectedUid, filters, total)}
     <div class="inline-note">"Content" is always the card's <strong>N</strong> field (stripped of HTML), the same for every row regardless of which side was reviewed — N identifies the card, E is only ever the answer. "Side" is the stored direction letter (N/E/A), never an actual language.</div>
+    ${bundleNote}
   </div>
 </div>
 
@@ -611,7 +735,25 @@ function renderDevicePage({ accounts, selectedUid, doc, perCard, history }) {
   <div class="panel-pad">
     <div class="timeline">${historyRows || `<div class="inline-note">no sync history recorded yet</div>`}</div>
   </div>
-</div>`,
+</div>
+<script>
+document.querySelectorAll('details.json-toggle[data-doc-url]').forEach((details) => {
+  details.addEventListener('toggle', async () => {
+    if (!details.open || details.dataset.loaded) return;
+    details.dataset.loaded = '1';
+    const pre = details.querySelector('pre');
+    try {
+      const res = await fetch(details.dataset.docUrl);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const body = await res.json();
+      pre.textContent = JSON.stringify(body.doc, null, 2);
+    } catch (err) {
+      pre.textContent = 'failed to load: ' + err.message;
+      details.dataset.loaded = '';
+    }
+  });
+});
+</script>`,
   });
 }
 
@@ -1085,29 +1227,92 @@ export function createServer(pool, config) {
       if (req.method === "GET" && url.pathname === "/mjolnir/device") {
         const accounts = await listAccounts();
         // Read-only (spec requirement): restricted to a uid `listAccounts`
-        // actually returned, never an arbitrary query param — `getOrCreate`
-        // below auto-creates on a genuine miss (D-S2, for real device
-        // traffic), which this page must never trigger as a side effect of
-        // merely being viewed.
+        // actually returned, never an arbitrary query param — the doc read
+        // below is a plain read (`userdataDoc`), never `getOrCreate`, so
+        // merely viewing this page can never side-effect a new row.
         const requestedUid = url.searchParams.get("uid") || "";
         const selectedUid = accounts.includes(requestedUid) ? requestedUid : accounts[0] || "";
-        const [{ doc } = {}, perCard, history] = accounts.length
-          ? await Promise.all([
-              selectedUid ? getOrCreate(selectedUid) : null,
-              selectedUid ? perCardProgress(selectedUid) : [],
-              selectedUid ? historyDeltas(selectedUid, { limit: 20 }) : [],
-            ])
-          : [];
+
+        const sizeParam = Number(url.searchParams.get("size"));
+        const filters = {
+          page: Math.max(1, Math.trunc(Number(url.searchParams.get("page"))) || 1),
+          size: PAGE_SIZES.includes(sizeParam) ? sizeParam : 50,
+          sort: url.searchParams.get("sort") || "",
+          dir: url.searchParams.get("dir") === "desc" ? "desc" : "asc",
+          deck: url.searchParams.get("deck") || "",
+          side: url.searchParams.get("side") || "",
+          state: url.searchParams.get("state") || "",
+          flag: url.searchParams.get("flag") || "",
+          q: url.searchParams.get("q") || "",
+        };
+
+        const index = cardIndex(config.dataDir);
+        const [doc, progress, history, deckTitles] =
+          accounts.length && selectedUid
+            ? await Promise.all([
+                userdataDoc(selectedUid),
+                perCardProgress(selectedUid, { ...filters, cardIndex: index }),
+                historyDeltas(selectedUid, { limit: 20 }),
+                distinctDeckTitles(selectedUid),
+              ])
+            : [null, { rows: [], total: 0 }, [], []];
+
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         return res.end(
           renderDevicePage({
             accounts,
             selectedUid,
             doc: doc || null,
-            perCard: perCard || [],
+            perCard: progress.rows,
+            total: progress.total,
             history: history || [],
+            filters,
+            deckTitles,
+            cardIndexInfo: { reason: index.reason, buildId: index.buildId },
           })
         );
+      }
+
+      // D-UP4: the per-card table's raw docs load on demand from here —
+      // same uid-restricted posture as the page itself, never an arbitrary
+      // query param. `historyId` must belong to `uid`.
+      if (req.method === "GET" && url.pathname === "/mjolnir/device/doc") {
+        const accounts = await listAccounts();
+        const uid = url.searchParams.get("uid") || "";
+        if (!accounts.includes(uid)) return sendJson(res, 404, { error: "no such account" });
+
+        const historyIdParam = url.searchParams.get("historyId");
+        if (historyIdParam) {
+          const doc = await historyDoc(uid, Number(historyIdParam));
+          if (doc === undefined) return sendJson(res, 404, { error: "no such history entry" });
+          return sendJson(res, 200, { doc });
+        }
+        return sendJson(res, 200, { doc: await userdataDoc(uid) });
+      }
+
+      // device-insights-page: a separate, additional tab, not a
+      // replacement for Sync (D126/proposal's own Non-Goals). Same
+      // uid-restricted posture as every other account-scoped route here.
+      if (req.method === "GET" && url.pathname === "/mjolnir/device/insights") {
+        const accounts = await listAccounts();
+        const requestedUid = url.searchParams.get("uid") || "";
+        const selectedUid = accounts.includes(requestedUid) ? requestedUid : accounts[0] || "";
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end(
+          renderShell({
+            title: "mjølnir · hub — Insights",
+            activeHref: "/mjolnir/device/insights",
+            body: renderInsightsPage({ accounts, selectedUid }),
+          })
+        );
+      }
+
+      if (req.method === "GET" && url.pathname === "/mjolnir/device/insights.json") {
+        const accounts = await listAccounts();
+        const uid = url.searchParams.get("uid") || "";
+        if (!accounts.includes(uid)) return sendJson(res, 404, { error: "no such account" });
+        const insights = await buildInsights(uid, { dataDir: config.dataDir });
+        return sendJson(res, 200, insights);
       }
 
       if (req.method === "GET" && url.pathname === "/mjolnir/ota") {

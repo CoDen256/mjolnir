@@ -272,7 +272,10 @@ const NAV = [
   },
   {
     group: "Device",
-    items: [{ href: "/mjolnir/device", label: "Sync" }],
+    items: [
+      { href: "/mjolnir/device", label: "Sync" },
+      { href: "/mjolnir/device/insights", label: "Insights" },
+    ],
   },
   {
     group: "Tools",

@@ -1,4 +1,5 @@
 import { query, getPool } from "./db.js";
+import { stripHtml } from "../../src/deckData.js";
 
 // D-S2: the shim's `.get()` must never report a document as not existing —
 // every write method in mod 2080 is unconditionally gated on `doc.exists`
@@ -140,43 +141,201 @@ export async function listAccounts() {
   return rows.map((r) => r.uid);
 }
 
-// D-C3: the account's `totalCards` joined against `card_content` — same
-// `card_slots`/`decks`/`card_content` join shape `hub/src/cards.js`'s
-// `cardsList` already uses, reused rather than reinvented, selecting only
-// `card_content.n` (never `.e`) so the Content column always shows the
-// card's identifying text regardless of which occurrence side this row is.
-export async function perCardProgress(uid) {
-  const { rows } = await query("SELECT doc FROM userdata WHERE device_id = $1", [uid]);
-  if (rows.length === 0) return [];
-  const totalCards = rows[0].doc.totalCards || [];
-  if (totalCards.length === 0) return [];
-
-  const cardIds = totalCards.map((c) => c.ID);
-  const { rows: contentRows } = await query(
-    `SELECT cs.id, cs.deck_code, d.title AS deck_title, cc.n
-     FROM card_slots cs
-     JOIN decks d ON d.code = cs.deck_code
-     LEFT JOIN card_content cc ON cc.card_id = cs.id
-     WHERE cs.id = ANY($1)`,
-    [cardIds]
+// Every distinct `D` (deck title) value appearing in this account's own
+// `totalCards` — the toolbar's deck filter is populated from this, not
+// from the `decks` table (D-UP3). Same lateral-join shape as
+// `perCardProgress`, with no filters applied.
+export async function distinctDeckTitles(uid) {
+  const { rows } = await query(
+    `SELECT DISTINCT t.card->>'D' AS deck
+     FROM userdata u, jsonb_array_elements(u.doc->'totalCards') WITH ORDINALITY AS t(card, idx)
+     WHERE u.device_id = $1 AND t.card->>'D' IS NOT NULL
+     ORDER BY deck`,
+    [uid]
   );
-  const byId = new Map(contentRows.map((r) => [r.id, r]));
+  return rows.map((r) => r.deck);
+}
 
-  return totalCards.map((c) => {
-    const info = byId.get(c.ID);
+// D-UP5: `Stage` is a four-valued retirement tier (findings.md R3), not a
+// climbing ladder — these are the only two places that mapping is spelled
+// out, shared between the SQL filter below and server.js's status pill so
+// neither can drift from the other.
+export const STATE_STAGE = { inRotation: 3, retiredCeiling: 200, parkedEarly: 150, parkedDormant: 100 };
+export const STATE_LABELS = {
+  inRotation: "in rotation",
+  retiredCeiling: "retired at ceiling",
+  parkedEarly: "parked early",
+  parkedDormant: "parked early, dormant",
+};
+const STAGE_TO_STATE = new Map(Object.entries(STATE_STAGE).map(([state, stage]) => [stage, state]));
+export function stateForStage(stage) {
+  return STAGE_TO_STATE.get(stage) || null;
+}
+
+// D-UP1: columns a sort/filter is allowed to touch — a closed enumeration
+// of SQL expressions over the jsonb element, never a caller-supplied
+// column name. Deliberately excludes bundle-derived columns (content, the
+// deck's display title, the status pill) since those aren't stored scalars
+// the lateral join can sort on.
+const SORT_COLUMNS = {
+  id: "t.card->>'ID'",
+  side: "t.card->>'language'",
+  deck: "t.card->>'D'",
+  stage: "(t.card->>'Stage')::numeric",
+  interval: "(t.card->>'CF')::numeric",
+  nextDue: "(t.card->>'Time')::numeric",
+  reschedules: "(t.card->>'numberOfReschedulings')::numeric",
+};
+
+export const PAGE_SIZES = [25, 50, 100, 200];
+
+// Finds every card id in `index.cardById` whose bundle-derived N content
+// (HTML stripped) contains `needle` — the bundle-side half of the `q`
+// filter's two-pronged search (D-UP6); the id-substring half is a plain
+// SQL predicate applied alongside this in `perCardProgress`.
+function matchCardIdsByContent(index, needle) {
+  if (!index) return [];
+  const lower = needle.toLowerCase();
+  const ids = [];
+  for (const card of index.cardById.values()) {
+    if (stripHtml(card.N || "").toLowerCase().includes(lower)) ids.push(card.ID);
+  }
+  return ids;
+}
+
+// D-UP1: pages, sorts and filters `totalCards` in SQL via
+// `jsonb_array_elements(...) WITH ORDINALITY`, rather than reading the
+// whole array into Node — the same query shape (minus LIMIT) is also the
+// COUNT(*), so paging and the reported total can never drift from one
+// another. `opts.cardIndex` (from `cardText.js`'s `cardIndex()`) supplies
+// the published bundle's card/deck text for stock cards and for the
+// bundle-side half of `q`; omitting it degrades Content/Deck gracefully,
+// it never throws.
+export async function perCardProgress(uid, opts = {}) {
+  const {
+    page = 1,
+    size = 50,
+    sort = "",
+    dir = "asc",
+    deck = "",
+    side = "",
+    state = "",
+    flag = "",
+    q = "",
+    cardIndex = null,
+  } = opts;
+
+  const conditions = ["u.device_id = $1"];
+  const params = [uid];
+
+  if (deck) {
+    params.push(deck);
+    conditions.push(`t.card->>'D' = $${params.length}`);
+  }
+  // D-UP6: an unrecognised filter value is ignored, never an error.
+  if (["N", "E", "A"].includes(side)) {
+    params.push(side);
+    conditions.push(`t.card->>'language' = $${params.length}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(STATE_STAGE, state)) {
+    params.push(STATE_STAGE[state]);
+    conditions.push(`(t.card->>'Stage')::numeric = $${params.length}`);
+  }
+  if (flag === "tag") {
+    conditions.push(`(t.card->>'Tag')::boolean = true`);
+  } else if (flag === "panic") {
+    // R6: `Panic`'s presence, not its value (it's always 0), is the signal.
+    conditions.push(`t.card ? 'Panic'`);
+  }
+  if (q && q.trim()) {
+    const needle = q.trim();
+    const contentMatchedIds = matchCardIdsByContent(cardIndex, needle);
+    params.push(`%${needle}%`);
+    const idLikeParam = params.length;
+    params.push(contentMatchedIds);
+    const idsParam = params.length;
+    conditions.push(`(t.card->>'ID' ILIKE $${idLikeParam} OR t.card->>'ID' = ANY($${idsParam}))`);
+  }
+
+  const whereSql = conditions.join(" AND ");
+
+  // Default sort is the array's own ordinality — the device's own
+  // presentation order — and every other sort appends it as a tiebreaker
+  // so paging stays stable across a column with repeated values.
+  const sortExpr = SORT_COLUMNS[sort] || null;
+  const dirSql = dir === "desc" ? "DESC" : "ASC";
+  const orderSql = sortExpr ? `${sortExpr} ${dirSql}, t.idx ASC` : `t.idx ASC`;
+
+  // `PAGE_SIZES` is only the toolbar's own preset list (enforced by the
+  // route, for a consistent <select>) — the query itself accepts any
+  // reasonable size, just clamped to a sane range.
+  const sizeNum = Math.min(500, Math.max(1, Math.trunc(Number(size)) || 50));
+  const pageNum = Math.max(1, Math.trunc(Number(page)) || 1);
+  const offset = (pageNum - 1) * sizeNum;
+
+  const fromSql = `FROM userdata u, jsonb_array_elements(u.doc->'totalCards') WITH ORDINALITY AS t(card, idx) WHERE ${whereSql}`;
+
+  const { rows: countRows } = await query(`SELECT count(*) ${fromSql}`, params);
+  const total = Number(countRows[0].count);
+
+  const { rows } = await query(
+    `SELECT t.card ${fromSql} ORDER BY ${orderSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, sizeNum, offset]
+  );
+  const records = rows.map((r) => r.card);
+
+  const idsOnPage = records.map((c) => c.ID);
+  let dbContentById = new Map();
+  if (idsOnPage.length > 0) {
+    // D-UP2: `card_content` (hub-minted cards) wins over the bundle for any
+    // id present in both — it may be newer than the last publish.
+    const { rows: contentRows } = await query("SELECT card_id, n FROM card_content WHERE card_id = ANY($1)", [idsOnPage]);
+    dbContentById = new Map(contentRows.map((r) => [r.card_id, r.n]));
+  }
+
+  const resultRows = records.map((c) => {
+    const dbContent = dbContentById.get(c.ID);
+    const bundleCard = cardIndex ? cardIndex.cardById.get(c.ID) : undefined;
+    const content = dbContent ?? bundleCard?.N ?? null;
+    const contentSource = dbContent != null ? "db" : bundleCard ? "bundle" : null;
+    const deckTitleUpper = c.D ?? null;
+    const deckTitle = (deckTitleUpper && cardIndex?.deckTitleByUpper.get(deckTitleUpper)) || deckTitleUpper;
     return {
       id: c.ID,
-      content: info ? info.n : null,
+      content,
+      contentSource,
       side: c.language, // the stored direction letter (N/E/A) — findings.md C1
-      deckCode: info ? info.deck_code : null,
-      deckTitle: info ? info.deck_title : null,
+      deckTitle,
       stage: c.Stage,
-      park: !!c.Park,
-      graduated: !!c.Graduated,
+      state: stateForStage(c.Stage),
+      interval: typeof c.CF === "number" ? c.CF : null, // R2: days, not a percentage
+      nextDueAt: c.Time ? new Date(c.Time) : null, // R1: next-due, not last-touched
+      reschedules: c.numberOfReschedulings ?? null,
+      tag: !!c.Tag,
+      panic: Object.prototype.hasOwnProperty.call(c, "Panic"),
+      autoParkHit: c.AutoParkHit ?? null,
       type: c.Type,
-      lastReviewedAt: c.Time ? new Date(c.Time) : null,
     };
   });
+
+  return { rows: resultRows, total };
+}
+
+// Reads the account's current document in full — only called on demand
+// (D-UP4) by the `/mjolnir/device/doc` route, never inlined into the page.
+export async function userdataDoc(uid) {
+  const { rows } = await query("SELECT doc FROM userdata WHERE device_id = $1", [uid]);
+  return rows.length ? rows[0].doc : null;
+}
+
+// Same, for one `userdata_history` row — `historyId` must belong to `uid`,
+// matching the route's uid-restricted posture. Returns `undefined` (not
+// `null`) when no such row exists, since a deletion's history row
+// legitimately stores `doc: null` (D-S5) and the two must stay
+// distinguishable to the caller.
+export async function historyDoc(uid, historyId) {
+  const { rows } = await query("SELECT doc FROM userdata_history WHERE id = $1 AND device_id = $2", [historyId, uid]);
+  return rows.length ? rows[0].doc : undefined;
 }
 
 // Summarizes one `userdata_history` row against its predecessor — session-
@@ -226,9 +385,11 @@ export async function historyDeltas(uid, { limit = 20 } = {}) {
     "SELECT id, doc, at FROM userdata_history WHERE device_id = $1 ORDER BY at DESC LIMIT $2",
     [uid, limit + 1]
   );
+  // D-UP4: the diff still needs each row's full doc, but the full doc
+  // itself is never part of the returned object — the raw document is
+  // fetched separately, on demand, via `historyDoc`.
   return rows.slice(0, limit).map((row, i) => ({
     id: row.id,
-    doc: row.doc,
     at: row.at,
     ...summarizeDelta(row.doc, rows[i + 1]?.doc),
   }));

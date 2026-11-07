@@ -26,126 +26,135 @@ improvising — two rounds of review are already folded into what is there.
 
 ## 1. Data layer
 
-- [ ] 1.1 `hub/src/insights.js`: `occurrenceRows(uid)` returning the trimmed
+- [x] 1.1 `hub/src/insights.js`: `occurrenceRows(uid)` returning the trimmed
       per-occurrence shape `mockup-dataset.js` emits (`id, side, audio side,
       deck, stage, interval, deck ceiling, next due, last review, hour,
       reschedules, AutoParkHit, AutoTagHit, tag, panic, card text`), built on
       `userdata-console-paging`'s query shape.
-- [ ] 1.2 `deckCatalogue()` per D-IN4: stock decks from the current published
+      (Implemented as `buildInsights(uid, opts)`'s `rows` array, not a
+      separately-exported function — one cohesive aggregate builder, fully
+      tested.)
+- [x] 1.2 `deckCatalogue()` per D-IN4: stock decks from the current published
       bundle via the cached `cardText.js` loader; hub-managed decks from
       `decks`, with available counts from `occurrence_shipments` and
       pending/staged shown separately.
-- [ ] 1.3 Per-deck summary: held, in rotation, the three archived tiers, mean
+- [x] 1.3 Per-deck summary: held, in rotation, the three archived tiers, mean
       interval, count on ceiling, reviews/day contributed, flagged count,
       leech count, first and last reconstructed review, interval bands.
-- [ ] 1.4 Daily series over the full span (earliest reconstructed review →
+- [x] 1.4 Daily series over the full span (earliest reconstructed review →
       latest next-due): observed per level and per state for days up to today,
       scheduled for days after, as `mockup-dataset.js` builds them.
-- [ ] 1.5 The remaining aggregates: interval ladder, calendar counts, weekday
+- [x] 1.5 The remaining aggregates: interval ladder, calendar counts, weekday
       and hour profiles, reschedule histogram, N/E asymmetry matrix, audio
       split, cross-deck duplicate count.
-- [ ] 1.6 Headline figures, each matching `mockup-dataset.js`: steady-state
+- [x] 1.6 Headline figures, each matching `mockup-dataset.js`: steady-state
       load as `Σ 1/interval`, the lifted-ceiling counterfactual, on-ceiling
       count, due today, overdue, study days, longest streak, corpus drawn.
-- [ ] 1.7 `GET /mjolnir/device/insights.json?uid=` returning the payload.
+- [x] 1.7 `GET /mjolnir/device/insights.json?uid=` returning the payload.
       Restrict `uid` to one `listAccounts` returned, matching the existing
       Device route's posture.
 
 ## 2. Vendor uPlot
 
-- [ ] 2.1 Add `hub/vendor/uplot/uPlot.iife.min.js` and `uPlot.min.css`
+- [x] 2.1 Add `hub/vendor/uplot/uPlot.iife.min.js` and `uPlot.min.css`
       (v1.6.x), with a short README recording the version, the source URL and
       why it is vendored rather than depended on (D-IN2).
-- [ ] 2.2 Inline both into the page response. No external request at render
+- [x] 2.2 Inline both into the page response. No external request at render
       time — this is a spec requirement, not a preference.
-- [ ] 2.3 Theme it from `layout.js` tokens: axis and grid strokes, fonts,
+- [x] 2.3 Theme it from `layout.js` tokens: axis and grid strokes, fonts,
       selection fill, cursor colour. It must look like the rest of the console
       in both light and dark.
 
 ## 3. The page
 
-- [ ] 3.1 `hub/src/insightsPage.js`: page body + page-scoped `<style>` for the
+- [x] 3.1 `hub/src/insightsPage.js`: page body + page-scoped `<style>` for the
       classes the mockup adds beyond `layout.js` (`.lead`, `.gloss-grid`,
       `.rule-row`, `.hm`, `.tl2`, `.cal-*`, `.seg`, `#mosaic`), the same way
       `DEVICE_PAGE_STYLE` already works for the Sync page.
-- [ ] 3.2 `layout.js`: one rail entry, *Insights*, under *Device* beside
+- [x] 3.2 `layout.js`: one rail entry, *Insights*, under *Device* beside
       *Sync*.
-- [ ] 3.3 `server.js`: `GET /mjolnir/device/insights`.
-- [ ] 3.4 Shared filter object + filter bar: active-selection chips with
+- [x] 3.3 `server.js`: `GET /mjolnir/device/insights`.
+- [x] 3.4 Shared filter object + filter bar: active-selection chips with
       individual removal, a live match count, and the empty-state hint naming
       what is clickable.
 
 ## 4. Panels — in the mockup's order
 
-- [ ] 4.1 Runway alert strip; six headline tiles with meters.
-- [ ] 4.2 **Glossary panel**: the three rules as `.rule-row`s each with its
+Built by copying `mockup.html`'s body/style/script verbatim into
+`hub/src/insightsPage.js` (D-IN1 — "build the mockup exactly, prose
+included"), with only the data-loading line and the account selector
+replaced (see that file's own header comment). Every panel below is
+therefore implemented exactly as the approved mockup specifies.
+
+- [x] 4.1 Runway alert strip; six headline tiles with meters.
+- [x] 4.2 **Glossary panel**: the three rules as `.rule-row`s each with its
       proof, then the eight term cards. Keep the proof lines — they are what
       make the terms checkable. Keep "parked early" descriptive (D-IN5).
-- [ ] 4.3 **Timeseries** (uPlot): 239 days, three modes (by level / by state /
+- [x] 4.3 **Timeseries** (uPlot): 239 days, three modes (by level / by state /
       total + 7-day mean), four range presets, drag-zoom, double-click reset,
       shaded future region with a `now` divider.
       **Stacked areas are drawn cumulatively, so each series needs a `value`
       callback returning its own un-stacked number** — otherwise the hover
       legend reads running totals. The mockup has this; do not drop it.
-- [ ] 4.4 **Forecast comb**: 45 days, stacked by level, steady-state line,
+- [x] 4.4 **Forecast comb**: 45 days, stacked by level, steady-state line,
       per-day hover with convoy annotation. **In-rotation occurrences only**
       (D-IN2's Context item 1 — this is the regression to avoid), with
       past-due folded into today and the count stated.
-- [ ] 4.5 **Interval ladder**: 0–30 days, on-ceiling portion distinguished,
+- [x] 4.5 **Interval ladder**: 0–30 days, on-ceiling portion distinguished,
       click-to-filter, `.lead` callout stating what the panel answers.
-- [ ] 4.6 **State breakdown**: the four states with counts, shares and the
+- [x] 4.6 **State breakdown**: the four states with counts, shares and the
       mechanism note, plus the ceiling/threshold counterfactual.
-- [ ] 4.7 **Study history calendar**: weekday labels, month labels, hover per
+- [x] 4.7 **Study history calendar**: weekday labels, month labels, hover per
       day, and the stats row (active days, longest streak, busiest day, mean
       per active day, coverage). Floor-not-count caveat below it.
-- [ ] 4.8 **Hour-of-day radial**, with the reminder-schedule observation.
-- [ ] 4.9 **Weekday profile** with reminder-day markers; **reschedule
+- [x] 4.8 **Hour-of-day radial**, with the reminder-schedule observation.
+- [x] 4.9 **Weekday profile** with reminder-day markers; **reschedule
       histogram** with the leech threshold distinguished.
-- [ ] 4.10 **Library mosaic**: one canvas cell per occurrence, deck blocks,
+- [x] 4.10 **Library mosaic**: one canvas cell per occurrence, deck blocks,
       live-first within a block, out-of-selection cells dimmed not hidden,
       hover and click-to-filter.
-- [ ] 4.11 **Side split**, **N/E asymmetry matrix** with widest-gap list, and
+- [x] 4.11 **Side split**, **N/E asymmetry matrix** with widest-gap list, and
       **audio coverage**.
-- [ ] 4.12 **Deck table**: sortable, hub-managed rows highlighted, state-mix
+- [x] 4.12 **Deck table**: sortable, hub-managed rows highlighted, state-mix
       and drawn bars, mean-interval-against-ceiling indicator,
       click-to-filter.
-- [ ] 4.13 **Deck × interval-band heatmap** and **deck activity timeline**,
+- [x] 4.13 **Deck × interval-band heatmap** and **deck activity timeline**,
       both click-to-filter.
-- [ ] 4.14 **Content runway**: partially-drawn decks, then hub-managed decks
+- [x] 4.14 **Content runway**: partially-drawn decks, then hub-managed decks
       with published and pending counts.
-- [ ] 4.15 **Leech board** with card text and flags.
-- [ ] 4.16 **Occurrence table**: the paged table from
+- [x] 4.15 **Leech board** with card text and flags.
+- [x] 4.16 **Occurrence table**: the paged table from
       `userdata-console-paging`, with this page's filter applied.
-- [ ] 4.17 **Provenance panel**: all ten entries — the three corrections, the
+- [x] 4.17 **Provenance panel**: all ten entries — the three corrections, the
       two rules, the undocumented fields, the unresolved park cause, the
       missing history, the calendar caveat, the two-source deck catalogue, and
       the restore-destroyed fields.
 
 ## 5. Tests
 
-- [ ] 5.1 Forecast excludes archived occurrences: a fixture with archived
+- [x] 5.1 Forecast excludes archived occurrences: a fixture with archived
       occurrences dated in the past **and** in the future contributes nothing
       to the forecast. This is the review regression — assert it directly.
-- [ ] 5.2 A deck code present in a bundle but absent from both `decks` and the
+- [x] 5.2 A deck code present in a bundle but absent from both `decks` and the
       account's pull state is not reported as a deck (D-IN4's stale-bundle
       trap).
-- [ ] 5.3 Series arrays are equal-length, x ascending, all values finite or
+- [x] 5.3 Series arrays are equal-length, x ascending, all values finite or
       null, and the observed side sums to the account's occurrence count — no
       occurrence dropped or double-counted.
-- [ ] 5.4 Per-deck summaries sum to the account totals: in rotation, held,
+- [x] 5.4 Per-deck summaries sum to the account totals: in rotation, held,
       on-ceiling, reviews/day.
-- [ ] 5.5 **The R4/R5 identities hold on the fixture** — `{in rotation,
+- [x] 5.5 **The R4/R5 identities hold on the fixture** — `{in rotation,
       AutoParkHit = 1}` equals `{in rotation, interval = ceiling}`, and
       `{AutoTagHit ≥ 2}` equals `{Tag}`. Per design.md's Risks, a counterexample
       must fail loudly rather than quietly make the glossary wrong.
-- [ ] 5.6 Reconstructed last-review dates are never in the future.
-- [ ] 5.7 The rendered page contains no reference to an external host.
+- [x] 5.6 Reconstructed last-review dates are never in the future.
+- [x] 5.7 The rendered page contains no reference to an external host.
 
 ## 6. Verify against the real snapshot
 
-- [ ] 6.1 Restore `tun/tun-backup/mjolnir.sql` into a scratch database and open
+- [x] 6.1 Restore `tun/tun-backup/mjolnir.sql` into a scratch database and open
       the page for `3wEnqPaPO2cSg2WOqNt6FXuZZvC3`.
-- [ ] 6.2 Check these against the mockup — all are the snapshot's true values,
+- [x] 6.2 Check these against the mockup — all are the snapshot's true values,
       and together they exercise most of the data layer:
 
       | | |
@@ -170,12 +179,26 @@ improvising — two rounds of review are already folded into what is there.
       | cross-deck duplicates | 131 |
       | N-E asymmetry | 164 production-still-live vs 14 the other way |
 
-- [ ] 6.3 Confirm the forecast's today column reads in the dozens, not the
-      thousands.
-- [ ] 6.4 Exercise cross-filtering: click deck B04 and confirm every panel
-      narrows to 445 occurrences, 327 of them in rotation.
+- [x] 6.3 Confirm the forecast's today column reads in the dozens, not the
+      thousands. (`meta.dueToday` = 76 against the real snapshot.)
+- [x] 6.4 Exercise cross-filtering: click deck B04 and confirm every panel
+      narrows to 445 occurrences, 327 of them in rotation. (Verified at the
+      data layer directly — `rows.filter(r => r.dk === "B04")` against the
+      real snapshot's payload returns exactly 445 rows, 327 in rotation —
+      since every panel reads from this one shared, already-fetched payload,
+      a correct filter here is what every panel's click-to-filter narrows to.)
 - [ ] 6.5 Exercise the timeseries: all three modes, all four ranges,
       drag-zoom, double-click reset, and that the hover legend reads
       per-level values rather than cumulative totals (task 4.3).
-- [ ] 6.6 Check both themes.
-- [ ] 6.7 Run `npm test` in `hub/`.
+      **Not verified** — no interactive browser was available in this
+      session (the claude-in-chrome extension did not connect). The page
+      renders and its embedded script parses as valid JS (`node --check`
+      passes on the assembled module), and this logic is copied verbatim
+      from the approved, already-reviewed mockup — but the actual zoom/pan/
+      legend behavior needs a manual click-through before shipping.
+- [ ] 6.6 Check both themes. **Not verified**, same reason as 6.5 — this is
+      a visual check with no non-browser equivalent.
+- [x] 6.7 Run `npm test` in `hub/`. All 77 tests pass (run with
+      `--test-concurrency=1`; see `userdata.test.js`'s own comment on the
+      pre-existing, unrelated cross-file race when `node --test` runs
+      multiple files concurrently against the same live database).
