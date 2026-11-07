@@ -236,19 +236,15 @@ function unitSpan(cls, letter, title) {
 // zone naturally extends the real zone (shipped -> staged -> open) in the
 // SAME grid — rows of 40 cells, a `.flow-batch-div` between every batch of
 // 5 throughout (real AND projected alike), row numbering carrying over
-// rather than restarting. `nowIndex` (the absolute 0-based index where real
-// ends and projected begins) is always itself a multiple of 5 — `open` is
-// computed as `nextMultipleOf5(shipped) - (shipped+staged)`, so
-// `realUnits.length` is always exactly `nextMultipleOf5(shipped)` — so the
-// "now" marker always lands on a real batch boundary, never mid-group.
-function renderShipOrderStrip(units, nowIndex = null) {
+// rather than restarting.
+function renderShipOrderStrip(units) {
   if (units.length === 0) return "";
   const rowParts = [];
   let rowStart = 0;
   let rowCells = [];
   // Tracked separately from `rowCells.length` — that array also holds
-  // divider/marker HTML fragments, which must never count toward the
-  // row's own cell-number range.
+  // divider HTML fragments, which must never count toward the row's own
+  // cell-number range.
   let rowUnitCount = 0;
 
   const flushRow = () => {
@@ -266,15 +262,8 @@ function renderShipOrderStrip(units, nowIndex = null) {
     if (isRowStart) {
       flushRow();
       rowStart = i;
-      if (i === nowIndex && i !== 0) {
-        rowParts.push(`<div class="flow-now-marker" title="everything below is projected — order depends on what arrives next">now — projected from here</div>`);
-      }
     } else if (isGroupStart) {
-      rowCells.push(
-        i === nowIndex
-          ? `<span class="flow-now-div" title="now — everything after this point is projected">now</span>`
-          : `<span class="flow-batch-div"></span>`
-      );
+      rowCells.push(`<span class="flow-batch-div"></span>`);
     }
     const u = units[i];
     rowCells.push(unitSpan(u.cls, u.letter, u.title));
@@ -313,36 +302,53 @@ function buildDeckFlowDetail(d, deckMeta, shipOrder) {
   // tier is, that distance is rendered AS N actual filler cells (`.flow-u
   // .gap`, "?" like `open`, but visually distinct — these represent future
   // arrivals, not unminted slots) — inserted right after that tier's own
-  // cards, in the same continuous strip `open` already flows into. Pending
-  // zone is empty for a single-occurrence family (occPerCard !== 2) by
-  // construction (`pendingByTier` never has rows for those decks).
+  // cards, in the same continuous strip `open` already flows into.
+  //
+  // `showPending` gates this ENTIRELY on the deck's own family shape, not
+  // on whether `d.pendingByTier` happens to be empty — a single-occurrence
+  // deck (occPerCard !== 2) must never show a pending zone at all, even if
+  // it has stray rows (e.g. a card reassigned here from a dual-occurrence
+  // family mid-queue, practice-deck-remint) whose pending letter was
+  // queued under its ORIGINAL family's rules, not this deck's.
+  const showPending = occPerCard === 2;
+  const hasRealPendingCards = d.pendingByTier.length > 0;
   const pendingUnits = [];
-  for (const tier of d.pendingByTier) {
-    for (const c of tier.cards) {
-      pendingUnits.push({
-        cls: "pending",
-        letter: c.letter,
-        title: `${c.cardId} · ${c.letter}${c.noteText ? ` · ${c.noteText}` : ""} — +${tier.remaining} away`,
-      });
+  if (showPending) {
+    for (const tier of d.pendingByTier) {
+      for (const c of tier.cards) {
+        pendingUnits.push({
+          cls: "pending",
+          letter: c.letter,
+          title: `${c.cardId} · ${c.letter}${c.noteText ? ` · ${c.noteText}` : ""} — +${tier.remaining} away`,
+        });
+      }
+      for (let i = 0; i < tier.remaining; i++) {
+        pendingUnits.push({
+          cls: "gap",
+          letter: "?",
+          title: `${tier.remaining} more new card${tier.remaining === 1 ? "" : "s"} must land in ${d.deckCode} before this tier drains`,
+        });
+      }
     }
-    for (let i = 0; i < tier.remaining; i++) {
-      pendingUnits.push({
-        cls: "gap",
-        letter: "?",
-        title: `${tier.remaining} more new card${tier.remaining === 1 ? "" : "s"} must land in ${d.deckCode} before this tier drains`,
-      });
+    // The projected zone is also always a clean multiple of 5, same rhythm
+    // as the real zone's own batch-of-5 grouping — pad the tail with
+    // generic "not yet landed" fillers (not tied to any specific tier), or
+    // render exactly one whole filler batch when there's nothing pending
+    // at all, rather than showing no projected zone whatsoever.
+    const remainder = pendingUnits.length % 5;
+    const padCount = pendingUnits.length === 0 ? 5 : remainder === 0 ? 0 : 5 - remainder;
+    for (let i = 0; i < padCount; i++) {
+      pendingUnits.push({ cls: "gap", letter: "?", title: "not yet landed — nothing projected into this slot yet" });
     }
   }
-  const hasPending = pendingUnits.length > 0;
-  const combinedUnits = hasPending ? [...realUnits, ...pendingUnits] : realUnits;
-  const nowIndex = hasPending ? realUnits.length : null;
+  const combinedUnits = [...realUnits, ...pendingUnits];
 
   const legend = `<div class="flow-legend">
     <span class="sw">${unitSpan("shipped", "·", "shipped")}shipped</span>
     <span class="sw">${unitSpan("staged", "·", "staged")}staged — short of next 5</span>
     <span class="sw">${unitSpan("open", "?", "open")}open — not yet minted</span>
-    ${occPerCard === 2 ? `<span class="sw">${unitSpan("pending", "E", "pending")}pending — 11-batch spacing lag</span>` : ""}
-    ${hasPending ? `<span class="sw">${unitSpan("gap", "?", "future arrival")}not yet landed — counts toward a tier draining</span>` : ""}
+    ${showPending ? `<span class="sw">${unitSpan("pending", "E", "pending")}pending — 11-batch spacing lag</span>` : ""}
+    ${showPending ? `<span class="sw">${unitSpan("gap", "?", "not yet landed")}not yet landed</span>` : ""}
   </div>`;
 
   const bannerClass = d.gridStatus.onGrid ? "" : " crit";
@@ -353,21 +359,21 @@ function buildDeckFlowDetail(d, deckMeta, shipOrder) {
     ${d.wouldFlushCount > 0 ? `the next multiple of 5 would be reached and flushed (+${d.wouldFlushCount})` : d.stagedTotal > 0 ? "held — still short of the next multiple of 5" : "nothing outstanding"}.
   </div>`;
 
-  const emptyNote = occPerCard === 2
-    ? "No pending occurrences right now — nothing waiting out the 11-batch spacing lag."
-    : "No pending zone for this deck — single-occurrence type, nothing ever waits out an 11-batch spacing gap.";
-
   return `<div class="flow-detail">
     ${banner}
     <div class="flow-shape-wrap">
-      <h4>Full ship order — shipped → staged → open → now → pending, one continuous strip</h4>
+      <h4>Full ship order — shipped → staged → open → pending, one continuous strip</h4>
       ${legend}
       <div class="flow-shape-box">
-        <div class="flow-shape-rows">${renderShipOrderStrip(combinedUnits, nowIndex) || `<div class="flow-pending-empty">nothing minted into this deck yet</div>`}</div>
-        ${combinedUnits.length === 0 ? "" : hasPending ? "" : `<p class="flow-pending-empty">${escapeHtml(emptyNote)}</p>`}
+        <div class="flow-shape-rows">${renderShipOrderStrip(combinedUnits) || `<div class="flow-pending-empty">nothing minted into this deck yet</div>`}</div>
+        ${
+          !showPending && combinedUnits.length > 0
+            ? `<p class="flow-pending-empty">No pending zone for this deck — single-occurrence type, nothing ever waits out an 11-batch spacing gap.</p>`
+            : ""
+        }
       </div>
       ${
-        hasPending
+        hasRealPendingCards
           ? `<div class="flow-shape-note"><b>How "open" and "pending" actually relate:</b> they're not strictly sequential. Every pending occurrence counts down by however many brand-new cards land in ${escapeHtml(d.deckCode)} each run — whichever rows reach zero drain together in that same run, not one at a time on a fixed schedule. The "?" filler cells after each tier represent that same distance visually, not a literal queue of specific future cards. A single new card can fill the open slot above <i>and</i> drain a near-zero pending tier in the same run.</div>`
           : ""
       }

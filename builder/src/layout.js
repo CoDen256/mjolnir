@@ -192,16 +192,16 @@ details.json-toggle summary { cursor: pointer; font-size: 13px; padding: 4px 0; 
 .flow-shape-wrap > h4 { margin: 0 0 8px; font-size: 11.5px; font-weight: 650; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
 .flow-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-dim); margin-bottom: 9px; }
 .flow-legend .sw { display: inline-flex; align-items: center; gap: 5px; }
-.flow-legend .flow-u { width: 18px; height: 18px; margin: 0; }
+.flow-legend .flow-u { width: 16px; height: 16px; margin: 0; }
 
 .flow-shape-box { padding: 12px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 8px; }
-.flow-shape-rows { display: flex; flex-direction: column; gap: 8px; }
+.flow-shape-rows { display: flex; flex-direction: column; gap: 7px; }
 .flow-shape-row { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; row-gap: 5px; }
-.flow-row-no { width: 34px; flex: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); text-align: right; margin-right: 7px; }
+.flow-row-no { width: 30px; flex: none; font-size: 9.5px; color: var(--text-faint); font-family: var(--mono); text-align: right; margin-right: 6px; }
 
 .flow-u {
-  width: 18px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; border-radius: 3px; font-family: var(--mono); cursor: default; flex: none;
+  width: 16px; height: 21px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; border-radius: 3px; font-family: var(--mono); cursor: default; flex: none;
 }
 .flow-u.shipped { background: var(--ok-soft); color: var(--text); border: 1px solid transparent; }
 .flow-u.staged { background: var(--warn-soft); border: 1.5px dashed var(--warn); color: var(--text); }
@@ -213,22 +213,7 @@ details.json-toggle summary { cursor: pointer; font-size: 13px; padding: 4px 0; 
    batch. */
 .flow-u.gap { background: transparent; border: 1.5px dotted var(--accent); opacity: .55; color: var(--accent-text); }
 
-.flow-batch-div { width: 1px; height: 24px; background: var(--border); margin: 0 7px; flex: none; }
-/* the real/projected boundary: inline when it falls mid-row (replacing
-   that slot's batch-div), a full-width labeled line when it falls exactly
-   at a row's start (always possible — nowIndex is always a multiple of
-   5, same as every batch-div boundary, but not always a multiple of the
-   40-per-row stride). */
-.flow-now-div {
-  display: inline-flex; align-items: center; justify-content: center; height: 24px; margin: 0 8px;
-  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent-text);
-  border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); padding: 0 4px; flex: none;
-}
-.flow-now-marker {
-  display: flex; align-items: center; gap: 10px; margin: 2px 0 2px 34px;
-  font-size: 10px; color: var(--accent-text); font-weight: 650; text-transform: uppercase; letter-spacing: .04em;
-}
-.flow-now-marker::after { content: ""; flex: 1; height: 1px; background: var(--accent); opacity: .5; }
+.flow-batch-div { width: 1px; height: 21px; background: var(--border); margin: 0 6px; flex: none; }
 
 .flow-shape-note { font-size: 11.5px; color: var(--text-faint); margin: 10px 0 2px; line-height: 1.65; }
 .flow-shape-note b { color: var(--text-dim); }
