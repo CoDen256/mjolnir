@@ -9,8 +9,8 @@
 // new class invented here. Wrapped in the same `<div class="center">` every
 // stock N/E/X field uses, which this previously omitted.
 function translationsHtml(note) {
-  const lines = note.translations.map((t) => `<b class="bold teal">${t.lang}</b>: ${t.text}`);
-  return `<div class="center">${lines.join("<br>")}</div>`;
+  const lines = note.translations.map((t) => `<b class="bold">${t.lang}</b>: ${t.text}`);
+  return `<div class="center"><div class="left">${lines.join("<br>")}</div></div>`;
 }
 
 // Per-POS inflection line layout (tun/docs/03-data-model.md's inflection
@@ -35,7 +35,7 @@ function wordInflectionLines(pos, inflections) {
   }
   if (pos === "verb") {
     const { infinitiv, presens, preteritum, perfektum } = inflections;
-    return [infinitiv, presens, preteritum, perfektum].filter(Boolean);
+    return ["å "+infinitiv, presens, preteritum, "har "+perfektum].filter(Boolean);
   }
   if (pos === "adverb") {
     return inflections.form ? [inflections.form] : null;
@@ -50,7 +50,7 @@ function wordInflectionLines(pos, inflections) {
 function wordHeadlineHtml(note) {
   const lines = wordInflectionLines(note.pos, note.inflections);
   const body = lines && lines.length > 0 ? lines.join("<br>") : note.text;
-  return note.transcription ? `${body}<br>${note.transcription}` : body;
+  return`${transcriptionHtml(note)}<br>${body}`;
 }
 
 // `grammarRuleLookup(id) => { title, html } | undefined` — optional. stabbur's
@@ -63,8 +63,22 @@ function wordHeadlineHtml(note) {
 // not a silent guess.
 function grammarRuleHtml(note, grammarRuleLookup) {
   const rule = grammarRuleLookup ? grammarRuleLookup(note.grammar_rule_id) : undefined;
-  if (rule) return `<div class="center">${rule.title}</div>${rule.html}`;
+  if (rule) return `<div class="center"><b class="bold">${rule.title}</b></div><div class="left">${rule.html}</div>`;
   return `<div class="center">[grammar rule ${note.grammar_rule_id} — content not yet available from stabbur]</div>`;
+}
+
+function transcriptionHtml(note){
+  if (!note.transcription) return "";
+  const map = {
+  '"': '<div class="sup">2</div>',
+  "'": '<div class="sup">1</div>'
+  };
+
+  const ipa = note.transcription
+  .replace(/^[\/\[\]]+|[\/\[\]]+$/g, '')
+  .replace(/["']/g, char => map[char]);
+
+  return `<div class="arialFont supWrap">[&ensp; ${ipa} ]</div>`
 }
 
 const PROJECTORS = {
@@ -93,8 +107,8 @@ const PROJECTORS = {
     occurrences: ["A"],
   }),
   pronunciation: (note) => ({
-    N: `<div class="center">Read out: ${note.text}</div>`,
-    E: `<div class="center">${note.transcription || ""}</div>`,
+    N: `<div class="center">Read out:<br><span class="lg">${note.text}</span></div>`,
+    E: `<div class="center">${transcriptionHtml(note)}</div>`,
     X: "",
     A: "E",
     occurrences: ["N"],
