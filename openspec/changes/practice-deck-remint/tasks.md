@@ -58,10 +58,3 @@ docker compose exec mjolnir-hub node bin/reassign-cards.js --apply C20 C30011 C3
       occurrences retain their relative order.
 - [ ] 3.4 Spot-check the two reassigned cards' content (`N`/`E`/`X`/`A`)
       matches their current note state post-move — hub's Cards page.
-
-## 4. Follow-up (tracked, not implemented here)
-
-- [x] 4.1 File the stabbur-side proposal for preventing a note's `type`
-      from being edited once minted, informed by this change's finding that
-      stabbur has no current notion of "minted" status. — filed at
-      `stabbur/openspec/changes/note-type-immutable-post-mint/proposal.md`.

@@ -61,8 +61,9 @@ safe").
   has 6 occurrences (still not a multiple of 5); it still waits on
   `occurrence-shipment-windowing`'s existing, correct, self-healing
   mechanism for the next flush, same as before.
-- Does not implement the stabbur-side post-mint type-immutability guard —
-  documented as a follow-up, proposed separately in stabbur's own OpenSpec.
+- Does not address preventing a note's `type` from being edited post-mint —
+  operator decision: not pursuing that guard. A recurrence of this class of
+  drift would be corrected the same way, using this change's own tool.
 
 ## Decisions
 

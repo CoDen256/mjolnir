@@ -36,11 +36,6 @@ the moment any device studies `C30`.
   will show `C30` with 33 occurrences instead of 35 (2 fewer) and `C20` with
   6 instead of 4 — any dashboard, cached count, or external report built
   against the pre-correction totals needs to expect this one-time shift.
-- Document, as a decision (not implemented in this change — see Impact),
-  that stabbur should prevent a note's `type` from being edited once it has
-  been minted, so this class of drift can't recur. This requires stabbur to
-  know a note's minted status, which it does not track today — scoped to a
-  separate, stabbur-repo change.
 
 ## Capabilities
 
@@ -67,8 +62,3 @@ a new, narrower tool, not a change to that migration's own behavior)
   needed for the reassigned ids.
 - One-time operator action: run the tool once for `C30011`→`C20005` and
   `C30012`→`C20006`, then a normal publish.
-- Cross-repo, out of scope here: a stabbur-side change preventing
-  post-mint `type` edits. stabbur has its own OpenSpec; this should be
-  proposed there separately, informed by this change's finding that stabbur
-  currently has no notion of "minted" at all and would need either a query
-  into hub's ledger or an event from hub to enforce this.
