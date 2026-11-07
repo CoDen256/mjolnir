@@ -9,7 +9,19 @@ The patch set applied to Mjølnir's `index.android.bundle` and APK.
     pairs, REPLACE-style (modify an existing module's factory body in
     place), located by the module id named in the filename. The "My
     account" build-version row (`2176-my-account-build-id`, OpenSpec
-    `p2-native-ota` task 10.1) is the one live example. Applied via
+    `p2-native-ota` task 10.1) is one live example; `953-store-setup`
+    (OpenSpec `redux-logger-single-line`) is another — it swaps the stock
+    `redux-logger` wiring for `createLogger({ stateTransformer,
+    actionTransformer })` so the `%c action`/`%c prev state`/`%c next state`
+    entries render as single-line `JSON.stringify`'d `adb logcat` output
+    instead of a pretty-printed multi-line tree, matching this project's
+    other single-line breadcrumbs (`[mjolnir-ota-debug]` etc., D63).
+    `2110-decks-logic` (OpenSpec `pull-decks-status-replace`) is a third —
+    it changes `decksLogic.initDecksStatus` from an upsert-by-ID merge to a
+    full replace, so a manual cloud-progress pull (or mod 2205's sign-in
+    restore) actually overwrites local `decks_info`/`PullCounter` state
+    instead of leaving deck entries absent from the server's `decksStatus`
+    untouched. Applied via
     `bundle-tool patch-back` directly, or picked in bundle-workbench's
     Patches tab (preview/apply against an open session) and Assemble tab
     (baked into a fresh bundle, by name, via `--patchback-pairs`/

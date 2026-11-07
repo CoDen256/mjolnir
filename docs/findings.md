@@ -234,6 +234,16 @@ content that already lives in the bundle; it's re-fetched locally via
 string, it's `lz-string`-decompressed from base64 + `JSON.parse`'d — an older
 storage format; current writes store it as a plain array.
 
+`decksStatus` restore (`decksLogic.initDecksStatus`, module 2110 — stock app
+code, patched by `2110-decks-logic`, OpenSpec `pull-decks-status-replace`) is
+a full replace built from the incoming array, same as `totalCards`: any local
+deck whose ID is absent from the server's `decksStatus` ends up absent from
+the restored result too (falling back to the static per-deck default only
+for fields the incoming `{ID, PullCounter}` entry doesn't carry), not left at
+its pre-restore value. The stock version upserted by ID instead, silently
+leaving unmatched local entries untouched — both the manual-pull companion
+and mod 2205's sign-in restore call this same function and rely on the fix.
+
 **Per-card progress record** (from the actual scheduler, module `2119`):
 ```js
 {
