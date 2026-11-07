@@ -25,7 +25,7 @@ export const DECK_ALLOCATION = [
 export async function seedDecks() {
   for (const { code, title, description } of DECK_ALLOCATION) {
     await query(
-      `INSERT INTO decks (code, title, category, description) VALUES ($1, $2, $3, $4)
+      `INSERT INTO decks (code, title, category, description, managed_by_hub) VALUES ($1, $2, $3, $4, TRUE)
        ON CONFLICT (code) DO NOTHING`,
       [code, title, code[0], description || ""]
     );

@@ -51,7 +51,7 @@ function toRoman(num) {
 // (task 2.3) — same pattern `hub/src/decks.js`'s `seedDecks` already uses.
 async function ensureRolloverDeck(pool, code, title) {
   await pool.query(
-    "INSERT INTO decks (code, title, category, description) VALUES ($1, $2, $3, '') ON CONFLICT (code) DO NOTHING",
+    "INSERT INTO decks (code, title, category, description, managed_by_hub) VALUES ($1, $2, $3, '', TRUE) ON CONFLICT (code) DO NOTHING",
     [code, title, code[0]]
   );
 }

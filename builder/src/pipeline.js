@@ -183,15 +183,23 @@ async function resetReusedDecks(pool, model) {
 // baked into the active logic bundle from BEFORE a migration stays in
 // `model.decks` forever unless something explicitly strips it. This is that
 // something: every run, after minting/flushing is done, any "C"-prefixed
-// deck with zero remaining `card_slots` references gets removed from both
-// the bundle array and hub's `decks` table. Scoped to "C"-prefixed decks
-// only — this project's category convention (mod 2119) — so a hand-created
-// custom deck in some other category is never touched by this generic
-// safety net; only the migration's own retired codes can ever actually
-// reach zero references in practice (D-DC5's "delete when provably safe").
-async function pruneRetiredDecks(pool, model, log, buildJobId) {
+// deck gets removed from both the bundle array and hub's `decks` table if
+// BOTH it is marked `managed_by_hub` (hub has a positive record of having
+// minted into it) AND it has zero remaining `card_slots` references.
+// `managed_by_hub` is the load-bearing check (fix-prune-retired-decks-
+// stock-deletion): zero `card_slots` rows alone cannot distinguish "hub
+// fully migrated this code away" (the only case this function was written
+// for, per D-DC5) from "hub never minted into this code in the first
+// place" — true for every stock deck baked into the original APK (C01,
+// C03, C10-C17), which read as zero from day one and were being deleted on
+// every publish before this fix. Scoped to "C"-prefixed decks only — this
+// project's category convention (mod 2119) — so a hand-created custom deck
+// in some other category is never touched by this generic safety net.
+export async function pruneRetiredDecks(pool, model, log, buildJobId) {
   for (const deck of [...model.decks]) {
     if (deck.Name[0] !== "C") continue;
+    const { rows: deckRows } = await pool.query("SELECT managed_by_hub FROM decks WHERE code = $1", [deck.Name]);
+    if (!deckRows[0]?.managed_by_hub) continue;
     const { rows } = await pool.query("SELECT count(*) AS count FROM card_slots WHERE deck_code = $1", [deck.Name]);
     if (Number(rows[0].count) > 0) continue;
     removeDeck(model.decks, deck.Name, { cardCount: 0 });

@@ -67,7 +67,7 @@ describe("deck-consolidation: migrate a synthetic pre-consolidation fixture, the
   // this fixture plants that pre-existing row directly, same as a real
   // deploy would have left it.
   for (const { code, title, description } of DECK_ALLOCATION) {
-    await pool.query("INSERT INTO decks (code, title, category, description) VALUES ($1, $2, $3, $4)", [
+    await pool.query("INSERT INTO decks (code, title, category, description, managed_by_hub) VALUES ($1, $2, $3, $4, TRUE)", [
       code,
       title,
       code[0],
@@ -75,8 +75,13 @@ describe("deck-consolidation: migrate a synthetic pre-consolidation fixture, the
     ]);
   }
   await pool.query("UPDATE decks SET title = 'Substantiv' WHERE code = 'C20'");
+  // fix-prune-retired-decks-stock-deletion: C22/C27 are pre-migration
+  // hub-managed codes (the old per-type scheme) that this test expects
+  // `pruneRetiredDecks` to retire once their card_slots empty out —
+  // `managed_by_hub = TRUE` is what makes them eligible for that, same as
+  // any real hub-created deck.
   await pool.query(
-    "INSERT INTO decks (code, title, category, description) VALUES ('C22', 'Verb', 'C', 'Verbs.'), ('C27', 'Listening', 'C', 'Listening comprehension.')"
+    "INSERT INTO decks (code, title, category, description, managed_by_hub) VALUES ('C22', 'Verb', 'C', 'Verbs.', TRUE), ('C27', 'Listening', 'C', 'Listening comprehension.', TRUE)"
   );
 
   // Old C20 (substantiv -> lexic): 999 cards. Only the first is "real"
