@@ -10,6 +10,7 @@
 // against the exact same `card_slots` snapshot, so apply is guaranteed to
 // produce exactly what the dry-run predicted (task 3.4).
 import { DECK_FAMILIES, ensureDeckRowForFamilyCode } from "../../builder/src/deckFamilies.js";
+import { moveCardRow } from "./cardMove.js";
 
 // The original 10-way type/PoS split's decks, collapsed into deck-
 // consolidation's 2 families (proposal.md's "What Changes"). A card's NEW
@@ -177,49 +178,20 @@ export async function applyMigration(pool) {
       await ensureDeckRowForFamilyCode(client, familyByNewCode.get(code), code);
     }
 
-    // D-DC1: for each card, in the plan's own deterministic order — insert
-    // the new `card_slots`/`card_content` rows, repoint every referencing
-    // table at the new id, THEN delete the old `card_content`/`card_slots`
-    // rows. Never the reverse — a FK would be briefly violated if an old
-    // row were deleted (or a referencing row repointed) before the new
-    // `card_slots` row it points at exists.
+    // D-DC1 (practice-deck-remint task 2.1): for each card, in the plan's
+    // own deterministic order — `moveCardRow` does the actual insert-
+    // repoint-delete for one row; shared with `cardReassignment.js`'s
+    // narrower single-card tool rather than duplicated.
     for (const row of mapping) {
-      await client.query(
-        "INSERT INTO card_slots (id, deck_code, card_no, note_id, audio_sha256, grammar_rule_id) VALUES ($1, $2, $3, $4, $5, $6)",
-        [row.newId, row.newDeckCode, row.newCardNo, row.noteId, row.audioSha256, row.grammarRuleId]
-      );
-
-      const { rows: contentRows } = await client.query("SELECT n, e, x, a FROM card_content WHERE card_id = $1", [
-        row.oldId,
-      ]);
-      if (contentRows.length > 0) {
-        const c = contentRows[0];
-        await client.query("INSERT INTO card_content (card_id, n, e, x, a) VALUES ($1, $2, $3, $4, $5)", [
-          row.newId,
-          c.n,
-          c.e,
-          c.x,
-          c.a,
-        ]);
-      }
-
-      await client.query("UPDATE minted_notes SET card_slot_id = $1 WHERE card_slot_id = $2", [row.newId, row.oldId]);
-      await client.query("UPDATE pending_occurrences SET card_id = $1, deck_code = $2 WHERE card_id = $3", [
-        row.newId,
-        row.newDeckCode,
-        row.oldId,
-      ]);
-      await client.query("UPDATE staged_occurrences SET card_id = $1, deck_code = $2 WHERE card_id = $3", [
-        row.newId,
-        row.newDeckCode,
-        row.oldId,
-      ]);
-      await client.query("UPDATE occurrence_shipments SET card_id = $1 WHERE card_id = $2", [row.newId, row.oldId]);
-
-      if (contentRows.length > 0) {
-        await client.query("DELETE FROM card_content WHERE card_id = $1", [row.oldId]);
-      }
-      await client.query("DELETE FROM card_slots WHERE id = $1", [row.oldId]);
+      await moveCardRow(client, {
+        oldId: row.oldId,
+        newId: row.newId,
+        newDeckCode: row.newDeckCode,
+        newCardNo: row.newCardNo,
+        noteId: row.noteId,
+        audioSha256: row.audioSha256,
+        grammarRuleId: row.grammarRuleId,
+      });
     }
 
     // D-DC5: delete a retired code's `decks` row outright once zero
