@@ -8,6 +8,8 @@ import { recentBatches, occurrencesForBuild } from "./batchHistory.js";
 import { getActiveMeta } from "./logicBundle.js";
 import { renderShell, escapeHtml } from "./layout.js";
 import { requireAuth, renderLoginPage, handleLoginPost } from "./auth.js";
+import { shipOrderForDeck } from "./cardFlow.js";
+import { occurrencesPerCardForDeck } from "./deckFamilies.js";
 
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
@@ -67,32 +69,365 @@ function renderActiveLogicBundleBanner(activeLogicBundle) {
   </div>`;
 }
 
+// ---- Card-flow view (builder-card-flow-ui) ----
+// Everything below renders the new global totals strip, 5-stage pipeline
+// rail, and per-deck summary/detail cards that replace the old stat-row and
+// "would publish this run — by deck" table. Read-only — all data comes from
+// `runForecast`'s extended `byDeck` entries (cardFlow.js/pendingOccurrences.js)
+// plus a per-deck `shipOrderForDeck` call for the expandable detail strip.
+
+function fmtDeckBreakdown(byDeck, pick) {
+  const parts = byDeck
+    .map((d) => [d.deckCode, pick(d)])
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  if (parts.length === 0) return "—";
+  return parts.map(([code, v]) => `${escapeHtml(code)} ${v}`).join(" · ");
+}
+
+function buildGlobalTotals(forecast) {
+  const sum = (pick) => forecast.byDeck.reduce((n, d) => n + (pick(d) || 0), 0);
+  const mintedTotal = sum((d) => d.mintedCount);
+  const eventualTotal = sum((d) => d.occurrencesEventual);
+  const shippedTotal = sum((d) => d.shippedTotal);
+  const stagedTotal = sum((d) => d.stagedTotal);
+  const pendingTotal = sum((d) => d.pendingTotal);
+
+  return `
+<div class="flow-totals">
+  <div class="flow-cell-stat">
+    <div class="label">Cards minted</div>
+    <div class="value">${mintedTotal}</div>
+    <div class="sub">${fmtDeckBreakdown(forecast.byDeck, (d) => d.mintedCount)}</div>
+  </div>
+  <div class="flow-cell-stat">
+    <div class="label">Occurrences, eventual</div>
+    <div class="value">${eventualTotal}</div>
+    <div class="sub">every side every minted card will ever contribute</div>
+  </div>
+  <div class="flow-cell-stat">
+    <div class="label">Shipped (in bundle)</div>
+    <div class="value">${shippedTotal}</div>
+    <div class="sub">${fmtDeckBreakdown(forecast.byDeck, (d) => d.shippedTotal)}</div>
+  </div>
+  <div class="flow-cell-stat">
+    <div class="label">Staged — short of next 5</div>
+    <div class="value">${stagedTotal}</div>
+    <div class="sub">${fmtDeckBreakdown(forecast.byDeck, (d) => d.stagedTotal)}</div>
+  </div>
+  <div class="flow-cell-stat">
+    <div class="label">Pending — 11-batch spacing</div>
+    <div class="value">${pendingTotal}</div>
+    <div class="sub">${fmtDeckBreakdown(forecast.byDeck, (d) => d.pendingTotal)}</div>
+  </div>
+</div>`;
+}
+
+function stageHtml({ name, total, unit, delta, deltaNeutral, hint, active }) {
+  return `<div class="flow-stage${active ? " active" : ""}">
+    <div class="node">${total}</div>
+    <div class="name">${escapeHtml(name)}</div>
+    <div class="total mono">${total}${unit ? `<span class="unit">${escapeHtml(unit)}</span>` : ""}</div>
+    <div class="delta${deltaNeutral ? " neutral" : ""}">${delta}</div>
+    <div class="hint">${hint || "&nbsp;"}</div>
+  </div>`;
+}
+
+// Task 4.1/4.2: the 5-stage pipeline rail. Pulled/Minted/Staged/Flushed show
+// absolute running totals (current DB state) alongside what *this* forecast
+// says would happen on the next "Publish now" — Pulled gets a neutral note
+// instead of a delta (every run re-pulls the full eligible set, D-P5).
+// Published isn't a forecast at all — it reports the last ACTUAL publish
+// (same fact the old stat-row's "Last publish" cell showed).
+function buildPipelineRail(forecast, lastJob, totalPulled, totalAlreadyMinted) {
+  const totalNewlyEligible = forecast.byDeck.reduce((n, d) => n + d.newlyEligibleCount, 0);
+  const mintedTotal = forecast.byDeck.reduce((n, d) => n + d.mintedCount, 0);
+  const stagedTotal = forecast.byDeck.reduce((n, d) => n + d.stagedTotal, 0);
+  const shippedTotal = forecast.byDeck.reduce((n, d) => n + d.shippedTotal, 0);
+  const wouldFlushTotal = forecast.byDeck.reduce((n, d) => n + d.wouldFlushCount, 0);
+
+  const mintingDecks = forecast.byDeck.filter((d) => d.newlyEligibleCount > 0);
+  const flushingDecks = forecast.byDeck.filter((d) => d.wouldFlushCount > 0);
+  const heldDecks = forecast.byDeck.filter((d) => d.wouldFlushCount === 0 && d.stagedTotal > 0);
+  const stagedDecks = forecast.byDeck.filter((d) => d.stagedTotal > 0);
+
+  const stages = [
+    stageHtml({
+      name: "Pulled",
+      total: totalPulled,
+      unit: "eligible",
+      delta: "full re-pull, every run",
+      deltaNeutral: true,
+      hint: `${totalAlreadyMinted} already minted · ${totalNewlyEligible} newly ready`,
+    }),
+    stageHtml({
+      name: "Minted",
+      total: mintedTotal,
+      unit: "cards, ever",
+      delta: totalNewlyEligible > 0 ? `+${totalNewlyEligible} this run` : "nothing to mint",
+      deltaNeutral: totalNewlyEligible === 0,
+      hint: mintingDecks.map((d) => `${escapeHtml(d.deckCode)}×${d.newlyEligibleCount}`).join(" · ") || "&nbsp;",
+    }),
+    stageHtml({
+      name: "Staged",
+      total: stagedTotal,
+      unit: "outstanding",
+      delta: stagedDecks.map((d) => `${escapeHtml(d.deckCode)} ${d.stagedTotal}`).join(" · ") || "none outstanding",
+      deltaNeutral: true,
+      hint: "short of their deck's next multiple of 5",
+      active: true,
+    }),
+    stageHtml({
+      name: "Flushed",
+      total: shippedTotal,
+      unit: "shipped, ever",
+      delta: wouldFlushTotal > 0 ? `+${wouldFlushTotal} if published now` : "nothing would flush",
+      deltaNeutral: wouldFlushTotal === 0,
+      hint:
+        flushingDecks.length > 0
+          ? `${flushingDecks.map((d) => escapeHtml(d.deckCode)).join(", ")} would flush${heldDecks.length ? ` — ${heldDecks.map((d) => escapeHtml(d.deckCode)).join(", ")} held` : ""}`
+          : "&nbsp;",
+    }),
+    stageHtml({
+      name: "Published",
+      total: lastJob ? escapeHtml(lastJob.build_id) : "—",
+      delta: lastJob ? timeAgo(lastJob.finished_at) : "never published",
+      deltaNeutral: true,
+      hint: "&nbsp;",
+    }),
+  ].join("\n");
+
+  return `
+<div class="flow-rail">
+  <div class="flow-rail-head">
+    <h3>This run, end to end</h3>
+    <span class="note">${lastJob ? `${escapeHtml(lastJob.build_id)} · ${timeAgo(lastJob.finished_at)}` : "no publish yet"}</span>
+  </div>
+  <div class="flow-stages">${stages}</div>
+</div>`;
+}
+
+const OCCURRENCE_LETTER_LABEL = { A: "A", E: "E", N: "N" };
+
+function unitSpan(cls, letter, title) {
+  return `<span class="flow-u ${cls}" title="${escapeHtml(title)}">${escapeHtml(OCCURRENCE_LETTER_LABEL[letter] || letter || "?")}</span>`;
+}
+
+// Task 5.2: the real zone (shipped -> staged -> open), laid out in explicit
+// rows of 20 cells (4 batches of 5), with a visible divider rule between
+// every batch of 5 — not just spacing, a real `.flow-batch-div` element.
+function renderRealZoneRows(units) {
+  const rows = [];
+  for (let i = 0; i < units.length; i += 20) rows.push(units.slice(i, i + 20));
+  return rows
+    .map((row, i) => {
+      const start = i * 20 + 1;
+      const end = i * 20 + row.length;
+      const groups = [];
+      for (let j = 0; j < row.length; j += 5) groups.push(row.slice(j, j + 5));
+      const cells = groups
+        .map((group) => group.map((u) => unitSpan(u.cls, u.letter, u.title)).join(""))
+        .join('<span class="flow-batch-div"></span>');
+      return `<div class="flow-shape-row"><span class="flow-row-no">${start}–${end}</span>${cells}</div>`;
+    })
+    .join("\n");
+}
+
+// Task 5.3: the projected pending zone, grouped by drain tier (not batches of
+// 5) — a `flow-tier-sep` marks every boundary where `remaining` changes, so
+// the UI never implies one fixed-schedule queue.
+function renderPendingRows(tiers) {
+  const flat = [];
+  tiers.forEach(({ remaining, cards }, tierIndex) => {
+    cards.forEach((c) => flat.push({ ...c, remaining, isLastOfTier: false }));
+    if (flat.length) flat[flat.length - 1].isLastOfTier = true;
+  });
+  if (flat.length === 0) return "";
+
+  const rows = [];
+  for (let i = 0; i < flat.length; i += 20) rows.push(flat.slice(i, i + 20));
+  return rows
+    .map((row, i) => {
+      const start = i * 20 + 1;
+      const end = i * 20 + row.length;
+      const cells = row
+        .map((c) => {
+          const title = `${c.cardId} · ${c.letter}${c.noteText ? ` · ${c.noteText}` : ""} — +${c.remaining} away`;
+          const unit = unitSpan("pending", c.letter, title);
+          return c.isLastOfTier ? `${unit}<span class="flow-tier-sep">+${c.remaining}</span>` : unit;
+        })
+        .join("");
+      return `<div class="flow-shape-row"><span class="flow-row-no">${start}–${end}</span>${cells}</div>`;
+    })
+    .join("\n");
+}
+
+function buildDeckFlowDetail(d, deckMeta, shipOrder) {
+  const occPerCard = occurrencesPerCardForDeck(d.deckCode);
+  const shapeDescription =
+    occPerCard === 2
+      ? "A+E pair — this family ships both sides"
+      : "single-occurrence family — no A+E pair, so no pending-lag queue either";
+
+  const realUnits = [
+    ...shipOrder.shipped.map((o) => ({
+      cls: "shipped",
+      letter: o.letter,
+      title: `${o.cardId} · ${o.letter}${o.noteText ? ` · ${o.noteText}` : ""}`,
+    })),
+    ...shipOrder.staged.map((o) => ({
+      cls: "staged",
+      letter: o.letter,
+      title: `${o.cardId} · ${o.letter}${o.noteText ? ` · ${o.noteText}` : ""} — staged, holding for the next flush`,
+    })),
+    ...Array.from({ length: shipOrder.open }, () => ({
+      cls: "open",
+      letter: "?",
+      title: "open — not yet minted, counts toward the next flush",
+    })),
+  ];
+
+  const pendingHtml = renderPendingRows(d.pendingByTier);
+
+  const legend = `<div class="flow-legend">
+    <span class="sw">${unitSpan("shipped", "·", "shipped")}shipped</span>
+    <span class="sw">${unitSpan("staged", "·", "staged")}staged — short of next 5</span>
+    <span class="sw">${unitSpan("open", "?", "open")}open — not yet minted</span>
+    ${occPerCard === 2 ? `<span class="sw">${unitSpan("pending", "E", "pending")}pending — 11-batch spacing lag</span>` : ""}
+  </div>`;
+
+  const bannerClass = d.gridStatus.onGrid ? "" : " crit";
+  const banner = `<div class="flow-banner${bannerClass}">
+    <b>${d.mintedCount} card${d.mintedCount === 1 ? "" : "s"} minted, ${d.occurrencesEventual} occurrence${d.occurrencesEventual === 1 ? "" : "s"} total</b>
+    (${shapeDescription}). ${d.shippedTotal} shipped, ${d.stagedTotal} staged${occPerCard === 2 ? `, ${d.pendingTotal} pending in the 11-batch spacing lag` : ""}.
+    This run: ${d.newlyEligibleCount} new card${d.newlyEligibleCount === 1 ? "" : "s"} minted,
+    ${d.wouldFlushCount > 0 ? `the next multiple of 5 would be reached and flushed (+${d.wouldFlushCount})` : d.stagedTotal > 0 ? "held — still short of the next multiple of 5" : "nothing outstanding"}.
+  </div>`;
+
+  return `<div class="flow-detail">
+    ${banner}
+    <div class="flow-shape-wrap">
+      <h4>Full ship order — real so far, projected after "now"</h4>
+      ${legend}
+      <div class="flow-shape-box">
+        ${realUnits.length ? `<div class="flow-zone-row">real — shipped · staged · open (4 batches of 5 per row)</div>` : ""}
+        <div class="flow-shape-rows">${renderRealZoneRows(realUnits) || `<div class="flow-pending-empty">nothing minted into this deck yet</div>`}</div>
+        ${
+          occPerCard === 2
+            ? pendingHtml
+              ? `<div class="flow-zone-row" style="margin-top:12px;" title="Everything above is real. Everything below is projected — order depends on what arrives next.">projected — grouped by how many more new cards must land before each tier drains, not batches of 5</div>
+          <div class="flow-shape-rows" style="margin-top:6px;">${pendingHtml}</div>`
+              : `<p class="flow-pending-empty">No pending occurrences right now — nothing waiting out the 11-batch spacing lag.</p>`
+            : `<p class="flow-pending-empty">No pending zone for this deck — single-occurrence type, nothing ever waits out an 11-batch spacing gap.</p>`
+        }
+      </div>
+      ${
+        pendingHtml
+          ? `<div class="flow-shape-note"><b>How "open" and "pending" actually relate:</b> they're not strictly sequential. Every pending occurrence counts down by however many brand-new cards land in ${escapeHtml(d.deckCode)} each run — whichever rows reach zero drain together in that same run, not one at a time on a fixed schedule. A single new card can fill the open slot above <i>and</i> drain a near-zero pending tier in the same run.</div>`
+          : ""
+      }
+    </div>
+  </div>`;
+}
+
+// Task 5.1: the compact per-deck summary row — code/title, the 5-cell
+// in-progress-batch block, the grid-status chip, and absolute totals + this
+// run's delta. The 5-cell block always shows the CURRENT, not-yet-flushed
+// batch — `shippedCount % 5` cells are already-shipped (a fully-shipped
+// batch has already flushed and is never "current"), then staged, then open.
+function buildDeckFlowCard(d, deckMeta, shipOrder, thisRunOccDelta) {
+  const meta = deckMeta.get(d.deckCode) || { title: d.deckCode, description: "" };
+  const shippedInBatch = d.shippedTotal % 5;
+  const stagedShown = Math.min(d.stagedTotal, 5 - shippedInBatch);
+  const openShown = 5 - shippedInBatch - stagedShown;
+  const target = shippedInBatch === 0 && d.stagedTotal === 0 ? d.shippedTotal : d.shippedTotal - shippedInBatch + 5;
+
+  const cells = [
+    ...Array.from({ length: shippedInBatch }, () => `<div class="flow-cell shipped" title="shipped"></div>`),
+    ...Array.from(
+      { length: stagedShown },
+      () => `<div class="flow-cell staged" title="staged, counting toward ${target}"></div>`
+    ),
+    ...Array.from(
+      { length: openShown },
+      () => `<div class="flow-cell open" title="not yet minted — still needed to flush this batch"></div>`
+    ),
+  ].join("");
+
+  const statusChip = d.gridStatus.onGrid
+    ? `<span class="flow-status-chip ok"><span class="sdot"></span>On grid</span>`
+    : `<span class="flow-status-chip stalled"><span class="sdot"></span>Stalled${d.gridStatus.stalledDays !== null ? ` — ${d.gridStatus.stalledDays} d` : ""}</span>`;
+
+  return `<details class="flow-deck${d.gridStatus.onGrid ? "" : " stalled"}">
+    <summary class="flow-deck-row">
+      <div class="flow-deck-id">
+        <svg class="flow-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
+        <div>
+          <div class="flow-deck-code mono">${escapeHtml(d.deckCode)}</div>
+          <div class="flow-deck-title">${escapeHtml(meta.title)}${meta.description ? ` — ${escapeHtml(meta.description)}` : ""}</div>
+        </div>
+      </div>
+
+      <div class="flow-grid-track">
+        <div class="flow-blocks">${cells}</div>
+        <div class="flow-grid-readout"><span class="mono">${shippedInBatch}</span> shipped · <span class="mono">${stagedShown}</span> staged · <span class="mono">${openShown}</span> open</div>
+      </div>
+
+      ${statusChip}
+
+      <div class="flow-deck-meta">
+        <div class="totals-line">${d.mintedCount} card${d.mintedCount === 1 ? "" : "s"} · ${d.occurrencesEventual} occ. total</div>
+        <div class="delta-line">${d.newlyEligibleCount > 0 ? `<span class="plus">+${d.newlyEligibleCount} card${d.newlyEligibleCount === 1 ? "" : "s"}</span> / +${thisRunOccDelta} occ. this run` : "no activity this run"}</div>
+      </div>
+    </summary>
+    ${buildDeckFlowDetail(d, deckMeta, shipOrder)}
+  </details>`;
+}
+
+function buildCardFlowSection(forecast, jobs, deckMeta, shipOrders, totalPulled, totalAlreadyMinted) {
+  const lastJob = jobs.find((j) => j.status === "succeeded" && j.build_id);
+  const sortedDecks = [...forecast.byDeck].sort((a, b) => a.deckCode.localeCompare(b.deckCode));
+  // "This run" occurrence delta per deck: exactly the newly-eligible
+  // occurrences this run would create (new cards' immediate letters, plus
+  // any queue rows that would cross zero and newly-queued rows) — `wouldShip`
+  // only ever carries THESE, never pre-existing staged rows (those are
+  // simulated against, but never pushed to `wouldShip` themselves), so this
+  // is not the same number as `wouldFlushCount + wouldHoldCount`, which
+  // mixes in staged occurrences from before this run.
+  const occDeltaByDeck = new Map(
+    forecast.byDeck.map((d) => [
+      d.deckCode,
+      forecast.wouldShip.filter((o) => o.deckCode === d.deckCode).length +
+        forecast.wouldQueue.filter((o) => o.deckCode === d.deckCode).length,
+    ])
+  );
+  const deckCards = sortedDecks
+    .map((d) =>
+      buildDeckFlowCard(
+        d,
+        deckMeta,
+        shipOrders.get(d.deckCode) || { shipped: [], staged: [], open: 0 },
+        occDeltaByDeck.get(d.deckCode) || 0
+      )
+    )
+    .join("\n");
+
+  return `
+${buildGlobalTotals(forecast)}
+${buildPipelineRail(forecast, lastJob, totalPulled, totalAlreadyMinted)}
+
+<div class="section-head"><h3>Decks</h3></div>
+${deckCards || `<div class="panel panel-pad">no decks with activity or history yet</div>`}
+`;
+}
+
 // D109: factored out from `renderForecastPage` so hub can reuse this exact
 // markup directly (importing it, not duplicating it) when rendering
 // builder's pages inside hub's own shell — see hub/src/layout.js's "Builder"
 // nav group comment. Replaces the earlier iframe-based "unified console"
 // (D-C9), reverted: it doubled chrome and the workbench's own light theme
 // read worse than the operator wanted.
-export function buildForecastBody(forecast, jobs, batches, batchDetails, activeLogicBundle) {
-  const totalEligible = forecast.byDeck.reduce((n, d) => n + d.newlyEligibleCount, 0);
-  const affectedDecks = forecast.byDeck.filter((d) => d.newlyEligibleCount > 0);
-  const totalQueueDepth = forecast.byDeck.reduce((n, d) => n + d.pendingQueueDepth, 0);
-  const lastJob = jobs.find((j) => j.status === "succeeded" && j.build_id);
-
-  const deckRows = forecast.byDeck
-    .map((d) => {
-      const willQueue = forecast.wouldQueue.filter((o) => o.deckCode === d.deckCode).length;
-      return `<tr>
-        <td class="mono">${escapeHtml(d.deckCode)}</td>
-        <td class="num">${d.newlyEligibleCount}</td>
-        <td>${d.wouldFlushCount ? `${d.wouldFlushCount}` : "—"}</td>
-        <td>${d.wouldHoldCount ? `${d.wouldHoldCount}` : "—"}</td>
-        <td>${willQueue ? `${willQueue}× E (@11)` : "—"}</td>
-        <td class="num">${d.pendingQueueDepth}</td>
-      </tr>`;
-    })
-    .join("\n");
-
+export function buildForecastBody(forecast, jobs, batches, batchDetails, activeLogicBundle, deckMeta = new Map(), shipOrders = new Map()) {
   // builder-sliding-window-shipping (task 3.1): eligible ≠ ships today —
   // split into what the flush step would actually append to Cards[] this
   // run vs. what gets (re)staged and held short of the next multiple of 5.
@@ -150,23 +485,7 @@ export function buildForecastBody(forecast, jobs, batches, batchDetails, activeL
 
 ${renderActiveLogicBundleBanner(activeLogicBundle)}
 
-<div class="stat-row">
-  <div class="stat"><div class="label">Eligible notes</div><div class="value">${totalEligible}</div><div class="sub">across ${affectedDecks.length} deck${affectedDecks.length === 1 ? "" : "s"}</div></div>
-  <div class="stat"><div class="label">Decks affected</div><div class="value">${affectedDecks.length}</div><div class="sub">${affectedDecks.map((d) => d.deckCode).join(", ") || "—"}</div></div>
-  <div class="stat"><div class="label">Queue depth</div><div class="value">${totalQueueDepth}</div><div class="sub">E's waiting, all decks</div></div>
-  <div class="stat"><div class="label">Last publish</div><div class="value" style="font-size:16px;">${lastJob ? escapeHtml(lastJob.build_id) : "—"}</div><div class="sub">${lastJob ? timeAgo(lastJob.finished_at) : "never"}</div></div>
-</div>
-
-<div class="panel">
-  <div class="panel-head"><h3>Would publish this run — by deck</h3></div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Deck</th><th>New notes</th><th>Will flush</th><th>Will hold</th><th>Will queue</th><th>Queue depth now</th></tr></thead>
-      <tbody>${deckRows || `<tr><td colspan="6">no eligible notes pulled</td></tr>`}</tbody>
-    </table>
-  </div>
-  <div class="inline-note" style="margin:0 18px 14px;">A deck only ever flushes into Cards[] in multiples of 5 (builder-sliding-window-shipping) — "Will flush" is what this run's publish would actually append; "Will hold" is staged but short of the next multiple of 5, carried forward to a later run.</div>
-</div>
+${buildCardFlowSection(forecast, jobs, deckMeta, shipOrders, forecast.totalPulled || 0, forecast.totalAlreadyMinted || 0)}
 
 <div class="panel">
   <div class="panel-head"><h3>Occurrences shipping in this batch</h3></div>
@@ -237,12 +556,39 @@ document.getElementById('publish-now').addEventListener('click', async () => {
 </script>`;
 }
 
-function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle) {
+function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle, deckMeta, shipOrders) {
   return renderShell({
     title: "mjolnir / builder — forecast",
     activeHref: "/builder",
-    body: buildForecastBody(forecast, jobs, batches, batchDetails, activeLogicBundle),
+    body: buildForecastBody(forecast, jobs, batches, batchDetails, activeLogicBundle, deckMeta, shipOrders),
   });
+}
+
+// card-flow-view: deck title/description for the summary row's subtitle —
+// one query for every deck the forecast actually reports on, not one per
+// deck (same batching discipline as `batchDetails` below).
+async function loadDeckMeta(pool, deckCodes) {
+  if (deckCodes.length === 0) return new Map();
+  const { rows } = await pool.query("SELECT code, title, description FROM decks WHERE code = ANY($1)", [deckCodes]);
+  return new Map(rows.map((r) => [r.code, { title: r.title, description: r.description || "" }]));
+}
+
+// card-flow-view (design.md's Risk 1 mitigation): only decks with actual
+// `card_slots` rows get a full ship-order reconstruction — a deck surfaced
+// purely because it has newly-eligible notes this run but hasn't minted
+// anything yet has nothing to reconstruct (shipOrderForDeck would just
+// return empty arrays, so skipping it here is a pure optimization, not a
+// correctness difference).
+async function loadShipOrders(pool, forecast) {
+  const shipOrders = new Map();
+  for (const d of forecast.byDeck) {
+    if (d.mintedCount === 0) {
+      shipOrders.set(d.deckCode, { shipped: [], staged: [], open: 0 });
+      continue;
+    }
+    shipOrders.set(d.deckCode, await shipOrderForDeck(pool, d.deckCode));
+  }
+  return shipOrders;
 }
 
 // ---- Schedule ----
@@ -376,8 +722,12 @@ export function createServer(pool, config) {
         ]);
         const batchDetails = new Map();
         for (const b of batches) batchDetails.set(b.buildId, await occurrencesForBuild(pool, b.buildId));
+        const [deckMeta, shipOrders] = await Promise.all([
+          loadDeckMeta(pool, forecast.byDeck.map((d) => d.deckCode)),
+          loadShipOrders(pool, forecast),
+        ]);
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle));
+        return res.end(renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBundle, deckMeta, shipOrders));
       }
       // Task 4.15: triggers 4.2-4.12 immediately, independent of the
       // schedule — a no-op if nothing is newly eligible (runPublish handles it).

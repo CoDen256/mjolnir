@@ -1,4 +1,6 @@
-function stripHtml(html) {
+// Exported for card-flow's ship-order/pending-tier hover text — same
+// degrade-to-empty-string tolerance for a card with no resolvable note text.
+export function stripHtml(html) {
   return String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 

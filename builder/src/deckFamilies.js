@@ -16,6 +16,18 @@ export const DECK_FAMILIES = {
   practice: { title: "Practice", codes: ["C20", "C21", "C22", "C23", "C24", "C25", "C26", "C27", "C28", "C29"] },
 };
 
+// card-flow-view: "occurrences eventual" per deck mirrors `splitOccurrences`'
+// immediate/queued split (pipeline.js) rather than a second source of truth —
+// lexic decks mint word/expression notes (`{A,E}`, 2 occurrences/card),
+// practice decks mint grammar/listening/pronunciation notes (1/card). A code
+// outside both families (a stock A/B/Z deck, never present in `card_slots`)
+// returns null — out of this view's scope entirely (design.md's Risk 1).
+export function occurrencesPerCardForDeck(deckCode) {
+  if (DECK_FAMILIES.lexic.codes.includes(deckCode)) return 2;
+  if (DECK_FAMILIES.practice.codes.includes(deckCode)) return 1;
+  return null;
+}
+
 const ROMAN_NUMERALS = [
   [1000, "M"], [900, "CM"], [500, "D"], [400, "CD"],
   [100, "C"], [90, "XC"], [50, "L"], [40, "XL"],

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { migrate } from "../../hub/src/migrate.js";
 import { getPool, closePool } from "../src/db.js";
-import { drainPendingOccurrences, queuePendingOccurrence } from "../src/pendingOccurrences.js";
+import { drainPendingOccurrences, queuePendingOccurrence, pendingByTier } from "../src/pendingOccurrences.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describe = DATABASE_URL ? test : test.skip;
@@ -52,5 +52,34 @@ describe("pendingOccurrences: D-F2 drains in deterministic insertion order", asy
 
     const { rows } = await pool.query("SELECT card_id, remaining FROM pending_occurrences WHERE deck_code = 'C20'");
     assert.deepEqual(rows, [{ card_id: "C20001", remaining: 9 }]);
+  });
+
+  // card-flow-view: the full per-remaining-value breakdown — groups with
+  // ties stay together, groups are ordered ascending by `remaining`, and a
+  // card with no `card_content` row degrades to empty note text instead of
+  // being dropped (same tolerance `batchHistory.js`'s `stripHtml` already
+  // has for every other occurrence listing).
+  await t.test("pendingByTier groups by remaining, ascending, ties kept together, missing note text degrades to empty string", async () => {
+    await pool.query("TRUNCATE pending_occurrences");
+    await queuePendingOccurrence(pool, { deckCode: "C20", cardId: "C20002", letter: "E", remaining: 7 });
+    await queuePendingOccurrence(pool, { deckCode: "C20", cardId: "C20001", letter: "E", remaining: 2 });
+    await queuePendingOccurrence(pool, { deckCode: "C20", cardId: "C20003", letter: "E", remaining: 2 });
+
+    const byDeck = await pendingByTier(pool);
+    const tiers = byDeck.get("C20");
+    assert.deepEqual(
+      tiers.map((t) => t.remaining),
+      [2, 7],
+      "ascending by remaining, ties collapsed into one group"
+    );
+    assert.deepEqual(
+      tiers[0].cards.map((c) => c.cardId),
+      ["C20001", "C20003"],
+      "insertion order preserved within a tied tier"
+    );
+    assert.ok(
+      tiers.every((t) => t.cards.every((c) => c.noteText === "")),
+      "no card_content row for these cards — degrades to empty string, not null/undefined"
+    );
   });
 });

@@ -202,6 +202,28 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
     assert.equal(Number(rows[0].count), 0, "forecast must not mint anything");
   });
 
+  // builder-card-flow-ui: byDeck's absolute totals and pending-by-tier
+  // breakdown, additive to the this-run deltas asserted above — a deck with
+  // nothing minted yet reports zero totals and an on-grid status, not an
+  // error or an omitted entry.
+  await t.test("forecast reports absolute lifetime totals and grid status alongside this-run deltas", async () => {
+    // Reuses n1-n4, already added by the previous test — this whole suite
+    // accumulates notes across tests (see the file-level comment), so
+    // re-adding the same ids here would duplicate them in the fake
+    // stabbur's note list and break the next real publish's mint.
+    const forecast = await runForecast(pool, config);
+    const c30 = forecast.byDeck.find((d) => d.deckCode === "C30");
+
+    assert.equal(c30.mintedCount, 0, "nothing minted into C30 yet at this point in the suite");
+    assert.equal(c30.occurrencesEventual, 0);
+    assert.equal(c30.shippedTotal, 0);
+    assert.equal(c30.stagedTotal, 0);
+    assert.deepEqual(c30.pendingByTier, []);
+    assert.deepEqual(c30.gridStatus, { onGrid: true, stalledDays: null }, "0 shipped is trivially on-grid");
+    assert.equal(typeof forecast.totalPulled, "number");
+    assert.equal(typeof forecast.totalAlreadyMinted, "number");
+  });
+
   let firstBuildId;
   await t.test("a single run with no floor to wait for ships every new card's A immediately and queues its E", async () => {
     const result = await runPublish(pool, config);
@@ -247,6 +269,23 @@ describe("builder pipeline: forecast + publish against a fixture stabbur and an 
   await t.test("forecast after a real publish shows nothing in would-ship, matching the run's outcome", async () => {
     const forecast = await runForecast(pool, config);
     assert.deepEqual(forecast.wouldShip, [], "everything currently eligible was just published — nothing left to ship");
+
+    // builder-card-flow-ui: absolute totals now reflect the real publish
+    // above — 4 cards minted (lexic: 2 occurrences each), 0 shipped (all 4
+    // A's are staged, short of the next multiple of 5), 4 staged, 4 pending
+    // (each card's E, queued at remaining=11).
+    const c30 = forecast.byDeck.find((d) => d.deckCode === "C30");
+    assert.equal(c30.mintedCount, 4);
+    assert.equal(c30.occurrencesEventual, 8);
+    assert.equal(c30.shippedTotal, 0);
+    assert.equal(c30.stagedTotal, 4);
+    assert.equal(c30.pendingTotal, 4);
+    assert.deepEqual(
+      c30.pendingByTier.map((t) => t.remaining),
+      [11]
+    );
+    assert.equal(c30.pendingByTier[0].cards.length, 4);
+    assert.deepEqual(c30.gridStatus, { onGrid: true, stalledDays: null }, "0 shipped is a trivial multiple of 5");
   });
 
   await t.test("editing an already-minted note's content reaches the device on the next publish, id/position unchanged", async () => {

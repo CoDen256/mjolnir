@@ -6,9 +6,10 @@ import { partitionByDeck } from "./eligibility.js";
 import { project } from "./projector.js";
 import { mintCardSlots, cardIdsForNotes, updateAudioSha256, allCardAudio, deckTitle, deckDescription } from "./mint.js";
 import { resolveActiveDeckCode } from "./deckFamilies.js";
-import { queuePendingOccurrence, hasPendingOccurrence, drainPendingOccurrences, pendingQueueDepths } from "./pendingOccurrences.js";
+import { queuePendingOccurrence, hasPendingOccurrence, drainPendingOccurrences, pendingQueueDepths, pendingByTier } from "./pendingOccurrences.js";
 import { stageOccurrence, stagedCount, flushShippable, peekStaged } from "./stagedOccurrences.js";
 import { recordShipments } from "./occurrenceShipments.js";
+import { deckTotals, gridStatusForDeck } from "./cardFlow.js";
 import { previousVersions, writePublication } from "./publications.js";
 import { createBuildJob, markSucceeded, markFailed } from "./buildJobs.js";
 import { nextBuildId } from "./buildId.js";
@@ -225,8 +226,14 @@ async function pruneRetiredDecks(pool, model, log, buildJobId) {
 // `byDeck` gains `stagedBeforeThisRun`/`wouldFlushCount`/`wouldHoldCount` so
 // the sliding-window state is visible without inspecting `wouldShip` at all.
 export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sourceLang = "no" } = {}) {
-  const { newlyEligibleByDeck, alreadyMinted } = await pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLang });
+  const { newlyEligibleByDeck, alreadyMinted, eligibleNotesById } = await pullAndAssign(pool, { stabburBaseUrl, stabburAuthToken, sourceLang });
   const queueDepths = await pendingQueueDepths(pool);
+  // card-flow-view (D-H2-style "one implementation, two call sites" extended
+  // to read-only totals): absolute lifetime totals and the pending-by-tier
+  // breakdown are computed once per run, not once per deck, same as
+  // `queueDepths` above.
+  const totalsByDeck = await deckTotals(pool);
+  const pendingTiersByDeck = await pendingByTier(pool);
 
   const wouldShip = [];
   const wouldQueue = [];
@@ -238,7 +245,7 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
   // latter silently dropped such decks from the forecast entirely (the
   // confirmed bug: data was always correct in `pending_occurrences`, it was
   // just never reaching this loop to be reported).
-  const deckCodes = new Set([...newlyEligibleByDeck.keys(), ...queueDepths.keys()]);
+  const deckCodes = new Set([...newlyEligibleByDeck.keys(), ...queueDepths.keys(), ...totalsByDeck.keys()]);
   for (const deckCode of deckCodes) {
     const notes = newlyEligibleByDeck.get(deckCode) || [];
     const { rows } = await pool.query("SELECT COALESCE(MAX(card_no), 0) AS max_no FROM card_slots WHERE deck_code = $1", [
@@ -303,6 +310,13 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
     });
 
     const queue = queueDepths.get(deckCode);
+    // card-flow-view: absolute lifetime totals, additive to the this-run
+    // deltas above — `totalsByDeck` won't have an entry for a deck that's
+    // never minted anything but somehow has pending rows (shouldn't happen,
+    // but a deck with real history always has a `card_slots` row, so this is
+    // defensive, not expected).
+    const totals = totalsByDeck.get(deckCode) || { mintedCount: 0, occurrencesEventual: 0, shippedCount: alreadyShipped, stagedCount: existingStaged.length };
+    const gridStatus = await gridStatusForDeck(pool, deckCode, totals.shippedCount);
     byDeck.push({
       deckCode,
       newlyEligibleCount: notes.length,
@@ -312,6 +326,13 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
       stagedBeforeThisRun: existingStaged.length,
       wouldFlushCount: shipCount,
       wouldHoldCount: stagedTotal - shipCount,
+      mintedCount: totals.mintedCount,
+      occurrencesEventual: totals.occurrencesEventual,
+      shippedTotal: totals.shippedCount,
+      stagedTotal: totals.stagedCount,
+      pendingTotal: queue ? queue.depth : 0,
+      pendingByTier: pendingTiersByDeck.get(deckCode) || [],
+      gridStatus,
     });
   }
 
@@ -331,7 +352,18 @@ export async function runForecast(pool, { stabburBaseUrl, stabburAuthToken, sour
     }
   }
 
-  return { wouldShip, wouldQueue, byDeck, wouldUpdate };
+  // card-flow-view (pipeline rail's "Pulled" stage): the full pull size and
+  // already-minted count, additive to the per-deck breakdown above — neither
+  // was previously surfaced on `runForecast`'s return value, only used
+  // internally by `pullAndAssign`'s caller.
+  return {
+    wouldShip,
+    wouldQueue,
+    byDeck,
+    wouldUpdate,
+    totalPulled: eligibleNotesById.size,
+    totalAlreadyMinted: alreadyMinted.length,
+  };
 }
 
 // The real run: tasks 4.2-4.12. No floor (D91) — triggered by either the
