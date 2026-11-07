@@ -457,6 +457,180 @@ top, not a substitute — the stock C13–C17 decks encode their own guaranteed
 spacing regardless of what else might be selected, which is the stronger
 property to replicate.
 
+---
+
+# Corrections from real device data (2026-11-07)
+
+Everything above was derived by **reading the bundle**. This section was derived
+by **reading a real synced account**, and it contradicts §6 and C2 in three
+places. Where they disagree, this section wins — it is measured, not inferred.
+
+**Source.** The `userdata` row for account `3wEnqPaPO2cSg2WOqNt6FXuZZvC3` in
+`tun/tun-backup/mjolnir.sql`, snapshot 2026-11-07T18:47Z: **4,510 occurrence
+records** over 2,575 distinct cards and 37 decks, 3,597 of them archived. Large
+enough that the identities below are not coincidences — several are exact set
+equalities across thousands of rows, with zero exceptions.
+
+Two things above are confirmed exactly by it, which is worth stating because it
+calibrates everything else: `Σ PullCounter × 5` over all 37 decks equals **4,510**,
+precisely the occurrence count (**C4** holds), and the stock corpus totals
+**4,895 occurrences** (**C5** holds).
+
+## R1. `Time` is the **next-due** timestamp, not last-touched ⚠️ CORRECTION
+
+§6 states: *"`Time`: epoch-ms, last-touched — 'next due' is derived from this,
+not stored"*, and then *"No explicit next-review-date field exists."* Both are
+wrong. It is the other way around: the next-review date **is** stored, and the
+last-touched date is what has to be derived.
+
+- 1,397 of the 4,510 records carry timestamps in the **future**.
+- No in-rotation occurrence is ever dated beyond **+30 days**, which is the
+  largest `MaxInterval` any deck uses.
+- §6's own quoted dueness test, `Bt(dayjs(card.Time).subtract(4,'h'),
+  dayjs().subtract(4,'h')) <= 0`, is only coherent this way. Read as
+  "last-touched", it marks every card ever reviewed before today as due.
+
+## R2. `CF` is the **interval in days**, not an ease factor in percent ⚠️ CORRECTION
+
+C2 corrected §6 by identifying mod 2133's `CF4` table as an ease factor in
+percent (25–500%) and concluding *"`CF` is an ease factor in percent"*. The
+table is an ease factor; the **stored field is not**. It holds the resulting
+interval, in days:
+
+- Observed range is **0–30**, never a percentage-shaped value.
+- Across all 913 in-rotation occurrences, **`CF` never once exceeds its deck's
+  `MaxInterval`** — 0 violations. 492 sit exactly on it, and every occurrence
+  below the cap is strictly below (max observed ratio 0.97).
+- Per-deck: `CF ≤ 10` in every `MaxInterval: 10` deck, `≤ 30` in every
+  `MaxInterval: 30` deck, and so on for all six distinct cap values.
+
+`CF4`'s percentages are the multipliers **applied** to `CF`; `CF` is the result.
+
+## R3. `Stage` is a retirement tier, not a climbing ladder ⚠️ CORRECTION
+
+§6 states: *"`Stage`: number, 0 = brand new, climbs with successful reviews
+(200+ = graduated)"*. It takes exactly **four** values, and they are states, not
+rungs:
+
+| `Stage` | count | meaning |
+|---|---|---|
+| 3 | 913 | in rotation — the app will show this again |
+| 200 | 3,015 | auto-retired at the ceiling (see R4) |
+| 150 | 327 | parked before reaching a ceiling, interval retained (`CF` 0–29) |
+| 100 | 255 | parked before reaching a ceiling, `CF` = 0 on **all** 255 |
+
+And two fields carry less information than §6 implies:
+
+- `Park` is true for **precisely** `Stage ≠ 3` — it is redundant with `Stage`.
+- `Graduated` is `true` on **all 4,510 rows**. It distinguishes nothing. Any
+  code branching on it is branching on a constant.
+- `Postponed` is `true` on 4,509 of 4,510 — effectively a constant too.
+
+## R4. The auto-park rule, pinned down ✅ CLOSES AN OPEN QUESTION
+
+§6 ends: *"Exactly how `Stage` maps to day-gaps wasn't fully traced — would need
+a deeper read of `drawNewCards`/session-building logic in module 2119."* The
+snapshot answers it without reading 2119 at all:
+
+> **`AutoParkHit` counts reviews survived *at* the deck's `MaxInterval`. On
+> reaching the deck's `AutoHammerCount` (2 in every deck), the occurrence is
+> retired to `Stage 200`.**
+
+Proven as set equalities, not correlations:
+
+- `{in rotation, AutoParkHit = 1}` and `{in rotation, CF = MaxInterval}` are the
+  **same 492 records**. Neither set has a single member the other lacks.
+- Every in-rotation occurrence with `AutoParkHit = 0` is strictly below its cap.
+- All **3,015** `Stage 200` records sit at exactly `CF = MaxInterval` with
+  `AutoParkHit = 2`. None above, none below, no exceptions.
+
+This is why the archive is 79.8% of the library: it is the rule firing, not
+neglect. It also means `decks.max_interval` and `decks.auto_hammer_count` —
+two columns hub already owns and ships in every bundle — are the real controls
+over how fast a learner's library empties out.
+
+## R5. The auto-tag rule — `Tag` is the app's judgement, not the user's
+
+Same shape, different counter:
+
+> **`AutoTagHit` counts bad reviews. On reaching 2, the app sets `Tag: true`.**
+
+- `{AutoTagHit ≥ 2}` and `{Tag = true}` are the **same 40 records**, zero
+  exceptions in either direction.
+- 276 occurrences have `AutoTagHit ≥ 1`; the distribution is 1:236, 2:33, 3:6, 4:1.
+- The flag is earned: median `numberOfReschedulings` among tagged occurrences is
+  **14**, against a library median of **6**.
+
+`AutoTag` appears alongside `AutoPark` and `FreshPark` in mod 2133's
+`globalOptions` (§C2), consistent with both rules being switchable.
+
+## R6. `Panic` — an undocumented field marking cards you have panicked on
+
+Not in §6's record shape. Present on **128** records, always reading `0`.
+`Panic` is the hardest grade button in mod 2133's own interval tables (a
+1-minute step, see C2). Every one of the 128 also carries `AutoTagHit ≥ 1` —
+there is no record with `Panic` and `AutoTagHit = 0`. Median reschedule count
+among them is 11 against the library's 6. So the field is a counter that comes
+into existence once the grade is used and is cleared on recovery; its presence,
+not its value, is the signal.
+
+## R7. `A` is a separate field from `language`, and is undocumented
+
+§6's record shape lists neither. Every record carries both:
+
+- `language` — the occurrence direction letter `N`/`E`/`A` (**C1**).
+- `A` — which side of the card the **audio** belongs to: `N` 3,630 (80.5%),
+  `E` 826 (18.3%), `X` 54 (1.2%).
+
+These are independent: an `E`-direction occurrence can have `A: "N"`. C9's
+playback call site is *"gated on the shown side matching the card's `A`
+pointer"*, which is exactly this field. The 54 `X` records point at a third
+asset again, which matters to audio-cache prefetch.
+
+Records also carry a redundant `D` (deck title, denormalised) — useful in
+practice, since it means a progress row names its deck without any join.
+
+## R8. One snapshot contains ~7 months of history — recoverable, with a caveat
+
+R1 and R2 together give `last review = Time − CF days`. Applied to all 4,510
+records this yields **135 distinct study days from 2026-04-13 to 2026-11-07**,
+with zero future-dated results (the arithmetic self-checks). Hour-of-day
+survives intact, because intervals are whole days: a clear bimodal 07:00–09:00
+and 12:00–17:00 pattern, with 22:00, 23:00 and 02:00–04:00 completely empty
+(00:00 and 01:00 hold a thin 15 and 47).
+
+**The caveat is structural and must travel with any chart built on this.** A
+snapshot retains only each occurrence's *most recent* review, so the reconstruction
+thins toward the past — a card studied in May and again in October appears only
+in October, and a blank day is not evidence of a rest day. The early months
+survive at all only because retired cards stopped being reviewed, freezing their
+last-review date. Treat the result as a **floor** on activity, never a count.
+
+A genuine day-by-day log needs `userdata_history`, which for this account holds
+**exactly one row** (the 2026-11-07 manual push).
+
+## R9. What the snapshot cannot tell you
+
+- **What parked the 582 `Stage 100`/`150` occurrences.** `AutoParkHit = 0` on
+  every one, so neither R4 nor R5 touched them. Either the learner archived them
+  by hand or mod 2133's `FreshPark` did. Nothing in the record distinguishes the
+  two. Do not label these "manually archived" without new evidence.
+- **Several doc-level fields are destroyed by a restore.**
+  `accountCreationDate` and `lastCompletedSession` both read the restore's own
+  timestamp (2026-11-07T18:20Z); `consistencyRate` is absent entirely; and
+  `completedSessions` reads 65 against 135 reconstructed study days, so it was
+  reset too. Derive account age and activity from the occurrence records, never
+  from these.
+
+## R10. The same card and side can live in two decks at once
+
+131 occurrences share a `{ID, language}` pair with another record under a
+different `DECK_ID` — all of them B14 (*Intermediate listening*) reusing cards
+from B02/B04/B05/B07/B09. This is legal and intended: the scheduler keys on the
+**triple** `{ID, language, DECK_ID}` (**C1**), so each copy holds its own
+independent SRS state. Any per-card aggregation must group on the triple, or on
+`{ID, language}` deliberately — grouping on `ID` alone silently merges them.
+
 ## C12. Related documentation
 
 Ecosystem design built on these findings lives in `tun/docs/`.

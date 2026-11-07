@@ -14,8 +14,14 @@ Sibling repos: `tun` (deployment + ecosystem docs), `stabbur` (learning content)
 Do not re-derive settled decisions.
 
 **Mjølnir app internals (reverse-engineering record): `docs/findings.md`.**
-Its §2 and §6 contain two errors corrected in the appended "Corrections"
-section — always read that section.
+It has **two** appended correction sections and both supersede the body —
+always read them before trusting §2 or §6:
+
+- "Corrections and additional findings (2026-10-20)" (C1–C12), bundle-derived.
+- "Corrections from real device data (2026-11-07)" (R1–R10), derived from a
+  real 4,510-occurrence synced account. R1–R3 overturn §6's reading of
+  `Time`, `Stage` and (against C2) `CF`; R4–R5 pin down the auto-park and
+  auto-tag rules §6 left untraced.
 
 `openspec/` holds specs for the bundle tool itself.
 
