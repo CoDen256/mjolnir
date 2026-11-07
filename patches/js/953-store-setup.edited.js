@@ -29,6 +29,9 @@ __d(function (g, r, i, a, m, e, d) {
   function mjolnirIsCardRecord(value) {
     return !!value && typeof value === "object" && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, "D") && Object.prototype.hasOwnProperty.call(value, "ID");
   }
+  function mjolnirIsCardRef(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, "Card");
+  }
   function mjolnirCardToArray(card) {
     var out = [];
     for (var key in card) {
@@ -45,6 +48,9 @@ __d(function (g, r, i, a, m, e, d) {
     if (value && typeof value === "object") {
       if (mjolnirIsCardRecord(value)) {
         return mjolnirCardToArray(value);
+      }
+      if (mjolnirIsCardRef(value)) {
+        return value.Card;
       }
       var out = {};
       for (var key in value) {
