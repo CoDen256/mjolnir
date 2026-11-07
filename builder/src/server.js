@@ -566,8 +566,11 @@ function renderForecastPage(forecast, jobs, batches, batchDetails, activeLogicBu
 
 // card-flow-view: deck title/description for the summary row's subtitle —
 // one query for every deck the forecast actually reports on, not one per
-// deck (same batching discipline as `batchDetails` below).
-async function loadDeckMeta(pool, deckCodes) {
+// deck (same batching discipline as `batchDetails` below). Exported so hub
+// can reuse it directly (D109's "importing it, not duplicating it"), same
+// as `buildForecastBody` itself — `/mjolnir/builder/forecast` needs this
+// data too, not just builder's own `/builder` route.
+export async function loadDeckMeta(pool, deckCodes) {
   if (deckCodes.length === 0) return new Map();
   const { rows } = await pool.query("SELECT code, title, description FROM decks WHERE code = ANY($1)", [deckCodes]);
   return new Map(rows.map((r) => [r.code, { title: r.title, description: r.description || "" }]));
@@ -578,8 +581,8 @@ async function loadDeckMeta(pool, deckCodes) {
 // purely because it has newly-eligible notes this run but hasn't minted
 // anything yet has nothing to reconstruct (shipOrderForDeck would just
 // return empty arrays, so skipping it here is a pure optimization, not a
-// correctness difference).
-async function loadShipOrders(pool, forecast) {
+// correctness difference). Exported for the same reason as `loadDeckMeta`.
+export async function loadShipOrders(pool, forecast) {
   const shipOrders = new Map();
   for (const d of forecast.byDeck) {
     if (d.mintedCount === 0) {

@@ -34,7 +34,7 @@ import { getSchedule } from "../../builder/src/schedulerConfig.js";
 import { jobLogLines } from "../../builder/src/jobLogs.js";
 import { recentBatches, occurrencesForBuild } from "../../builder/src/batchHistory.js";
 import { getActiveMeta } from "../../builder/src/logicBundle.js";
-import { buildForecastBody, buildScheduleBody, buildLogsBody } from "../../builder/src/server.js";
+import { buildForecastBody, buildScheduleBody, buildLogsBody, loadDeckMeta, loadShipOrders } from "../../builder/src/server.js";
 
 const WORKBENCH_MOUNT = "/mjolnir/workbench";
 
@@ -957,7 +957,11 @@ export function createServer(pool, config) {
         ]);
         const batchDetails = new Map();
         for (const b of batches) batchDetails.set(b.buildId, await occurrencesForBuild(pool, b.buildId));
-        const body = buildForecastBody(forecast, jobs, batches, batchDetails, activeLogicBundle);
+        const [deckMeta, shipOrders] = await Promise.all([
+          loadDeckMeta(pool, forecast.byDeck.map((d) => d.deckCode)),
+          loadShipOrders(pool, forecast),
+        ]);
+        const body = buildForecastBody(forecast, jobs, batches, batchDetails, activeLogicBundle, deckMeta, shipOrders);
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         return res.end(renderShell({ title: "mjolnir / hub — forecast & publish", activeHref: "/mjolnir/builder/forecast", body }));
       }
