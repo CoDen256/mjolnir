@@ -78,7 +78,7 @@ function transcriptionHtml(note){
   .replace(/^[\/\[\]]+|[\/\[\]]+$/g, '')
   .replace(/["']/g, char => map[char]);
 
-  return `[&ensp; ${ipa} ]`
+  return `<div class="supWrap">[&ensp; ${ipa} ]</div>`
 }
 
 const PROJECTORS = {
@@ -108,7 +108,7 @@ const PROJECTORS = {
   }),
   pronunciation: (note) => ({
     N: `<div class="center">Read out:<br><span class="lg">${note.text}</span></div>`,
-    E: `<div class="center"><div class="arialFont supWrap">${transcriptionHtml(note)}</div></div>`,
+    E: `<div class="center"><div class="arialFont">${transcriptionHtml(note)}</div></div>`,
     X: "",
     A: "E",
     occurrences: ["N"],
