@@ -19,18 +19,59 @@ regardless of its `type`, with no exception for any note type.
 - **THEN** that note is excluded from the current run and reconsidered on the
   next run
 
-### Requirement: Deck assignment by type, then by PoS, with a catch-all
-The system SHALL assign each eligible `type=word` note to a deck based on its
-`pos` using the fixed substantiv/adjektiv/verb/adverb/preposisjon/
-konjunksjon-subjunksjon mapping, SHALL assign every other type to its fixed
-deck, and SHALL assign any note whose `pos` does not match the word-deck
-mapping to the `expression` deck (C26), regardless of its `type`.
+### Requirement: Deck assignment by family, not by individual type/PoS
+The system SHALL assign every eligible note to one of 2 deck families —
+**superseded by deck-consolidation** (operator decision, 2026-11-04): the
+original 10-way type/PoS split (`Deck assignment by type, then by PoS,
+with a catch-all`) concentrated too little volume into several decks for
+`builder-sliding-window-shipping`'s multiple-of-5 flush threshold to be
+reached in practice. `type=word` notes (any PoS) and `type=expression`
+notes SHALL resolve to the `lexic` family; `type=grammar`,
+`type=listening`, and `type=pronunciation` notes SHALL resolve to the
+`practice` family. Each family resolves to an actual deck code via
+`deck-rollover`'s capacity-aware resolution, not a single fixed code.
 
-#### Scenario: A word note with an unmapped PoS
-- **WHEN** an eligible `type=word` note's `pos` is not substantiv, adjektiv,
-  verb, adverb, preposisjon, or konjunksjon/subjunksjon
-- **THEN** it is assigned to the expression deck (C26) rather than left
-  unassigned
+#### Scenario: Any word-PoS note resolves to the lexic family
+- **WHEN** an eligible `type=word` note is assigned a deck, regardless of
+  its `pos`
+- **THEN** it resolves to the `lexic` family (no PoS produces a different
+  family — the former per-PoS deck split no longer applies)
+
+#### Scenario: Expression resolves to the lexic family, not its own deck
+- **WHEN** an eligible `type=expression` note is assigned a deck
+- **THEN** it resolves to the `lexic` family, the same family every
+  word-PoS note resolves to
+
+#### Scenario: Single-occurrence types resolve to the practice family
+- **WHEN** an eligible note has `type` grammar, listening, or pronunciation
+- **THEN** it resolves to the `practice` family
+
+### Requirement: Existing cards are migrated to their new family's deck codes exactly once
+The system SHALL provide a one-time, operator-triggered migration that
+moves every previously-minted card to a new id consistent with its new
+family's active deck code (per deck-rollover's resolution), updating every
+table that references that card by id, and SHALL NOT run this migration
+automatically as part of routine hub startup.
+
+#### Scenario: A card minted under the old per-PoS scheme is migrated
+- **WHEN** the migration runs and a card's old deck code's notes now belong
+  to the `lexic` family
+- **THEN** the card receives a new id under the `lexic` family's currently
+  active code, and every row in `card_content`, `pending_occurrences`,
+  `staged_occurrences`, `occurrence_shipments`, and `minted_notes` that
+  referenced the old id now references the new one
+
+#### Scenario: The migration is all-or-nothing
+- **WHEN** the migration encounters any error partway through
+- **THEN** the entire migration rolls back — no card ends up partially
+  migrated (new id created but old references not yet repointed, or vice
+  versa)
+
+#### Scenario: Study progress is not preserved across the merge
+- **WHEN** a card moves to its new family's deck as part of this migration
+- **THEN** its position in the new deck's `Cards[]` reflects migration
+  order only — no attempt is made to preserve which occurrences the
+  device had already drawn under the old deck's `PullCounter`
 
 ### Requirement: Every deck with at least one newly-eligible note mints that run
 The system SHALL NOT withhold minting a newly-eligible note based on how
@@ -222,3 +263,45 @@ The system SHALL drain pending occurrences in a fixed, reproducible order
   `remaining <= 0` during one run's drain step
 - **THEN** the one queued earlier is always appended to `Cards[]` before the
   one queued later, on every run given the same inputs
+
+### Requirement: The forecast reports each deck's absolute lifetime totals alongside this-run deltas
+The system SHALL report, for every deck in the forecast's per-deck list,
+absolute lifetime totals — cards minted, occurrences eventual, occurrences
+shipped, occurrences currently staged, occurrences currently pending — in
+addition to (not instead of) the existing this-run-scoped fields
+(`newlyEligibleCount`, `wouldFlushCount`, `wouldHoldCount`,
+`pendingQueueDepth`). "Occurrences eventual" SHALL be derived from each
+deck's content-type occurrence shape (one occurrence per card for
+single-occurrence types; two per card for two-occurrence types), not stored
+separately.
+
+#### Scenario: A deck with prior history and no activity this run
+- **WHEN** the operator views the forecast for a deck that minted no new
+  cards this run but has previously shipped and staged occurrences
+- **THEN** that deck's absolute totals (cards minted, shipped, staged,
+  pending) are still reported, not omitted because this run's deltas are
+  all zero
+
+#### Scenario: A brand-new deck with its first run
+- **WHEN** a deck mints its very first card during the current run
+- **THEN** its absolute totals reflect that first card (1 minted, 1 or 2
+  occurrences eventual depending on type) rather than reading as empty
+
+### Requirement: Pending occurrences are reported grouped by drain tier, not only as a flat count
+The system SHALL report, for every deck with pending occurrences, the
+breakdown of those occurrences by their current `remaining` value (how many
+more new cards must land, deck-wide, before that group drains), including
+each group's card list — not only the flat depth and single
+oldest-`remaining` value the forecast currently exposes.
+
+#### Scenario: Multiple pending occurrences share the same remaining count
+- **WHEN** a deck has several pending occurrences that all currently have
+  `remaining = 7`
+- **THEN** they are reported as one group of 7-away occurrences (with their
+  card ids), not as individual unrelated entries
+
+#### Scenario: Pending occurrences span several distinct remaining counts
+- **WHEN** a deck's pending occurrences have `remaining` values of 1, 2, and
+  11
+- **THEN** three separate groups are reported, ordered by ascending
+  `remaining`, each listing only the occurrences at that exact value
