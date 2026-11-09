@@ -99,6 +99,86 @@ describe("audioSnapshot: D-F1 trims a card's audio to its note's audio_sel_ms", 
     assert.equal(result.CARDPAST, originalSha, "clamping start and end both to duration collapses the range — ship the original");
   });
 
+  await t.test("a selection whose bounds aren't real numbers ships the original instead of reaching ffmpeg", async () => {
+    const cardAudio = { CARDNAN: originalSha };
+    const result = await ensureBlobsPresent(cardAudio, {
+      stabburBaseUrl,
+      dataDir,
+      selMsByCardId: { CARDNAN: [NaN, NaN] },
+    });
+    assert.equal(result.CARDNAN, originalSha, "an unusable selection must not become `-ss NaN`");
+  });
+
+  t.after(async () => {
+    await fake.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+// Regression: hover-translate captures audio with the browser's
+// `MediaRecorder`, which writes a streaming WebM carrying no duration at
+// all — neither `format=duration` nor `stream=duration`, because the
+// length isn't known when the header goes out. Trimming one used to clamp
+// the selection against that `N/A`, turn the whole range into NaN, slip
+// past the collapse check (every NaN comparison being false) and hand
+// ffmpeg a literal `-ss NaN`, failing the entire publish over one card.
+describe("audioSnapshot: D-F1 trims a capture whose container declares no duration", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mjolnir-audio-webm-"));
+  // `-f webm` over a pipe is how MediaRecorder's output reaches us: no
+  // seek-back to patch in a Duration element, so the file genuinely has
+  // none. Writing to stdout (rather than a path) is what keeps ffmpeg
+  // from rewriting the header on close.
+  const sourcePath = path.join(tmpDir, "capture.webm");
+  fs.writeFileSync(
+    sourcePath,
+    execFileSync(
+      "ffmpeg",
+      ["-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+       "-c:a", "libopus", "-f", "webm", "pipe:1"],
+      { maxBuffer: 64 * 1024 * 1024 }
+    )
+  );
+
+  await t.test("the fixture really does lack a declared duration", () => {
+    const declared = execFileSync(
+      "ffprobe",
+      ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", sourcePath],
+      { encoding: "utf8" }
+    ).trim();
+    assert.ok(
+      !Number.isFinite(parseFloat(declared)),
+      `fixture must have no declared duration, got ${declared} — the regression it guards can't occur otherwise`
+    );
+  });
+
+  const sourceBytes = fs.readFileSync(sourcePath);
+  const originalSha = shaOf(sourceBytes);
+  const fake = startFakeStabbur({ blobs: {} });
+  fake.addBlob(originalSha, sourceBytes);
+  const stabburBaseUrl = await fake.listen();
+  const dataDir = path.join(tmpDir, "data");
+
+  await t.test("trims to the selection, recovering the duration by decoding", async () => {
+    const result = await ensureBlobsPresent({ CARDWEBM: originalSha }, {
+      stabburBaseUrl,
+      dataDir,
+      selMsByCardId: { CARDWEBM: [500, 1500] },
+    });
+    assert.notEqual(result.CARDWEBM, originalSha, "trimmed hash must differ from the original");
+    const durationMs = probeDurationMs(path.join(dataDir, "blob", result.CARDWEBM));
+    assert.ok(Math.abs(durationMs - 1000) < 150, `expected ~1000ms, got ${durationMs}ms`);
+  });
+
+  await t.test("still clamps a stale over-long selection against the decoded duration", async () => {
+    const result = await ensureBlobsPresent({ CARDWEBMCLAMP: originalSha }, {
+      stabburBaseUrl,
+      dataDir,
+      selMsByCardId: { CARDWEBMCLAMP: [1800, 10000] },
+    });
+    const durationMs = probeDurationMs(path.join(dataDir, "blob", result.CARDWEBMCLAMP));
+    assert.ok(Math.abs(durationMs - 200) < 150, `expected ~200ms, got ${durationMs}ms`);
+  });
+
   t.after(async () => {
     await fake.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
