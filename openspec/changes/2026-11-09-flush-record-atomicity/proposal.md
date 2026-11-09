@@ -102,8 +102,20 @@ failure modes it tolerates are exactly the ones that leave the gap half-open.
   occurrences; the per-card invariant (every owed occurrence in exactly one of
   shipped/staged/pending) then held exactly at 421/421.
 
+  The same per-card drain also **inverts occurrence order**: because the mass
+  drain stages a card's `E` before its own `A` is staged, 115 cards ended up
+  with their `E` ahead of their `A` in `occurrence_shipments`, and `replay`
+  rebuilds `Cards[]` in shipment-id order — so those cards were quizzed
+  translation-first, which D91 explicitly forbids ("the word is never quizzed
+  text-first"). Deduplicating does not fix this: keeping the earliest row per
+  `(card, letter)` keeps the inverted one. Only re-running the mint through
+  the normal per-deck path restores the order, which is how it was resolved
+  (ledger reverted to pre-crash, republished as b000042: 0 cards with `E`
+  before `A`, 127 `E`s back at `remaining = 11`).
+
   So this is two defects, not one: the atomicity gap above, and `drainThenQueue`
-  being unsafe to call per-card. The second needs either a per-deck recovery
+  being unsafe to call per-card — which costs correct ordering and the D91 gap
+  as well as uniqueness. The second needs either a per-deck recovery
   flush or a uniqueness constraint on `staged_occurrences`/`occurrence_shipments`
   that makes double-staging impossible rather than merely unlikely. Decide
   whether it splits into its own change — it is independently reachable
