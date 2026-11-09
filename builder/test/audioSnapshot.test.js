@@ -254,6 +254,23 @@ describe("audioSnapshot: a non-mp3 blob is normalized to mp3 whatever its select
     assert.deepEqual(fs.readFileSync(path.join(dataDir, "blob", mp3Sha)), mp3Bytes);
   });
 
+  await t.test("a blob ffprobe cannot read at all ships untouched rather than failing the publish", async () => {
+    // Not hypothetical: normalizing probes every blob in the bundle on
+    // every publish, so anything unreadable would otherwise throw out of a
+    // publish that previously succeeded — the one-bad-blob-fails-everything
+    // outcome D-F1 exists to prevent.
+    const junk = Buffer.from("this is not audio at all");
+    const junkSha = shaOf(junk);
+    fake.addBlob(junkSha, junk);
+    const result = await ensureBlobsPresent({ CARDJUNK: junkSha }, {
+      stabburBaseUrl,
+      dataDir,
+      selMsByCardId: {},
+    });
+    assert.equal(result.CARDJUNK, junkSha, "an unreadable blob keeps its hash and ships as-is");
+    assert.deepEqual(fs.readFileSync(path.join(dataDir, "blob", junkSha)), junk);
+  });
+
   await t.test("the canonical original is still on disk untouched (D45)", () => {
     assert.deepEqual(fs.readFileSync(path.join(dataDir, "blob", originalSha)), sourceBytes);
   });

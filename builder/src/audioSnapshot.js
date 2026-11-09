@@ -59,12 +59,25 @@ function decodeDurationMs(filePath) {
 // and "what hub can serve" are not the same format and the gap has to be
 // closed here. `format_name` is a comma-joined list of every format the
 // demuxer matched ("matroska,webm"), hence the membership test.
+//
+// Returns `null` when ffprobe can't read the file at all. That is not
+// hypothetical: this runs over every blob in the bundle on every publish,
+// and a blob ffprobe rejects would otherwise throw straight out of a
+// publish that used to succeed — precisely the "one bad blob fails the
+// whole publish" outcome D-F1 exists to prevent. Unreadable means nothing
+// useful can be done with it (transcoding would fail for the same reason),
+// so callers pass it through untouched.
 function isMp3(filePath) {
-  const out = execFileSync(
-    "ffprobe",
-    ["-v", "error", "-show_entries", "format=format_name", "-of", "csv=p=0", filePath],
-    { encoding: "utf8" }
-  );
+  let out;
+  try {
+    out = execFileSync(
+      "ffprobe",
+      ["-v", "error", "-show_entries", "format=format_name", "-of", "csv=p=0", filePath],
+      { encoding: "utf8" }
+    );
+  } catch {
+    return null;
+  }
   return out.trim().split(",").includes("mp3");
 }
 
@@ -80,7 +93,9 @@ function transcodeToMp3(srcPath, destPath) {
 // hash equal to the original's, so an untrimmed mp3 card costs no extra
 // blob.
 function materializeAsMp3(srcPath, destPath) {
-  if (isMp3(srcPath)) fs.copyFileSync(srcPath, destPath);
+  // `null` (unreadable) copies too — there is nothing better to do with a
+  // blob ffprobe can't parse than ship it exactly as it arrived.
+  if (isMp3(srcPath) !== false) fs.copyFileSync(srcPath, destPath);
   else transcodeToMp3(srcPath, destPath);
 }
 
@@ -194,8 +209,10 @@ export async function ensureBlobsPresent(cardAudio, { stabburBaseUrl, dataDir, s
     const selMs = selMsByCardId[cardId];
     const originalPath = path.join(blobDir, originalSha);
     // An mp3 with nothing to trim is already exactly what ships — don't
-    // rewrite it, don't re-hash it.
-    if (!selMs && blobIsMp3(originalSha, originalPath)) {
+    // rewrite it, don't re-hash it. `null` (ffprobe can't read it) takes
+    // this path too: unreadable blobs ship untouched rather than failing
+    // the publish, exactly as they did before normalizing existed.
+    if (!selMs && blobIsMp3(originalSha, originalPath) !== false) {
       finalCardAudio[cardId] = originalSha;
       continue;
     }
