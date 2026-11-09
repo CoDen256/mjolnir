@@ -83,11 +83,29 @@ failure modes it tolerates are exactly the ones that leave the gap half-open.
   built and published). Options: defer the deletes to after
   `writePublication`; write shipments with the publication row in one
   transaction; or stage a "claimed" marker that a later step converts.
-- **Related but distinct.** On the recovery run after this failure, the 127
-  `E` rows the crashed run had durably queued at `remaining = 11` were
-  decremented by the D86 path's *per-card* `drainThenQueue` calls, so they all
-  drained in the same run that re-staged their own cards' `A`s. That breaks
-  `drainThenQueue`'s documented guarantee that "a card's own just-queued `E`
-  is never decremented by the very batch of `A`s that created it" — the
-  per-deck ordering that guarantees it does not hold on the per-card recovery
-  path. Worth deciding whether that belongs in this change or its own.
+- **Related, and confirmed to cause duplication — not just early draining.**
+  The recovery run (b000040) double-shipped 104 occurrences. The D86 path
+  calls `drainThenQueue` once *per card*, and each call decrements every
+  pending row in the deck. With 127 `E` rows left queued at `remaining = 11`
+  by the crashed run, the first 11 recovered cards drained all 127 to zero at
+  once; from the 12th card on `hasPendingOccurrence` no longer saw a row (the
+  drain had just deleted it) and **re-queued** the same `E` at 11, which later
+  cards drained and staged a second time. `staged_occurrences` has no
+  uniqueness constraint and each staged row flushes as its own shipment, so
+  the same `(card_id, letter)` reached `occurrence_shipments` twice.
+
+  Reproduced end-to-end against a real Postgres (30 cards recovered with
+  pre-queued `E`s): duplicate shipments, 13 cards with an `E` both shipped and
+  still queued, and a `remaining` staircase of 1..11 — the identical
+  fingerprint to production's C30178–C30188. Repaired in the live database by
+  collapsing duplicates and dropping queue rows for already-shipped
+  occurrences; the per-card invariant (every owed occurrence in exactly one of
+  shipped/staged/pending) then held exactly at 421/421.
+
+  So this is two defects, not one: the atomicity gap above, and `drainThenQueue`
+  being unsafe to call per-card. The second needs either a per-deck recovery
+  flush or a uniqueness constraint on `staged_occurrences`/`occurrence_shipments`
+  that makes double-staging impossible rather than merely unlikely. Decide
+  whether it splits into its own change — it is independently reachable
+  whenever D86 recovers many cards in a deck with a non-empty queue, with no
+  crash required.

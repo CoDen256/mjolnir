@@ -39,7 +39,7 @@ function decodeDurationMs(filePath) {
     out = execFileSync(
       "ffmpeg",
       ["-v", "error", "-i", filePath, "-f", "null", "-progress", "pipe:1", "-"],
-      { encoding: "utf8" }
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
     );
   } catch {
     return null;
@@ -73,7 +73,10 @@ function isMp3(filePath) {
     out = execFileSync(
       "ffprobe",
       ["-v", "error", "-show_entries", "format=format_name", "-of", "csv=p=0", filePath],
-      { encoding: "utf8" }
+      // stderr captured, not inherited: failure here is tolerated, so
+      // ffprobe's complaint about an unreadable blob is not an error the
+      // operator needs to see once per blob in the publish log.
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
     );
   } catch {
     return null;
