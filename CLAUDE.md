@@ -30,3 +30,12 @@ always read them before trusting §2 or §6:
 The directory is `mjolnir`, but the npm package, the CLI binary
 (`bin/bundle-tool.js`) and the GitHub remote are still called `bundle-tool`.
 That is deliberate — the tool keeps its own name; only the repo was regrouped.
+
+
+## OpenSpec / Opsx Workflow Rules
+
+- **Post-Operation Commit:** Always create a Git commit after running any `opsx` operation.
+- **Walkthrough Requirement for `opsx:apply`:** After executing `opsx:apply`, provide a concise, step-by-step walkthrough covering:
+  - **UI / Visual Checks:** What key elements or changes to look for in the user interface (high-level, not overly detailed).
+  - **Data / Storage Verification:** Where to poke around outside of the codebase (e.g., database tables, local storage, API endpoints, logs).
+  - **Testing & Checkout:** Key terminal commands to run and specific UI flows/interactions to manually test.
