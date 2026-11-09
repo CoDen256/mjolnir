@@ -26,6 +26,30 @@ function probeDurationMs(filePath) {
   return Math.round(parseFloat(out.trim()) * 1000);
 }
 
+function probeFormatName(filePath) {
+  return execFileSync(
+    "ffprobe",
+    ["-v", "error", "-show_entries", "format=format_name", "-of", "csv=p=0", filePath],
+    { encoding: "utf8" }
+  ).trim();
+}
+
+// A webm/opus clip with no declared duration, as MediaRecorder emits.
+// Written via `pipe:1` on purpose: given a real output path ffmpeg would
+// seek back on close and patch a Duration element in, which is exactly the
+// property these fixtures must not have.
+function makeDurationlessWebm(destPath, seconds = 2) {
+  fs.writeFileSync(
+    destPath,
+    execFileSync(
+      "ffmpeg",
+      ["-loglevel", "error", "-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`,
+       "-c:a", "libopus", "-f", "webm", "pipe:1"],
+      { maxBuffer: 64 * 1024 * 1024 }
+    )
+  );
+}
+
 const describe = ffmpegAvailable() ? test : test.skip;
 
 describe("audioSnapshot: D-F1 trims a card's audio to its note's audio_sel_ms", async (t) => {
@@ -124,20 +148,8 @@ describe("audioSnapshot: D-F1 trims a card's audio to its note's audio_sel_ms", 
 // ffmpeg a literal `-ss NaN`, failing the entire publish over one card.
 describe("audioSnapshot: D-F1 trims a capture whose container declares no duration", async (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mjolnir-audio-webm-"));
-  // `-f webm` over a pipe is how MediaRecorder's output reaches us: no
-  // seek-back to patch in a Duration element, so the file genuinely has
-  // none. Writing to stdout (rather than a path) is what keeps ffmpeg
-  // from rewriting the header on close.
   const sourcePath = path.join(tmpDir, "capture.webm");
-  fs.writeFileSync(
-    sourcePath,
-    execFileSync(
-      "ffmpeg",
-      ["-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
-       "-c:a", "libopus", "-f", "webm", "pipe:1"],
-      { maxBuffer: 64 * 1024 * 1024 }
-    )
-  );
+  makeDurationlessWebm(sourcePath);
 
   await t.test("the fixture really does lack a declared duration", () => {
     const declared = execFileSync(
@@ -177,6 +189,78 @@ describe("audioSnapshot: D-F1 trims a capture whose container declares no durati
     });
     const durationMs = probeDurationMs(path.join(dataDir, "blob", result.CARDWEBMCLAMP));
     assert.ok(Math.abs(durationMs - 200) < 150, `expected ~200ms, got ${durationMs}ms`);
+  });
+
+  t.after(async () => {
+    await fake.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+// Everything downstream assumes mp3 — hub serves blobs as `audio/mpeg`
+// (`hub/src/server.js`) and the device's prefetch companion caches them as
+// `<sha256>.mp3` (`patches/js/audio-prefetch-companion.js`). A
+// hover-translate capture with no selection used to pass through
+// untouched, so webm/opus bytes reached the device wearing an mp3 name.
+describe("audioSnapshot: a non-mp3 blob is normalized to mp3 whatever its selection", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mjolnir-audio-norm-"));
+  const sourcePath = path.join(tmpDir, "capture.webm");
+  makeDurationlessWebm(sourcePath);
+  const sourceBytes = fs.readFileSync(sourcePath);
+  const originalSha = shaOf(sourceBytes);
+
+  const mp3Path = path.join(tmpDir, "upload.mp3");
+  execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi",
+    "-i", "sine=frequency=440:duration=2", mp3Path]);
+  const mp3Bytes = fs.readFileSync(mp3Path);
+  const mp3Sha = shaOf(mp3Bytes);
+
+  const fake = startFakeStabbur({ blobs: {} });
+  fake.addBlob(originalSha, sourceBytes);
+  fake.addBlob(mp3Sha, mp3Bytes);
+  const stabburBaseUrl = await fake.listen();
+  const dataDir = path.join(tmpDir, "data");
+
+  await t.test("with no selection at all, it is still transcoded rather than passed through", async () => {
+    const result = await ensureBlobsPresent({ CARDRAW: originalSha }, {
+      stabburBaseUrl,
+      dataDir,
+      selMsByCardId: {},
+    });
+    assert.notEqual(result.CARDRAW, originalSha, "a webm capture must not ship as-is");
+    const shipped = path.join(dataDir, "blob", result.CARDRAW);
+    assert.equal(probeFormatName(shipped), "mp3");
+    // Full length preserved — normalizing is not trimming.
+    assert.ok(Math.abs(probeDurationMs(shipped) - 2000) < 150);
+  });
+
+  await t.test("a selection too broken to trim by still yields mp3, not the untouched source", async () => {
+    const result = await ensureBlobsPresent({ CARDBAD: originalSha }, {
+      stabburBaseUrl,
+      dataDir,
+      selMsByCardId: { CARDBAD: [NaN, NaN] },
+    });
+    assert.notEqual(result.CARDBAD, originalSha);
+    assert.equal(probeFormatName(path.join(dataDir, "blob", result.CARDBAD)), "mp3");
+  });
+
+  await t.test("an mp3 with no selection is left byte-identical — no needless re-encode", async () => {
+    const result = await ensureBlobsPresent({ CARDMP3: mp3Sha }, {
+      stabburBaseUrl,
+      dataDir,
+      selMsByCardId: {},
+    });
+    assert.equal(result.CARDMP3, mp3Sha, "an already-shippable mp3 must keep its hash");
+    assert.deepEqual(fs.readFileSync(path.join(dataDir, "blob", mp3Sha)), mp3Bytes);
+  });
+
+  await t.test("the canonical original is still on disk untouched (D45)", () => {
+    assert.deepEqual(fs.readFileSync(path.join(dataDir, "blob", originalSha)), sourceBytes);
+  });
+
+  await t.test("no .derived.tmp scratch file is left behind", () => {
+    const leftovers = fs.readdirSync(path.join(dataDir, "blob")).filter((n) => n.endsWith(".tmp"));
+    assert.deepEqual(leftovers, []);
   });
 
   t.after(async () => {
