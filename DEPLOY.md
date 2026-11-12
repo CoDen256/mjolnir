@@ -92,6 +92,70 @@ docker compose up -d
 docker compose logs -f caddy          # watch the certificate get issued
 ```
 
+### Optional: phonexa on its own hostname
+
+Skip this whole section unless phonexa is actually in the stack (that is
+`tun`'s `add-phonexa-to-stack`). With none of the three variables below set,
+Caddy's phonexa site block stays inert and **fails closed**: it answers 401
+to everything, never proxies to phonexa unauthenticated, and never asks
+Let's Encrypt for a certificate. Nothing else in this guide changes.
+
+phonexa is **not** mounted at `/phonexa` like `/stabbur` and `/smia` are. Its
+frontend hardcodes absolute paths (`fetch('/api/v1/…')`) and opens its
+live-mic WebSocket at `location.host + '/stream'`, and both are frozen, so a
+path prefix would break them. It gets its own hostname instead, which needs
+no frontend change at all.
+
+**1. DNS.** Add an A record (and AAAA if you have v6) for a second hostname —
+e.g. `phonexa.example.net` — pointing at this same box, exactly like
+`TUN_SITE_ADDRESS`'s record. Caddy obtains a separate certificate for it on
+first start, over the same port 80 challenge.
+
+**2. Generate the password hash.** Access is gated at Caddy by HTTP basic
+auth: username `operator`, password = the `OPERATOR_AUTH_TOKEN` you already
+set above. phonexa has no login of its own — its profiles are name-only with
+no password and it exposes destructive database import/export endpoints — so
+the gate lives in the proxy and covers every phonexa route, static assets and
+`/ping` included. `basic_auth` only accepts a hash, so make one:
+
+```sh
+docker run --rm caddy:2-alpine caddy hash-password \
+    --plaintext "<your OPERATOR_AUTH_TOKEN>"
+```
+
+**3. Put it in `.env` — SINGLE-quoted.** A bcrypt hash contains `$`, which
+compose interpolates:
+
+```sh
+PHONEXA_SITE_ADDRESS=phonexa.example.net
+PHONEXA_AUTH_HASH='<the hash from step 2>'
+# PHONEXA_UPSTREAM=phonexa-backend:5050    # default; set only to override
+```
+
+Single quotes are not cosmetic and double quotes do **not** work. Confirmed:
+both `PHONEXA_AUTH_HASH=$2a$14$abc.DEF/ghi` and the same value in double
+quotes reach the container as `$2a$14.DEF/ghi` — compose expanded `$abc` away
+— which still *looks* like a bcrypt hash, so the mistake shows up only as
+"every login fails". Verify after `up`:
+
+```sh
+docker compose exec caddy printenv PHONEXA_AUTH_HASH
+```
+
+**What you'll see in the browser:** the operating system's native
+basic-auth prompt, not hub's login page, on a different origin from the main
+site. Enter `operator` and the operator token; the browser caches it for that
+origin. (There are deliberately no cross-links between the operator UIs and
+phonexa yet — different origin, separate prompt.)
+
+**Rotation.** `PHONEXA_AUTH_HASH` is **not** derived from
+`OPERATOR_AUTH_TOKEN` automatically. If you rotate that token, regenerate the
+hash in the same change, or the old password keeps opening phonexa while the
+new one opens hub and builder.
+
+**Rollback.** Remove the two variables and `docker compose up -d`. The block
+returns to its inert default; no existing route was ever touched.
+
 ## Publish build #1 and prove the path
 
 ```sh

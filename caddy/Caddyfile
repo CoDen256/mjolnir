@@ -186,7 +186,14 @@
 			header_up X-Forwarded-Prefix /smia
 		}
 	}
-	# reverse_proxy /phonexa/* phonexa:8000
+	# phonexa is NOT routed here. It gets its own site block at the bottom of
+	# this file, on its own hostname ({$PHONEXA_SITE_ADDRESS}), because its
+	# frontend hardcodes absolute paths (`fetch('/api/v1/...')`) and opens its
+	# live-mic WebSocket at `location.host + '/stream'` — and `/stream` plus
+	# js/realtime.js are frozen. A `handle_path /phonexa/*` would have to
+	# rewrite every one of those URLs; a subdomain needs zero frontend change.
+	# Unlike /stabbur and /smia, phonexa has no auth of its own at all, so the
+	# gate lives in Caddy there (basic_auth) rather than in the app.
 
 	# ---- /adminer : tun/compose.yaml's shared Adminer (D-T3) -------------
 	# Only reachable this way when deployed via tun's `include:` unification
@@ -212,4 +219,62 @@
 	handle {
 		respond "mjolnir" 404
 	}
+}
+
+# ---- phonexa : its own authenticated hostname (D148) --------------------
+# phonexa (the phonetics lab) is served here rather than under a path prefix
+# on the main site — see the note where the old /phonexa/* placeholder used
+# to be, above. Everything on this hostname is proxied to phonexa, including
+# the `/stream` WebSocket: Caddy's reverse_proxy upgrades WebSockets
+# transparently, so no special config is needed for it, and it does not time
+# out upgraded connections by default (the live mic tracker holds one open
+# for the whole session). No request-body limit is set either — Formant Lab
+# uploads and trim/ingest posts can be several MB.
+#
+# AUTH. phonexa has none of its own: its profiles are name-only with no
+# password, and it exposes destructive database import/export endpoints. So
+# the gate is here, in front of everything (static assets and /ping
+# included), and it covers every phonexa route uniformly without touching
+# phonexa's frozen code. phonexa's healthcheck is container-internal, not
+# through Caddy, so it needs no exemption.
+#
+# The credential is the operator token the rest of the stack already uses
+# (D-H6's OPERATOR_AUTH_TOKEN), username fixed to `operator`. It cannot be
+# consumed directly: hub and builder verify that token in their own
+# application code (login page + cookie), while `basic_auth` only accepts a
+# bcrypt/argon hash. So the operator derives one, once:
+#
+#     docker run --rm caddy:2-alpine caddy hash-password \
+#         --plaintext "$OPERATOR_AUTH_TOKEN"
+#
+# and puts it in .env as PHONEXA_AUTH_HASH, SINGLE-QUOTED — a bcrypt hash
+# contains `$`, which compose would otherwise interpolate away. Nothing
+# links the two automatically: ROTATING OPERATOR_AUTH_TOKEN MEANS
+# REGENERATING THIS HASH, or the old password keeps working here.
+#
+# FAIL-CLOSED DEFAULTS. All three vars are optional so mjolnir still deploys
+# without phonexa, and an empty address or an empty hash is a Caddy startup
+# error — so each has a default that is inert rather than open:
+#   - the address defaults to a `.localhost` name, which Caddy serves with
+#     its internal CA and never requests an ACME certificate for;
+#   - the hash defaults to a real bcrypt hash of a random string that was
+#     generated, used once and discarded — nobody knows its plaintext, so an
+#     unconfigured block rejects every request instead of serving phonexa
+#     open. Verified to survive the Caddyfile parser with its `$`s intact
+#     (`caddy adapt` shows it reaching the http_basic account verbatim).
+{$PHONEXA_SITE_ADDRESS:phonexa.localhost} {
+	log {
+		output stdout
+		format console
+	}
+
+	encode gzip
+
+	basic_auth {
+		operator {$PHONEXA_AUTH_HASH:$2a$14$4O3NlHoGMD2./6FpyxpKAell6n5PkW1TaayAPbIKyg4GgwZfc8ESO}
+	}
+
+	# Default matches phonexa's own compose service name + port; reachable
+	# over the shared `tun-shared` network (or under tun's `include:`).
+	reverse_proxy {$PHONEXA_UPSTREAM:phonexa-backend:5050}
 }
