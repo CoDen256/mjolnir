@@ -92,26 +92,21 @@ docker compose up -d
 docker compose logs -f caddy          # watch the certificate get issued
 ```
 
-### Optional: phonexa on its own hostname
+### Optional: phonexa at `/phonexa`
 
 Skip this whole section unless phonexa is actually in the stack (that is
-`tun`'s `add-phonexa-to-stack`). With none of the three variables below set,
-Caddy's phonexa site block stays inert and **fails closed**: it answers 401
-to everything, never proxies to phonexa unauthenticated, and never asks
-Let's Encrypt for a certificate. Nothing else in this guide changes.
+`tun`'s `add-phonexa-to-stack`). With neither variable below set, Caddy's
+`/phonexa` route **fails closed**: it answers 401 to everything and never
+proxies to phonexa unauthenticated. Nothing else in this guide changes.
 
-phonexa is **not** mounted at `/phonexa` like `/stabbur` and `/smia` are. Its
-frontend hardcodes absolute paths (`fetch('/api/v1/…')`) and opens its
-live-mic WebSocket at `location.host + '/stream'`, and both are frozen, so a
-path prefix would break them. It gets its own hostname instead, which needs
-no frontend change at all.
+phonexa is mounted at `/phonexa`, exactly like `/stabbur` and `/smia`. Caddy
+strips the prefix and tells phonexa what it was via `X-Forwarded-Prefix`;
+phonexa builds its own URLs from that. **No DNS record and no second
+certificate are needed** — phonexa used to require its own hostname because
+its frontend hardcoded absolute paths and a `location.host + '/stream'`
+WebSocket, which is no longer true.
 
-**1. DNS.** Add an A record (and AAAA if you have v6) for a second hostname —
-e.g. `phonexa.example.net` — pointing at this same box, exactly like
-`TUN_SITE_ADDRESS`'s record. Caddy obtains a separate certificate for it on
-first start, over the same port 80 challenge.
-
-**2. Generate the password hash.** Access is gated at Caddy by HTTP basic
+**1. Generate the password hash.** Access is gated at Caddy by HTTP basic
 auth: username `operator`, password = the `OPERATOR_AUTH_TOKEN` you already
 set above. phonexa has no login of its own — its profiles are name-only with
 no password and it exposes destructive database import/export endpoints — so
@@ -123,12 +118,11 @@ docker run --rm caddy:2-alpine caddy hash-password \
     --plaintext "<your OPERATOR_AUTH_TOKEN>"
 ```
 
-**3. Put it in `.env` — SINGLE-quoted.** A bcrypt hash contains `$`, which
+**2. Put it in `.env` — SINGLE-quoted.** A bcrypt hash contains `$`, which
 compose interpolates:
 
 ```sh
-PHONEXA_SITE_ADDRESS=phonexa.example.net
-PHONEXA_AUTH_HASH='<the hash from step 2>'
+PHONEXA_AUTH_HASH='<the hash from step 1>'
 # PHONEXA_UPSTREAM=phonexa-backend:5050    # default; set only to override
 ```
 
@@ -142,19 +136,30 @@ quotes reach the container as `$2a$14.DEF/ghi` — compose expanded `$abc` away
 docker compose exec caddy printenv PHONEXA_AUTH_HASH
 ```
 
-**What you'll see in the browser:** the operating system's native
-basic-auth prompt, not hub's login page, on a different origin from the main
-site. Enter `operator` and the operator token; the browser caches it for that
-origin. (There are deliberately no cross-links between the operator UIs and
-phonexa yet — different origin, separate prompt.)
+**What you'll see in the browser:** go to `https://<your-host>/phonexa/` and
+you get the operating system's native basic-auth prompt, not hub's login
+page. Enter `operator` and the operator token; the browser caches it for the
+origin.
+
+**Mind the trailing slash.** `/phonexa` redirects to `/phonexa/` and you
+should let it. phonexa's pages link their assets relatively, so a URL without
+the trailing slash resolves them against the site root, where they 404
+against mjolnir's catch-all — a blank page whose errors point at the wrong
+service.
+
+**Shared origin.** phonexa now sits on the same origin as hub and builder,
+whose session cookie is `Path=/`. `HttpOnly` stops phonexa-origin JavaScript
+from reading that cookie, but the browser still sends it on requests a
+phonexa page initiates. This was accepted deliberately as the cost of
+dropping the subdomain; `basic_auth` in front of phonexa is what bounds it.
 
 **Rotation.** `PHONEXA_AUTH_HASH` is **not** derived from
 `OPERATOR_AUTH_TOKEN` automatically. If you rotate that token, regenerate the
 hash in the same change, or the old password keeps opening phonexa while the
 new one opens hub and builder.
 
-**Rollback.** Remove the two variables and `docker compose up -d`. The block
-returns to its inert default; no existing route was ever touched.
+**Rollback.** Remove the two variables and `docker compose up -d`. The route
+returns to its fail-closed default; no existing route was ever touched.
 
 ## Publish build #1 and prove the path
 

@@ -48,34 +48,31 @@ services:
       # "smia-backend" network alias (D118).
       SMIA_UPSTREAM: ${SMIA_UPSTREAM:-smia-backend:5055}
       # ---- phonexa (optional) -----------------------------------------
-      # All three are optional on purpose: mjolnir must stay deployable with
-      # no phonexa at all. caddy/Caddyfile's phonexa site block carries a
-      # fail-closed default for each (an inert `.localhost` address that
-      # never asks for an ACME certificate, and a bcrypt hash whose
-      # plaintext was generated once and discarded), so leaving these unset
-      # yields a block that rejects every request rather than one that
-      # serves phonexa open. The defaults live in the Caddyfile and not
-      # here, so that a direct `caddy run` without compose fails closed too.
+      # Both are optional on purpose: mjolnir must stay deployable with no
+      # phonexa at all. caddy/Caddyfile's /phonexa block carries a
+      # fail-closed default for the hash (a bcrypt hash whose plaintext was
+      # generated once and discarded), so leaving these unset yields a route
+      # that 401s every request rather than one that serves phonexa open.
+      # The default lives in the Caddyfile and not here, so that a direct
+      # `caddy run` without compose fails closed too.
       #
-      # Hence the VALUELESS form below (`PHONEXA_SITE_ADDRESS:` with nothing
-      # after the colon), which is not a typo: compose resolves such a key
-      # from .env / the host environment and OMITS it from the container
-      # entirely when it is unset there. `${PHONEXA_SITE_ADDRESS:-}` would
-      # instead pass an empty string, and Caddy's `{$VAR:default}` only
-      # falls back when the variable is ABSENT, never when it is set-but-
-      # empty — an empty site address makes Caddy read the block as a global
-      # options block and refuse to start ("server block without any key is
-      # global configuration, and if used, it must be first"). Both forms
-      # were tried; only this one survives an unconfigured deploy.
+      # The VALUELESS form below (`PHONEXA_UPSTREAM:` with nothing after the
+      # colon) is not a typo: compose resolves such a key from .env / the
+      # host environment and OMITS it from the container entirely when it is
+      # unset there. `${PHONEXA_AUTH_HASH:-}` would instead pass an empty
+      # string, and Caddy's `{$VAR:default}` falls back only when the
+      # variable is ABSENT, never when it is set-but-empty — so an empty
+      # hash would be a startup error rather than a fail-closed default.
       #
-      # PHONEXA_SITE_ADDRESS is a hostname of its own (phonexa is NOT on a
-      # /phonexa path — see the Caddyfile for why), so it needs its own DNS
-      # record. PHONEXA_AUTH_HASH is a bcrypt hash of OPERATOR_AUTH_TOKEN,
-      # generated once by hand (see .env.example / DEPLOY.md); it contains
-      # `$`, so it MUST be single-quoted in .env or compose interpolates it
-      # away. Nothing derives it from OPERATOR_AUTH_TOKEN automatically —
-      # rotating that token means regenerating this hash.
-      PHONEXA_SITE_ADDRESS:
+      # There is no PHONEXA_SITE_ADDRESS any more: phonexa is served at
+      # /phonexa on this same site (phonexa-path-block, superseding D148's
+      # routing half), so it needs no hostname, no DNS record and no
+      # certificate of its own. PHONEXA_AUTH_HASH is a bcrypt hash of
+      # OPERATOR_AUTH_TOKEN, generated once by hand (see .env.example /
+      # DEPLOY.md); it contains `$`, so it MUST be single-quoted in .env or
+      # compose interpolates it away. Nothing derives it from
+      # OPERATOR_AUTH_TOKEN automatically — rotating that token means
+      # regenerating this hash.
       PHONEXA_UPSTREAM:
       PHONEXA_AUTH_HASH:
     networks:
