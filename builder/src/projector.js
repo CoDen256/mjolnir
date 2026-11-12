@@ -2,43 +2,40 @@
 // five note/card types"). Never reads or writes anything; same input always
 // produces the same `{N, E, X, A}` + occurrence set.
 
-// Each translation on its own line, lang code highlighted the same way the
-// stock stock bundle already highlights emphasis (`<b class="bold teal">`,
-// e.g. card B12002's "teal"/"red" subject-verb highlighting) — bold plus a
-// bluish color the native app's own stylesheet already recognizes, not a
-// new class invented here. Wrapped in the same `<div class="center">` every
-// stock N/E/X field uses, which this previously omitted.
+
 function translationsHtml(note) {
   const lines = note.translations.map((t) => `${t.text}`);
   return `<div class="center">${lines.join("<br>")}</div>`;
 }
 
-// Per-POS inflection line layout (tun/docs/03-data-model.md's inflection
-// shapes) — no field-name labels, just the values themselves on their own
-// lines/pairs, matching how the stock bundle already renders this (e.g.
-// verb card B04181: "å stjele<br>stjeler<br>stjal<br>har stjålet", no
-// "infinitiv:"/"presens:" prefixes). Returns null for a POS with no defined
-// layout here (or missing inflections) so the caller falls back to
-// `note.text` alone.
-function wordInflectionLines(pos, inflections) {
+function ensurePrefix(prefix, str) {
+  return str.startsWith(prefix) ? str : prefix + str;
+}
+
+function dropFirstWord(str) {
+  return str.trimStart().replace(/^\S+\s*/, "");
+}
+
+
+function wordInflectionLines(text, pos, inflections) {
   if (!inflections) return null;
   if (pos === "substantiv") {
     const { article, sg_indef, sg_def, pl_def, pl_indef } = inflections;
-    const headword = [article, sg_indef].filter(Boolean).join(" ");
+    const headword = [article, dropFirstWord(text)].filter(Boolean).join(" ");
     return [headword, sg_def, pl_indef, pl_def].filter(Boolean);
   }
   if (pos === "adjektiv") {
-    const { positiv, nøytrum, flertall, komparativ, superlativ } = inflections;
-    const neuterPlural = [nøytrum, flertall].filter(Boolean).join(" ");
+    const { positiv, noytrum, flertall, komparativ, superlativ } = inflections;
+    const neuterPlural = [noytrum, flertall].filter(Boolean).join(" ");
     const comparative = [komparativ, superlativ].filter(Boolean).join(" ");
-    return [positiv, neuterPlural, comparative].filter(Boolean);
+    return [text, neuterPlural, comparative].filter(Boolean);
   }
   if (pos === "verb") {
     const { infinitiv, presens, preteritum, perfektum } = inflections;
-    return ["å "+infinitiv, presens, preteritum, "har "+perfektum].filter(Boolean);
+    return [ensurePrefix("å ", text), presens, preteritum, ensurePrefix("har ", perfektum)].filter(Boolean);
   }
   if (pos === "adverb") {
-    return inflections.form ? [inflections.form] : null;
+    return inflections.form ? [inflections.form] : [text];
   }
   return null;
 }
@@ -48,9 +45,9 @@ function wordInflectionLines(pos, inflections) {
 // every other POS (type=word with no inflections, per data-model.md) —
 // `transcription`, if any, always trails as its own line either way.
 function wordHeadlineHtml(note) {
-  const lines = wordInflectionLines(note.pos, note.inflections);
+  const lines = wordInflectionLines(note.text, note.pos, note.inflections);
   const body = lines && lines.length > 0 ? lines.join("<br>") : note.text;
-  return`${transcriptionHtml(note)}<br>${body}`;
+  return`<div class="supWrap">${transcriptionHtml(note)}</div><br>${body}`;
 }
 
 // `grammarRuleLookup(id) => { title, html } | undefined` — optional. stabbur's
@@ -78,7 +75,7 @@ function transcriptionHtml(note){
   .replace(/^[\/\[\]]+|[\/\[\]]+$/g, '')
   .replace(/["']/g, char => map[char]);
 
-  return `<div class="supWrap">[&ensp; ${ipa} ]</div>`
+  return `[&ensp; ${ipa} ]`
 }
 
 const PROJECTORS = {
@@ -108,7 +105,7 @@ const PROJECTORS = {
   }),
   pronunciation: (note) => ({
     N: `<div class="center">Read out:<br><span class="lg">${note.text}</span></div>`,
-    E: `<div class="center"><div class="arialFont">${transcriptionHtml(note)}</div></div>`,
+    E: `<div class="center"><div class="arialFont supWrap">${transcriptionHtml(note)}</div></div>`,
     X: "",
     A: "E",
     occurrences: ["N"],
