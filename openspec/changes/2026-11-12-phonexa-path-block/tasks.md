@@ -44,6 +44,14 @@
       → 401, `operator` + token → proxied; a phonexa admin endpoint without creds
       → 401; a static asset without creds → 401
 - [x] 3.4 Hash unset → every `/phonexa/*` request 401 (fail closed)
+- [x] 3.4b **Env-var DELIVERY in the deployment mode actually used.** Added
+      2026-11-13 after a live 401: `docker compose exec caddy printenv
+      PHONEXA_AUTH_HASH` from the directory you deploy from (`tun`, not
+      `mjolnir`). The valueless key form passed 3.1-3.4 standalone and still
+      dropped the variable under `include:` — a correct hash in `mjolnir/.env`
+      401'd every login. compose now uses `${VAR:-<locked default>}`; verified
+      from `tun` with the hash in `mjolnir/.env`, in `tun/.env`, and in neither
+      (locked default, still fails closed)
 - [x] 3.5 Prefix stripping: a request to `/phonexa/api/v1/languages` arrives at the
       upstream as `/api/v1/languages` with `X-Forwarded-Prefix: /phonexa`
 - [x] 3.6 `/phonexa` (no trailing slash) → 308 → `/phonexa/`

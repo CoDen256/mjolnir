@@ -48,33 +48,32 @@ services:
       # "smia-backend" network alias (D118).
       SMIA_UPSTREAM: ${SMIA_UPSTREAM:-smia-backend:5055}
       # ---- phonexa (optional) -----------------------------------------
-      # Both are optional on purpose: mjolnir must stay deployable with no
-      # phonexa at all. caddy/Caddyfile's /phonexa block carries a
-      # fail-closed default for the hash (a bcrypt hash whose plaintext was
-      # generated once and discarded), so leaving these unset yields a route
-      # that 401s every request rather than one that serves phonexa open.
-      # The default lives in the Caddyfile and not here, so that a direct
-      # `caddy run` without compose fails closed too.
+      # Both are optional: mjolnir must stay deployable with no phonexa at
+      # all, and an unconfigured hash must make /phonexa/* reject every
+      # request rather than serve phonexa open.
       #
-      # The VALUELESS form below (`PHONEXA_UPSTREAM:` with nothing after the
-      # colon) is not a typo: compose resolves such a key from .env / the
-      # host environment and OMITS it from the container entirely when it is
-      # unset there. `${PHONEXA_AUTH_HASH:-}` would instead pass an empty
-      # string, and Caddy's `{$VAR:default}` falls back only when the
-      # variable is ABSENT, never when it is set-but-empty — so an empty
-      # hash would be a startup error rather than a fail-closed default.
+      # THE DEFAULTS ARE SPELLED OUT HERE, NOT LEFT TO THE CADDYFILE, and
+      # the hash default is a verbatim copy of the Caddyfile's own
+      # fail-closed default (a bcrypt hash of a random string generated
+      # once and discarded). That duplication is deliberate — found live
+      # 2026-11-13, after a deploy where the operator's hash was in
+      # mjolnir/.env and every login still 401'd:
       #
-      # There is no PHONEXA_SITE_ADDRESS any more: phonexa is served at
-      # /phonexa on this same site (phonexa-path-block, superseding D148's
-      # routing half), so it needs no hostname, no DNS record and no
-      # certificate of its own. PHONEXA_AUTH_HASH is a bcrypt hash of
-      # OPERATOR_AUTH_TOKEN, generated once by hand (see .env.example /
-      # DEPLOY.md); it contains `$`, so it MUST be single-quoted in .env or
-      # compose interpolates it away. Nothing derives it from
-      # OPERATOR_AUTH_TOKEN automatically — rotating that token means
-      # regenerating this hash.
-      PHONEXA_UPSTREAM:
-      PHONEXA_AUTH_HASH:
+      #   compose resolves an included file's `.env` for ${VAR}
+      #   INTERPOLATION, but NOT for a VALUELESS pass-through key
+      #   (`PHONEXA_AUTH_HASH:` with nothing after the colon). Under tun's
+      #   `include:` such a key resolves to null and is dropped from the
+      #   container entirely, so Caddy silently used its own locked
+      #   default and no password worked. Standalone (`cd mjolnir &&
+      #   docker compose up`) the same key resolves fine from this repo's
+      #   .env — which is why it passed verification and still broke on
+      #   the real deploy.
+      #
+      # The `${VAR:-default}` form below works in BOTH modes, from this
+      # repo's own .env, and still fails closed when unset. `$` is escaped
+      # as `$$` so compose emits the literal hash.
+      PHONEXA_UPSTREAM: ${PHONEXA_UPSTREAM:-phonexa-backend:5050}
+      PHONEXA_AUTH_HASH: ${PHONEXA_AUTH_HASH:-$$2a$$14$$4O3NlHoGMD2./6FpyxpKAell6n5PkW1TaayAPbIKyg4GgwZfc8ESO}
     networks:
       - default
       - tun-shared
