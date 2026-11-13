@@ -33,6 +33,21 @@ phonexa's pages resolve their assets relative to the serving directory.
   `/builder*`, `/stabbur/*`, `/smia/*` or `/adminer/*` arrives
 - **THEN** it behaves exactly as before this change
 
+### Requirement: The WebSocket stream is proxied without negotiated compression
+The proxy SHALL remove the client's `Sec-WebSocket-Extensions` offer before
+forwarding the upgrade, so phonexa never negotiates `permessage-deflate` and
+sends uncompressed frames.
+
+#### Scenario: A browser offers permessage-deflate
+- **WHEN** a browser opens the live-mic WebSocket, advertising
+  `Sec-WebSocket-Extensions: permessage-deflate`
+- **THEN** the upgrade succeeds, the response negotiates no extension, and every
+  frame the server sends has `RSV1` clear
+
+#### Scenario: Frames still flow
+- **WHEN** compression is not negotiated
+- **THEN** per-frame formant results arrive in the same wire format as before
+
 ### Requirement: Access to phonexa requires the operator credential
 Every request under the phonexa prefix SHALL require HTTP basic authentication
 with username `operator` and the operator token as the password, verified at the
