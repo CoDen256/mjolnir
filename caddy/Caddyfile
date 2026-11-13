@@ -251,6 +251,17 @@
 		# Formant Lab uploads and trim/ingest posts can be several MB.
 		reverse_proxy {$PHONEXA_UPSTREAM:phonexa-backend:5050} {
 			header_up X-Forwarded-Prefix /phonexa
+			# Strip the browser's permessage-deflate offer so phonexa's
+			# flask-sock never negotiates WebSocket compression on /stream.
+			# Found live 2026-11-13: the mic tracker failed in the browser
+			# with "Invalid frame header" while every proxy-level check
+			# passed. Uncompressed, the server sets RSV1=0 and the frames
+			# are plain — nothing between the browser and phonexa can
+			# disagree about whether an extension was negotiated. Same
+			# spirit as D49: compression is the transport's business, and a
+			# frozen consumer must never depend on it. Costs nothing here —
+			# the frames are small JSON and the link is local.
+			header_up -Sec-WebSocket-Extensions
 		}
 	}
 

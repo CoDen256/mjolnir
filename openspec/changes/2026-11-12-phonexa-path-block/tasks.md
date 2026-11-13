@@ -58,6 +58,15 @@
 - [x] 3.7 WebSocket: `/phonexa/stream` upgrades, arrives at the upstream as
       `/stream`, and a data frame flows; rejected without credentials — **done
       against the real phonexa: same f1/f2 frame as a direct `/stream` capture**
+- [x] 3.7b **WebSocket with BROWSER-style headers, not just a client library's.**
+      Added 2026-11-13 after the mic tracker failed live with "Invalid frame
+      header" while 3.7 passed: a browser offers
+      `Sec-WebSocket-Extensions: permessage-deflate`, flask-sock accepts it and
+      sets RSV1 on every frame; the Node client used in 3.7 never offered it, so
+      the compressed path was never exercised through the real edge. Caddy now
+      strips the offer upstream (`header_up -Sec-WebSocket-Extensions`), so
+      frames are plain. Verified with a raw handshake advertising exactly what
+      Chrome advertises: RSV1=0 and frames flow
 - [x] 3.8 End-to-end against a real phonexa built from its `path-prefix-routing`
       branch: every page loads, audio plays, mic tracker connects — **done: all 9
       pages 200, a prefixed `representativeAudioUrl` serves audio/mpeg, and zero
