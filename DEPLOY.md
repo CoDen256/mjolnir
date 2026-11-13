@@ -118,8 +118,17 @@ docker run --rm caddy:2-alpine caddy hash-password \
     --plaintext "<your OPERATOR_AUTH_TOKEN>"
 ```
 
-**2. Put it in `.env` — SINGLE-quoted.** A bcrypt hash contains `$`, which
-compose interpolates:
+**2. Put it in the right `.env` — SINGLE-quoted.** A bcrypt hash contains
+`$`, which compose interpolates.
+
+*Which `.env`*: these variables use compose's valueless key form, which reads
+the `.env` of the project you actually run `docker compose` in. Deploying the
+unified stack from `tun` (the normal case) means **`tun/.env`**, alongside
+`PHONEXA_POSTGRES_PASSWORD` — `mjolnir/.env` is only consulted when mjolnir is
+started standalone. Confirmed: under `include:` a valueless key set only in
+the child's `.env` reaches the container as *absent*, so Caddy falls back to
+its locked default hash and 401s every request — indistinguishable from a
+wrong password.
 
 ```sh
 PHONEXA_AUTH_HASH='<the hash from step 1>'
