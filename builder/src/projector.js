@@ -13,7 +13,7 @@ function ensurePrefix(prefix, str) {
 }
 
 function dropFirstWord(str) {
-  return str.trimStart().replace(/^\S+\s*/, "");
+  return str.replace(/^(en|ei|et)(\s+|$)/i, "");
 }
 
 
@@ -25,8 +25,8 @@ function wordInflectionLines(text, pos, inflections) {
     return [headword, sg_def, pl_indef, pl_def].filter(Boolean);
   }
   if (pos === "adjektiv") {
-    const { positiv, noytrum, flertall, komparativ, superlativ } = inflections;
-    const neuterPlural = [noytrum, flertall].filter(Boolean).join(" ");
+    const { positiv, nøytrum, flertall, komparativ, superlativ } = inflections;
+    const neuterPlural = [nøytrum, flertall].filter(Boolean).join(" ");
     const comparative = [komparativ, superlativ].filter(Boolean).join(" ");
     return [text, neuterPlural, comparative].filter(Boolean);
   }
